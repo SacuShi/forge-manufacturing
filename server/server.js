@@ -1987,6 +1987,11 @@ async function runVolumeEnrichment() {
 
     let enriched = 0;
     let errors = 0;
+    let contractOnlyCount = 0;
+    let extremeMarginCount = 0;
+    let lowVolumeCount = 0;
+    let suspiciousSpreadCount = 0;
+    let noBuyOrdersCount = 0;
 
     for (const item of itemsToEnrich) {
       try {
@@ -2054,18 +2059,12 @@ async function runVolumeEnrichment() {
 
         enriched++;
 
-        // Log significant findings
-        if (liquidityRisk) {
-          const riskLabel = {
-            'contract_only': 'TIER 1: Contract-only',
-            'extreme_margin': 'TIER 2: Extreme margin',
-            'low_volume': 'TIER 3: Low volume',
-            'no_buy_orders': 'TIER 4: No buy orders',
-            'suspicious_spread': 'TIER 4: Suspicious spread'
-          }[liquidityRisk] || liquidityRisk;
-          
-          console.log(`  ⚠ ${item.product_name}: ${riskLabel} (vol=${avgVolume.toFixed(1)}, margin=${item.buy_price > 0 ? ((item.sell_price/item.buy_price - 1) * 100).toFixed(0) : 'N/A'}%)`);
-        }
+        // Count risk types (summary logging)
+        if (liquidityRisk === 'contract_only') contractOnlyCount++;
+        else if (liquidityRisk === 'extreme_margin') extremeMarginCount++;
+        else if (liquidityRisk === 'low_volume') lowVolumeCount++;
+        else if (liquidityRisk === 'no_buy_orders') noBuyOrdersCount++;
+        else if (liquidityRisk === 'suspicious_spread') suspiciousSpreadCount++;
 
         // ESI rate limit: 150 requests/sec burst, sustained ~20/sec
         // Conservative: 1 request per 100ms = 10/sec sustained
@@ -2081,8 +2080,14 @@ async function runVolumeEnrichment() {
 
     console.log('═══════════════════════════════════════════');
     console.log(`✓ VOLUME ENRICHMENT COMPLETE`);
-    console.log(`  Enriched: ${enriched}`);
+    console.log(`  Enriched: ${enriched} items`);
     console.log(`  Errors: ${errors}`);
+    console.log(`  Filtered: ${contractOnlyCount + extremeMarginCount + lowVolumeCount + suspiciousSpreadCount + noBuyOrdersCount} total`);
+    console.log(`    - Contract-only: ${contractOnlyCount}`);
+    console.log(`    - Extreme margin (>500%): ${extremeMarginCount}`);
+    console.log(`    - Low volume: ${lowVolumeCount}`);
+    console.log(`    - No buy orders: ${noBuyOrdersCount}`);
+    console.log(`    - Suspicious spread: ${suspiciousSpreadCount}`);
     console.log(`  Duration: ${durationSec.toFixed(1)}s`);
     console.log('═══════════════════════════════════════════');
 
