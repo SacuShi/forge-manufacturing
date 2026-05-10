@@ -1723,7 +1723,10 @@ async function ensureJitaPrices() {
     const res = await fetch(
       `https://esi.evetech.net/latest/markets/${JITA_REGION}/orders/?datasource=tranquility&order_type=sell&page=${page}`
     );
-    if (!res.ok) break;
+    if (!res.ok) {
+      console.error(`❌ ESI sell orders fetch failed (page ${page}): ${res.status} ${res.statusText}`);
+      break;
+    }
     const orders = await res.json();
     if (!orders || orders.length === 0) break;
 
@@ -1742,7 +1745,10 @@ async function ensureJitaPrices() {
     const res = await fetch(
       `https://esi.evetech.net/latest/markets/${JITA_REGION}/orders/?datasource=tranquility&order_type=buy&page=${page}`
     );
-    if (!res.ok) break;
+    if (!res.ok) {
+      console.error(`❌ ESI buy orders fetch failed (page ${page}): ${res.status} ${res.statusText}`);
+      break;
+    }
     const orders = await res.json();
     if (!orders || orders.length === 0) break;
 
