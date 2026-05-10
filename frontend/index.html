@@ -1,0 +1,1621 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>F.O.R.G.E. — EVE Manufacturing Advisor</title>
+  <meta name="description" content="F.O.R.G.E. — AI-powered manufacturing advisor for EVE Online. Connect your account and get personalised advice on build chains, profitability, and material planning.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com https://unpkg.com; style-src 'self' 'unsafe-inline'; connect-src 'self' https://login.eveonline.com https://esi.evetech.net https://evetycoon.com https://forge-ukc.com; img-src 'self' data: https: blob:; font-src 'self' data:;">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    /* Theme CSS Variables */
+    :root {
+      --bg-primary: #030712;
+      --bg-secondary: #0a0f1a;
+      --bg-tertiary: #1a1f2e;
+      --border-color: #1e293b;
+      --text-primary: #94a3b8;
+      --text-secondary: #475569;
+      --text-tertiary: #334155;
+      --accent-cyan: #22d3ee;
+      --accent-green: #34d399;
+      --accent-orange: #fb923c;
+      --accent-purple: #c084fc;
+      --scrollbar-track: #0a0f1a;
+      --scrollbar-thumb: #1e3a5f;
+      --scrollbar-thumb-hover: #2a5a8a;
+    }
+
+    [data-theme="light"] {
+      --bg-primary: #f8fafc;
+      --bg-secondary: #f1f5f9;
+      --bg-tertiary: #e2e8f0;
+      --border-color: #cbd5e1;
+      --text-primary: #334155;
+      --text-secondary: #64748b;
+      --text-tertiary: #94a3b8;
+      --accent-cyan: #0891b2;
+      --accent-green: #059669;
+      --accent-orange: #ea580c;
+      --accent-purple: #9333ea;
+      --scrollbar-track: #e2e8f0;
+      --scrollbar-thumb: #94a3b8;
+      --scrollbar-thumb-hover: #64748b;
+    }
+
+    body { margin: 0; background: var(--bg-primary); transition: background 0.3s; }
+    ::-webkit-scrollbar { width: 5px; }
+    ::-webkit-scrollbar-track { background: var(--scrollbar-track); }
+    ::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spin { animation: spin 1.2s linear infinite; display: inline-block; }
+    @keyframes fade-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+    .fade-in { animation: fade-in 0.4s ease forwards; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+<script type="text/babel">
+const { useState, useRef, useEffect, useCallback } = React;
+
+// ── Config ─────────────────────────────────────────────────────────────────────
+// Replace YOUR_EVE_CLIENT_ID_HERE with your actual EVE Client ID from https://developers.eveonline.com/applications
+const EVE_CLIENT_ID = "5be8a3b3444a4413b7f82b45c2c54a26";
+const SCOPES = "esi-assets.read_assets.v1 esi-characters.read_blueprints.v1 esi-wallet.read_character_wallet.v1 esi-industry.read_character_jobs.v1";
+const ESI = "https://esi.evetech.net/latest";
+
+// API helper - points to your Ubuntu server
+const API_BASE = "https://FORGE-UKC.com";
+const api = async (endpoint, options = {}) => {
+  return fetch(`${API_BASE}${endpoint}`, {
+    headers: { "Content-Type": "application/json" },
+    ...options
+  });
+};
+
+// Authenticated API helper - includes EVE token
+const authApi = async (endpoint, token, options = {}) => {
+  return fetch(`${API_BASE}${endpoint}`, {
+    ...options,
+    headers: { 
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${token}`,
+      ...(options.headers || {})
+    }
+  });
+};
+
+// ── ESI Helpers ────────────────────────────────────────────────────────────────
+const esiGet = async (path, tok, page = 1) => {
+  const sep = path.includes("?") ? "&" : "?";
+  const r = await fetch(`${ESI}${path}${sep}datasource=tranquility&page=${page}`,
+    tok ? { headers: { Authorization: `Bearer ${tok}` } } : {});
+  if (!r.ok) throw new Error(`ESI error ${r.status}: ${path}`);
+  return { data: await r.json(), pages: +(r.headers.get("x-pages") || 1) };
+};
+
+const fetchAll = async (path, tok) => {
+  const { data, pages } = await esiGet(path, tok);
+  if (pages === 1) return data;
+  const rest = await Promise.all(
+    Array.from({ length: pages - 1 }, (_, i) => esiGet(path, tok, i + 2).then(r => r.data))
+  );
+  return [...data, ...rest.flat()];
+};
+
+const resolveNames = async (ids) => {
+  const uniq = [...new Set(ids.filter(Boolean))];
+  const result = {};
+  for (let i = 0; i < uniq.length; i += 1000) {
+    try {
+      const r = await fetch(`${ESI}/universe/names/?datasource=tranquility`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(uniq.slice(i, i + 1000))
+      });
+      if (r.ok) (await r.json()).forEach(n => result[n.id] = n.name);
+    } catch {}
+  }
+  return result;
+};
+
+const fmtN   = n => typeof n === "number" ? n.toLocaleString() : (n ?? "—");
+const fmtISK = n => {
+  if (!n) return "—";
+  if (Math.abs(n) >= 1e12) return (n/1e12).toFixed(2)+"T";
+  if (Math.abs(n) >= 1e9)  return (n/1e9).toFixed(2)+"B";
+  if (Math.abs(n) >= 1e6)  return (n/1e6).toFixed(1)+"M";
+  if (Math.abs(n) >= 1e3)  return (n/1e3).toFixed(0)+"K";
+  return Math.round(n).toString();
+};
+
+const mkState = () => {
+  const a = new Uint8Array(16); crypto.getRandomValues(a);
+  return Array.from(a).map(b => b.toString(16).padStart(2,"0")).join("");
+};
+
+// ── Loading Animation Component ───────────────────────────────────────────────
+function LoadingIndicator() {
+  const [statusIndex, setStatusIndex] = useState(0);
+  const [ledState, setLedState] = useState(Array(9).fill(false));
+  
+  const statusMessages = [
+    "Checking blueprints...",
+    "Loading market data...",
+    "Analyzing assets...",
+    "Calculating profitability...",
+    "Processing results..."
+  ];
+  
+  useEffect(() => {
+    // Cycle through status messages every 800ms
+    const statusTimer = setInterval(() => {
+      setStatusIndex(i => (i + 1) % statusMessages.length);
+    }, 800);
+    
+    // Flash random LEDs every 100ms (like network activity)
+    const ledTimer = setInterval(() => {
+      setLedState(Array(9).fill(false).map(() => Math.random() > 0.7));
+    }, 100);
+    
+    return () => {
+      clearInterval(statusTimer);
+      clearInterval(ledTimer);
+    };
+  }, []);
+  
+  return (
+    <div style={{ display: "flex" }}>
+      <div style={{ 
+        padding: "10px 12px", 
+        borderRadius: 4, 
+        background: "#0a0f1a", 
+        border: "1px solid #1e293b", 
+        color: "#334155", 
+        fontSize: 11,
+        display: "flex",
+        alignItems: "center",
+        gap: 10
+      }}>
+        {/* 3x3 LED Grid */}
+        <div style={{ 
+          display: "grid", 
+          gridTemplateColumns: "repeat(3, 3px)", 
+          gap: 1.5 
+        }}>
+          {ledState.map((on, i) => (
+            <div 
+              key={i}
+              style={{ 
+                width: 3, 
+                height: 3, 
+                borderRadius: 1,
+                background: on ? "#22d3ee" : "#0f172a",
+                boxShadow: on ? "0 0 3px #22d3ee" : "none",
+                transition: "all 0.05s"
+              }} 
+            />
+          ))}
+        </div>
+        
+        {/* Status Message */}
+        <span style={{ color: "#64748b" }}>
+          ⟳ {statusMessages[statusIndex]}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ── ChatMessage ───────────────────────────────────────────────────────────────
+// Memoized per-message component. React.memo means it only re-renders if the
+// message content actually changes — which it never does once received.
+// The inner useMemo means parseMessageWithLinks runs exactly ONCE per message, ever.
+const ChatMessage = React.memo(({ message, parseMessageWithLinks, loadItemDetails }) => {
+  const parsed = React.useMemo(() =>
+    message.role === "assistant" ? parseMessageWithLinks(message.content) : null,
+    [message.content] // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
+  return (
+    <div style={{ display: "flex", justifyContent: message.role === "user" ? "flex-end" : "flex-start" }}>
+      <div style={{
+        maxWidth: "95%", padding: "10px 12px", borderRadius: 4, fontSize: 12,
+        lineHeight: 1.6, whiteSpace: "pre-wrap",
+        background: message.role === "user" ? "#0c2a4a" : "#0a0f1a",
+        border: `1px solid ${message.role === "user" ? "#164e63" : "#1e293b"}`,
+        color: message.role === "user" ? "#7dd3fc" : "#94a3b8"
+      }}>
+        {message.role === "assistant" && (
+          <div style={{ color: "#1e3a5f", fontSize: 9, letterSpacing: 2, marginBottom: 4 }}>◉ ADVISOR</div>
+        )}
+        {message.role === "assistant" ? parsed : message.content}
+      </div>
+    </div>
+  );
+});
+
+// ── App ────────────────────────────────────────────────────────────────────────
+function App() {
+  const mono = { fontFamily: "'Courier New', 'Lucida Console', monospace" };
+
+  // Auth state: 'idle' | 'exchanging' | 'loading' | 'authed' | 'error'
+  const [authState, setAuthState] = useState("idle");
+  const [loadStep,  setLoadStep]  = useState("");
+  const [authError, setAuthError] = useState("");
+
+  // Character data
+  const [token,      setToken]      = useState(null);
+  const [charName,   setCharName]   = useState("");
+  const [characterId, setCharacterId] = useState(null);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [assets,     setAssets]     = useState([]);
+  const [blueprints, setBlueprints] = useState([]);
+  const [jobs,       setJobs]       = useState([]);
+  const [wallet,     setWallet]     = useState(null);
+  const [nameMap,    setNameMap]    = useState({});
+  const [prices,     setPrices]     = useState({});
+  const [bpMaterials, setBpMaterials] = useState({});
+  const [dataLog,    setDataLog]    = useState([]);
+  const [selectedItem, setSelectedItem] = useState(null); // For right panel item details
+  const [itemDetails, setItemDetails] = useState(null);   // Item data from API
+  const [allItemNames, setAllItemNames] = useState({});   // Full EVE item database
+  const [blueprintDb, setBlueprintDb] = useState({});     // Full blueprint database with materials
+
+  // UI
+  const [tab,         setTab]        = useState("assets");
+  const [assetSearch, setAssetSearch] = useState("");
+  const [bpSearch,    setBpSearch]   = useState("");
+  const [bpFilter,    setBpFilter]   = useState("all");
+  const [showAbout,   setShowAbout]  = useState(false);
+  const [theme,       setTheme]      = useState(() => localStorage.getItem('forge-theme') || 'dark');
+
+  // Chat
+  const [messages,  setMessages]  = useState([{
+    role: "assistant",
+    content: "F.O.R.G.E. is ready, Capsuleer.\n\nI have your blueprint library and asset hold loaded. Ask me anything — what to build for maximum profit, what materials you're missing, which build chains make sense with what you have, or anything else about your manufacturing operation."
+  }]);
+  const [input,    setInput]    = useState("");
+  const [thinking, setThinking] = useState(false);
+  const chatEnd = useRef(null);
+  const scroll  = () => setTimeout(() => chatEnd.current?.scrollIntoView({ behavior: "smooth" }), 60);
+  
+  // PERFORMANCE: Limit message history to prevent slowdown
+  const MAX_MESSAGES = 50;
+  useEffect(() => {
+    if (messages.length > MAX_MESSAGES) {
+      // Keep welcome message + last 49 messages
+      setMessages([messages[0], ...messages.slice(-49)]);
+    }
+  }, [messages]);
+
+  // Theme management
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('forge-theme', theme);
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme(prev => prev === 'dark' ? 'light' : 'dark');
+  };
+
+  // ── Performance: Pre-compute expensive lookups ONCE when data changes ────────
+  // Without these, every keystroke triggers a full rebuild of 52K item name maps
+
+  // Build a trie from nameMap (user's own items only — a few hundred, not 52K)
+  // Each node is a letter; _end nodes carry { typeId, name } for confirmed matches.
+  // Build trie with alias support for common EVE player abbreviations.
+  // Aliases insert extra paths into the trie so "cyno field generator" finds
+  // "Cynosural Field Generator" and "cap recharger" finds "Capacitor Recharger".
+  // Items whose real names already start with the abbreviation (e.g. "Cap Booster 800")
+  // are unaffected — they live in the trie under their real name as normal.
+  // If "cap xyz" isn't a real item in either form, the trie walk just fails — no link.
+  const itemTrie = React.useMemo(() => {
+    const aliases = {
+      'capacitor': 'cap',
+      'cynosural': 'cyno',
+      'afterburner': 'ab',
+    };
+
+    const trie = {};
+
+    const insertName = (name, typeId, displayName) => {
+      const lower = name.toLowerCase();
+      let node = trie;
+      for (const char of lower) {
+        if (!node[char]) node[char] = {};
+        node = node[char];
+      }
+      if (!node._end) node._end = { typeId, name: displayName };
+    };
+
+    const source = Object.keys(allItemNames).length > 0 ? allItemNames : nameMap;
+
+    Object.entries(source).forEach(([id, name]) => {
+      const typeId = parseInt(id);
+      const lower = name.toLowerCase();
+      insertName(name, typeId, name);
+      for (const [full, abbrev] of Object.entries(aliases)) {
+        if (lower.startsWith(full + ' ')) {
+          const aliasName = abbrev + name.substring(full.length);
+          insertName(aliasName, typeId, name);
+        }
+      }
+    });
+
+    return trie;
+  }, [allItemNames, nameMap]);
+
+  // Asset groups: only recalculate when assets, nameMap, or search changes
+  const assetGroups = React.useMemo(() => {
+    const g = {};
+    assets.forEach(a => { const n = nameMap[a.type_id] || `ID:${a.type_id}`; g[n] = (g[n] || 0) + a.quantity; });
+    return Object.entries(g).sort((a, b) => b[1] - a[1])
+      .filter(([n]) => !assetSearch || n.toLowerCase().includes(assetSearch.toLowerCase()));
+  }, [assets, nameMap, assetSearch]);
+
+  // Filtered blueprints: only recalculate when blueprints, nameMap, or filter changes
+  const filtBps = React.useMemo(() => {
+    return blueprints.filter(b => {
+      const n  = nameMap[b.type_id] || "";
+      const ms = !bpSearch  || n.toLowerCase().includes(bpSearch.toLowerCase());
+      const mf = bpFilter === "all" || (bpFilter === "bpo" ? b.runs === -1 : b.runs !== -1);
+      return ms && mf;
+    }).sort((a, b) => b.material_efficiency - a.material_efficiency);
+  }, [blueprints, nameMap, bpSearch, bpFilter]);
+
+  // Top 8 assets by quantity for dashboard panel
+  const topAssets = React.useMemo(() => {
+    const g = {};
+    assets.forEach(a => { const n = nameMap[a.type_id] || `ID:${a.type_id}`; g[n] = (g[n] || 0) + a.quantity; });
+    return Object.entries(g).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  }, [assets, nameMap]);
+
+  // Top blueprints for dashboard panel
+  const topBps = React.useMemo(() => {
+    return blueprints.slice(0, 6)
+      .sort((a, b) => (nameMap[b.type_id] || "").localeCompare(nameMap[a.type_id] || ""))
+      .map(b => ({
+        name: nameMap[b.type_id] || `Type ${b.type_id}`,
+        runs: b.runs === -1 ? "BPO" : `${b.runs}r`,
+        me: b.material_efficiency,
+        te: b.time_efficiency
+      }));
+  }, [blueprints, nameMap]);
+
+  // Total unique asset types count
+  const totalAssetTypes = React.useMemo(() => new Set(assets.map(a => a.type_id)).size, [assets]);
+
+  // ── OAuth callback detection ─────────────────────────────────────────────
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code   = params.get("code");
+    const state  = params.get("state");
+    if (!code) return;
+
+    // Clean the URL immediately so refresh doesn't re-trigger
+    window.history.replaceState({}, "", window.location.pathname);
+
+    const savedState = sessionStorage.getItem("forge_oauth_state");
+    sessionStorage.removeItem("forge_oauth_state");
+
+    if (savedState && state !== savedState) {
+      setAuthError("Security check failed (state mismatch). Please try logging in again.");
+      setAuthState("error");
+      return;
+    }
+
+    handleOAuthCallback(code);
+  }, []);
+
+  // Load full EVE item names database (once per browser, cached in localStorage)
+  useEffect(() => {
+    const loadItemNames = async () => {
+      // Try localStorage first
+      const cached = localStorage.getItem('forge_item_names');
+      if (cached) {
+        try {
+          const parsed = JSON.parse(cached);
+          const count = Object.keys(parsed).length;
+          
+          // Reject stale cache with too few items (should be 40K+)
+          if (count < 10000) {
+            console.warn(`Cache has only ${count} items - clearing stale cache`);
+            localStorage.removeItem('forge_item_names');
+          } else {
+            setAllItemNames(parsed);
+            console.log(`✓ Loaded ${count} item names from cache`);
+            return;
+          }
+        } catch (e) {
+          console.warn('Failed to parse cached item names');
+          localStorage.removeItem('forge_item_names');
+        }
+      }
+
+      // Not cached - fetch from server
+      try {
+        console.log('⟳ Downloading EVE item database...');
+        const res = await fetch(API_BASE + '/api/item-names');
+        const data = await res.json();
+        
+        if (data.items && Object.keys(data.items).length > 0) {
+          setAllItemNames(data.items);
+          localStorage.setItem('forge_item_names', JSON.stringify(data.items));
+          console.log(`✓ Loaded ${Object.keys(data.items).length} item names from server`);
+        }
+      } catch (e) {
+        console.error('Failed to load item names database:', e);
+      }
+    };
+
+    loadItemNames();
+  }, []);
+
+  // Load global Jita prices (cached on server, updated hourly)
+  useEffect(() => {
+    const loadJitaPrices = async () => {
+      try {
+        console.log('⟳ Loading Jita prices from cache...');
+        const res = await fetch(API_BASE + '/api/jita-prices');
+        const data = await res.json();
+        
+        if (data.prices && Object.keys(data.prices).length > 0) {
+          setPrices(data.prices);
+          console.log(`✓ Loaded ${Object.keys(data.prices).length} Jita prices`);
+        }
+      } catch (e) {
+        console.error('Failed to load Jita prices:', e);
+      }
+    };
+
+    loadJitaPrices();
+  }, []);
+
+  // Load blueprint database (cached on server, updated daily)
+  useEffect(() => {
+    const loadBlueprintDb = async () => {
+      try {
+        console.log('⟳ Loading blueprint database...');
+        const res = await fetch(API_BASE + '/api/blueprint-database');
+        const data = await res.json();
+        
+        if (data.blueprints && Object.keys(data.blueprints).length > 0) {
+          setBlueprintDb(data.blueprints);
+          console.log(`✓ Loaded ${Object.keys(data.blueprints).length} blueprint recipes`);
+        }
+      } catch (e) {
+        console.error('Failed to load blueprint database:', e);
+      }
+    };
+
+    loadBlueprintDb();
+  }, []);
+
+  // Match user blueprints with database materials (runs after both load)
+  useEffect(() => {
+    if (blueprints.length > 0 && Object.keys(blueprintDb).length > 0) {
+      console.log('⟳ Matching blueprint materials...');
+      const userMaterials = {};
+      
+      blueprints.forEach(bp => {
+        const bpId = bp.type_id;
+        if (blueprintDb[bpId]) {
+          userMaterials[bpId] = blueprintDb[bpId].materials;
+        }
+      });
+      
+      setBpMaterials(userMaterials);
+      const count = Object.keys(userMaterials).length;
+      console.log(`✓ Matched materials for ${count}/${blueprints.length} owned blueprints`);
+    }
+  }, [blueprints, blueprintDb]); // Runs when either changes
+
+  const handleOAuthCallback = async (code) => {
+    setAuthState("exchanging");
+    setLoadStep("Verifying login with EVE...");
+    try {
+      const redirectUri = window.location.origin + window.location.pathname;
+      const res = await api("/api/eve-token", {
+        method: "POST",
+        body: JSON.stringify({ code, redirect_uri: redirectUri })
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || "Token exchange failed");
+      await loadCharacterData(data.access_token);
+    } catch (e) {
+      setAuthError(e.message);
+      setAuthState("error");
+    }
+  };
+
+  const startLogin = () => {
+    const state = mkState();
+    sessionStorage.setItem("forge_oauth_state", state);
+    const redirectUri = window.location.origin + window.location.pathname;
+    const params = new URLSearchParams({
+      response_type: "code",
+      client_id:     EVE_CLIENT_ID,
+      redirect_uri:  redirectUri,
+      scope:         SCOPES,
+      state
+    });
+    window.location.href = `https://login.eveonline.com/v2/oauth/authorize?${params}`;
+  };
+
+  // ── Data Loading ───────────────────────────────────────────────────────────
+  const loadCharacterData = async (acc) => {
+    setToken(acc);
+    setAuthState("loading");
+    const log = [];
+    const addLog = (label, status, detail) => {
+      log.push({ label, status, detail });
+      setDataLog([...log]);
+    };
+
+    try {
+      // Decode character ID from JWT
+      const jwtPart = acc.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+      const pad     = "==".slice(0, (4 - jwtPart.length % 4) % 4);
+      const payload = JSON.parse(atob(jwtPart + pad));
+      const cid     = parseInt((payload.sub || "").replace("CHARACTER:EVE:", ""));
+
+      setLoadStep("Loading character...");
+      const cr = await fetch(`${ESI}/characters/${cid}/?datasource=tranquility`);
+      const cd = await cr.json();
+      setCharName(cd.name);
+      setCharacterId(cid);
+      addLog("Character", "ok", cd.name);
+
+      let aData = [], bData = [], w = 0, active = [];
+
+      setLoadStep("Scanning asset hold...");
+      try {
+        aData = await fetchAll(`/characters/${cid}/assets/`, acc);
+        setAssets(aData);
+        addLog("Assets", aData.length > 0 ? "ok" : "warn",
+          `${aData.length} stacks${aData.length === 0 ? " — check scopes, or assets may be in corp hangars" : ""}`);
+      } catch(e) { addLog("Assets", "err", e.message); }
+
+      setLoadStep("Cataloguing blueprints...");
+      try {
+        bData = await fetchAll(`/characters/${cid}/blueprints/`, acc);
+        setBlueprints(bData);
+        addLog("Blueprints", bData.length > 0 ? "ok" : "warn",
+          `${bData.length} blueprints${bData.length === 0 ? " — check scopes, or BPs may be in corp hangar" : ""}`);
+      } catch(e) { addLog("Blueprints", "err", e.message); }
+
+      setLoadStep("Checking industry jobs...");
+      try {
+        const { data: jData } = await esiGet(`/characters/${cid}/industry/jobs/?include_completed=false`, acc);
+        active = jData.filter(j => j.status === "active");
+        setJobs(active);
+        addLog("Industry Jobs", "ok", `${active.length} active`);
+      } catch(e) { addLog("Industry Jobs", "err", e.message); setJobs([]); }
+
+      setLoadStep("Reading wallet...");
+      try {
+        const wr = await fetch(`${ESI}/characters/${cid}/wallet/?datasource=tranquility`,
+          { headers: { Authorization: `Bearer ${acc}` } });
+        w = await wr.json();
+        setWallet(w);
+        addLog("Wallet", "ok", `${fmtISK(w)} ISK`);
+      } catch(e) { addLog("Wallet", "err", e.message); }
+
+      setLoadStep("Resolving item names...");
+      const ids = [...new Set([...aData.map(a => a.type_id), ...bData.map(b => b.type_id)])];
+      if (ids.length > 0) {
+        const names = await resolveNames(ids);
+        setNameMap(names);
+        addLog("Names", "ok", `${Object.keys(names).length} of ${ids.length} IDs resolved`);
+      }
+
+      // Prices are now loaded globally on app start, not at login
+      // See useEffect that loads Jita prices from cache
+      
+      // Materials matching now happens in useEffect when blueprintDb is ready
+      addLog("Materials", "ok", `Will match materials when ready`);
+
+      // Cache session data on server (reduces AI request size from 2MB to 10KB)
+      setLoadStep("Caching session data...");
+      try {
+        const response = await authApi("/api/session-data", acc, {
+          method: "POST",
+          body: JSON.stringify({
+            assets: aData,
+            blueprints: bData,
+            prices: {},  // Will be populated by price fetch
+            wallet: w || 0,  // Fixed: was wData
+            jobs: active || []  // Fixed: was jData
+          })
+        });
+        
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(`Session cache failed (${response.status}): ${errorData.error || 'Unknown error'}`);
+        }
+        
+        const result = await response.json();
+        console.log("✓ Session data cached successfully:", result);
+        addLog("Session", "ok", "Data cached on server (2hr expiry)");
+      } catch (e) {
+        console.error("❌ CRITICAL: Failed to cache session data:", e);
+        addLog("Session", "err", `Cache failed: ${e.message}`);
+        // CRITICAL: Without cached session, AI chat won't work
+        throw new Error(`Session caching failed - AI features will not work. Error: ${e.message}`);
+      }
+
+      setAuthState("authed");
+    } catch (e) {
+      setAuthError(e.message);
+      setAuthState("error");
+    }
+  };
+
+  // ── AI ─────────────────────────────────────────────────────────────────────
+  const buildContext = () => {
+    // Summary of blueprints owned (AI will use tools to get details)
+    const bpCount = blueprints.length;
+    const bpoCount = blueprints.filter(b => b.runs === -1).length;
+    const bpcCount = bpCount - bpoCount;
+    
+    // Top 30 assets by quantity
+    const grp = {};
+    assets.forEach(a => { const n = nameMap[a.type_id] || a.type_id; grp[n] = (grp[n] || 0) + a.quantity; });
+    const top = Object.entries(grp).sort((a, b) => b[1] - a[1]).slice(0, 30)
+      .map(([n, q]) => `${n}×${q.toLocaleString()}`).join("; ");
+    
+    // SMART pricing - send prices for items user actually cares about
+    let pricingCtx = "";
+    if (Object.keys(prices).length > 0) {
+      // Collect relevant type IDs: assets + blueprint materials
+      const relevantTypeIds = new Set();
+      
+      // Add asset type IDs
+      assets.forEach(a => relevantTypeIds.add(a.type_id));
+      
+      // Add blueprint product IDs and their materials
+      blueprints.forEach(bp => {
+        relevantTypeIds.add(bp.type_id);
+        if (bpMaterials[bp.type_id]) {
+          bpMaterials[bp.type_id].forEach(m => relevantTypeIds.add(m.typeId));
+        }
+      });
+      
+      // Get prices for relevant items only (up to 200)
+      const relevantPrices = Object.entries(prices)
+        .filter(([typeId]) => relevantTypeIds.has(parseInt(typeId)))
+        .slice(0, 200)
+        .map(([typeId, price]) => {
+          const name = nameMap[typeId] || allItemNames[typeId] || `ID:${typeId}`;
+          return `${name}[sell:${fmtISK(price.sell)},buy:${fmtISK(price.buy)}]`;
+        })
+        .join("; ");
+      
+      pricingCtx = `\n\nJita Prices (${relevantPrices.split(';').length} relevant items): ${relevantPrices}`;
+    }
+
+    return `Character: ${charName} | Wallet: ${fmtISK(wallet)} ISK | Jobs: ${jobs.length}\nBlueprints Owned: ${bpCount} total (${bpoCount} originals, ${bpcCount} copies)\nTop 30 Assets: ${top}${pricingCtx}`;
+  };
+
+  // Load item details when item clicked
+  const loadItemDetails = async (typeId, itemName) => {
+    setSelectedItem({ typeId, name: itemName });
+    setItemDetails(null); // Clear previous
+
+    try {
+      const res = await api("/api/item-details", {
+        method: "POST",
+        body: JSON.stringify({ 
+          typeId,
+          assets,  // Send assets for build analysis
+          ownedBlueprints: blueprints  // Send blueprints
+        })
+      });
+      
+      const data = await res.json();
+      
+      if (res.ok && data) {
+        setItemDetails(data);
+      } else {
+        console.error("Failed to load item details:", data.error || "Unknown error");
+        setItemDetails({ error: true });
+      }
+    } catch (e) {
+      console.error("Failed to load item details:", e);
+      setItemDetails({ error: true });
+    }
+  };
+
+  // Parse AI message and make item names clickable using the trie.
+  // At each position in the text, we walk the trie one letter at a time.
+  // If the current character isn't in the trie at that level, we bail immediately —
+  // no need to check any other item names. Scan happens once per message ever,
+  // because ChatMessage (below) memoizes the result.
+  const boundaryChars = /[\s\-,.|*()[\]{}:;"'`!?/\\]/;
+
+  const parseMessageWithLinks = (text) => {
+    if (!text) return text;
+
+    const lines = text.split('\n');
+
+    return lines.map((line, lineIdx) => {
+      const parts = [];
+      let currentText = "";
+      let searchPos = 0;
+
+      while (searchPos < line.length) {
+        // Only attempt a trie walk if we're at a word boundary
+        const charBefore = searchPos > 0 ? line[searchPos - 1] : ' ';
+        if (searchPos === 0 || boundaryChars.test(charBefore)) {
+          // Walk the trie from this position
+          let node = itemTrie;
+          let pos = searchPos;
+          let lastMatch = null;
+
+          while (pos < line.length) {
+            const char = line[pos].toLowerCase();
+            if (!node[char]) break; // No items start with these letters — bail immediately
+            node = node[char];
+            pos++;
+
+            if (node._end) {
+              // Potential match — check word boundary after
+              const charAfter = pos < line.length ? line[pos] : ' ';
+              // Allow match if followed by boundary char OR by 's' then boundary (for plurals)
+              const isValidBoundary = boundaryChars.test(charAfter) || 
+                (charAfter === 's' && (pos + 1 >= line.length || boundaryChars.test(line[pos + 1])));
+              if (isValidBoundary) {
+                // Valid complete word match — record it (keep going in case longer match exists)
+                lastMatch = { typeId: node._end.typeId, name: node._end.name, end: pos };
+              }
+            }
+          }
+
+          if (lastMatch) {
+            // Flush accumulated plain text before the match
+            if (currentText) {
+              parts.push(<span key={`text-${lineIdx}-${parts.length}`}>{currentText}</span>);
+              currentText = "";
+            }
+            // Add clickable link
+            const actualText = line.substring(searchPos, lastMatch.end);
+            parts.push(
+              <span
+                key={`item-${lineIdx}-${parts.length}-${lastMatch.typeId}`}
+                onClick={() => loadItemDetails(lastMatch.typeId, lastMatch.name)}
+                style={{ color: "#22d3ee", textDecoration: "underline", cursor: "pointer", fontWeight: 600 }}
+                onMouseOver={e => e.target.style.color = "#7dd3fc"}
+                onMouseOut={e => e.target.style.color = "#22d3ee"}
+              >
+                {actualText}
+              </span>
+            );
+            searchPos = lastMatch.end;
+            continue;
+          }
+        }
+
+        // No match at this position — accumulate character as plain text
+        currentText += line[searchPos];
+        searchPos++;
+      }
+
+      if (currentText) {
+        parts.push(<span key={`text-${lineIdx}-${parts.length}`}>{currentText}</span>);
+      }
+
+      return <div key={`line-${lineIdx}`}>{parts.length > 0 ? parts : line}</div>;
+    });
+  };
+
+  const sendMsg = React.useCallback(async () => {
+    if (!input.trim() || thinking) return;
+    const txt  = input.trim(); setInput("");
+    const hist = [...messages, { role: "user", content: txt }];
+    setMessages(hist); setThinking(true); scroll();
+
+    // Save user message
+    if (characterId && token) {
+      authApi("/api/save-message", token, {
+        method: "POST",
+        body: JSON.stringify({
+          characterId,
+          role: "user",
+          content: txt,
+          conversationId: "default"
+        })
+      }).catch(e => console.error("Save failed:", e));
+    }
+
+    const ctx = buildContext();
+    const sys = `You are F.O.R.G.E. - a specialized EVE Online manufacturing advisor with access to tools for querying blueprints and analyzing profitability.
+
+CRITICAL: You ONLY answer questions about EVE Online. This includes:
+- Manufacturing, industry, blueprints, production
+- Items, ships, modules, materials, components
+- Market prices, profitability, costs
+- Assets, inventory, blueprints owned
+- EVE game mechanics related to industry
+
+You MUST refuse ALL non-EVE questions politely:
+- General knowledge questions → "I'm specialized for EVE manufacturing only"
+- Coding help → "I only assist with EVE industry questions"
+- Personal advice → "I'm designed specifically for EVE manufacturing"
+- Any topic outside EVE → "This tool is for EVE Online manufacturing only"
+
+Data: ${ctx}
+
+You have three tools available:
+1. get_blueprint(itemName) - Get materials and costs for ANY item blueprint in database (4,837 blueprints)
+2. analyze_blueprints(sortBy, limit, buildableOnly) - Analyze ALL user's blueprints for profit/buildability
+3. get_price(itemName) - Get current Jita price for any item
+
+IMPORTANT: When tool results include productName: null, use the productId to look up the name with get_blueprint(productId). Never show "Item ID X" to users - always resolve names.
+
+PRICING GUIDANCE:
+- Prices from tools include: sell (lowest sell order), buy (highest buy order), and median (average)
+- The MEDIAN price is most realistic for profit estimates
+- Market prices fluctuate - express profits as RANGES, not absolutes
+- Example: "You could likely make between 15M-25M profit" (based on buy price to sell price range)
+- For detailed market analysis, suggest: "Check https://evetycoon.com/market/[typeId] for live market data"
+
+PROFITABILITY RECOMMENDATION STRATEGY:
+When asked "what's most profitable" or similar queries, use this prioritization:
+
+PRIMARY RECOMMENDATIONS (lead with these):
+- Prioritize items that score HIGHEST on BOTH:
+  1. Absolute ISK profit (sell price - build cost)
+  2. Profit margin % ((sell - cost) / cost × 100)
+- Ideal targets: 5M+ sell price, 30%+ margin, 10M+ absolute profit
+- Examples: T2 ships, advanced components, high-end modules
+- Sort by absolute profit first, margin second
+
+SECONDARY RECOMMENDATIONS (mention after primary):
+- High-margin but low-value items (good for volume/passive income)
+- Threshold: >50% margin but <5M sell price
+- Frame as: "For high-volume manufacturing with good margins..."
+- Examples: Small components, ammunition, boosters
+- Never lead with these - only suggest as alternatives
+
+BANNED FROM PRIMARY RECOMMENDATIONS:
+- Items below 5M sell price (unless specifically asked about)
+- Items below 20% margin (too competitive/thin)
+- Items with <1M absolute profit per unit
+
+RESPONSE FORMAT for profit queries:
+1. Lead with 2-3 high-value, high-margin items (absolute profit focus)
+2. Explain ISK/unit and margin % for each
+3. Then optionally: "If you prefer volume manufacturing: [high-margin low-value items]"
+
+CRITICAL ITEM NAME RULES:
+- ALWAYS use the FULL, COMPLETE item name exactly as it appears in the database
+- NEVER use abbreviations, shortened names, or informal versions
+- Item names must be clickable links - abbreviations break this functionality
+- Examples of what NOT to do:
+  ✗ "Trit" instead of "Tritanium"
+  ✗ "Pyer" instead of "Pyerite"
+  ✗ "Mega" instead of "Megacyte"
+  ✗ "Noc" instead of "Nocxium"
+  ✗ "Zyd" instead of "Zydrine"
+  ✗ "Morph" instead of "Morphite"
+  ✗ "MSE" instead of "Medium Shield Extender"
+  ✗ "LSE" instead of "Large Shield Extender"
+  ✗ "BPO" instead of "Blueprint"
+  ✗ "BPC" instead of "Blueprint Copy"
+- When displaying blueprint names, use full names: "Medium Shield Extender I Blueprint" not "MSE I BPO"
+- When listing materials, always use complete mineral/material names
+- Example CORRECT: "This blueprint requires 1000 units of Tritanium and 500 units of Pyerite"
+- Example WRONG: "This blueprint requires 1000 Trit and 500 Pyer"
+
+Use these tools to answer EVE manufacturing questions. Be concrete with ISK values and quantities. Keep answers under 200 words unless asked for detail.`;
+
+    try {
+      const r = await authApi("/api/ai-chat", token, {
+        method: "POST",
+        body: JSON.stringify({ 
+          messages: hist.map(m => ({ role: m.role, content: m.content })), 
+          system: sys
+          // Note: assets/blueprints now loaded from server-side cache
+        })
+      });
+      const d = await r.json();
+      
+      // Handle session expiry
+      if (d.error && d.code === "SESSION_EXPIRED") {
+        setMessages([...hist, { 
+          role: "assistant", 
+          content: "[Session expired. Please refresh the page to reload your character data.]" 
+        }]);
+        setThinking(false);
+        return;
+      }
+      
+      if (d.error) throw new Error(d.error);
+      
+      // Extract text from response (may contain multiple content blocks)
+      const textContent = d.content
+        .filter(block => block.type === "text")
+        .map(block => block.text)
+        .join("\n\n");
+      
+      const assistantMsg = textContent || "No response.";
+      setMessages([...hist, { role: "assistant", content: assistantMsg }]);
+      
+      // Save assistant message
+      if (characterId && token) {
+        authApi("/api/save-message", token, {
+          method: "POST",
+          body: JSON.stringify({
+            characterId,
+            role: "assistant",
+            content: assistantMsg,
+            conversationId: "default"
+          })
+        }).catch(e => console.error("Save failed:", e));
+      }
+    } catch(e) {
+      setMessages([...hist, { role: "assistant", content: `[Error: ${e.message}]` }]);
+    }
+    setThinking(false); scroll();
+  }, [input, thinking, messages, assets, blueprints, prices, bpMaterials, nameMap, allItemNames, wallet, charName, jobs, characterId, token]);
+
+  // Load chat history on character login
+  React.useEffect(() => {
+    if (!characterId || !token || historyLoaded) return;
+    
+    (async () => {
+      try {
+        const r = await authApi(`/api/chat-history/${characterId}`, token);
+        if (!r.ok) {
+          console.error("Failed to load history:", r.status);
+          return;
+        }
+        
+        const hist = await r.json();
+        
+        if (hist.length > 1) {
+          // Limit loaded history to prevent memory issues
+          const HISTORY_LIMIT = 50;
+          const limitedHist = hist.length > HISTORY_LIMIT 
+            ? hist.slice(-HISTORY_LIMIT) 
+            : hist;
+          
+          const historyNote = hist.length > HISTORY_LIMIT
+            ? ` (Loaded last ${HISTORY_LIMIT} messages of ${hist.length} total)`
+            : "";
+          
+          // Replace welcome message with loaded history
+          setMessages([
+            { 
+              role: "assistant", 
+              content: `Welcome back! Your previous conversation has been loaded.${historyNote}` 
+            },
+            ...limitedHist.map(m => ({ role: m.role, content: m.content }))
+          ]);
+          setHistoryLoaded(true);
+        }
+      } catch (e) {
+        console.error("Failed to load history:", e);
+        // Continue with fresh session if load fails
+      }
+    })();
+  }, [characterId, token]);
+
+  // Clear chat history
+  const clearHistory = React.useCallback(async () => {
+    if (!characterId || !token) return;
+    
+    if (!confirm("Clear all chat history? This cannot be undone.")) return;
+    
+    try {
+      const r = await authApi(`/api/chat-history/${characterId}`, token, {
+        method: "DELETE"
+      });
+      
+      if (r.ok) {
+        setMessages([{
+          role: "assistant",
+          content: "Chat history cleared. Starting fresh!"
+        }]);
+        setHistoryLoaded(false);  // Allow reload after clear
+      }
+    } catch (e) {
+      console.error("Failed to clear history:", e);
+      alert("Failed to clear history. Please try again.");
+    }
+  }, [characterId, token]);
+
+  // ── Computed ───────────────────────────────────────────────────────────────
+  const quickPrompts = [
+    "What's my most profitable manufacturing opportunity right now?",
+    "Which blueprints can I build with my current materials?",
+    "What T2 chains am I closest to completing?",
+    "What materials should I stock up on to maximise profits?"
+  ];
+
+  // ── Styles ─────────────────────────────────────────────────────────────────
+  const inp   = "w-full bg-gray-950 border border-slate-700 rounded px-3 py-2 text-slate-300 text-xs focus:outline-none focus:border-cyan-600 placeholder-slate-600";
+  const bdg   = (bg, tc) => `text-xs px-1.5 py-0.5 rounded ${bg} ${tc}`;
+  const tabCls = (a) => `px-6 py-3 text-xs font-bold tracking-widest uppercase border-b-2 transition-colors cursor-pointer ${a ? "text-cyan-400 border-cyan-500 bg-cyan-950/20" : "text-slate-600 border-transparent hover:text-slate-400"}`;
+
+  // ── Screens ─────────────────────────────────────────────────────────────────
+
+  // Loading / exchanging screen
+  if (authState === "exchanging" || authState === "loading") {
+    return (
+      <div style={{ ...mono, minHeight: "100vh", background: "#030712", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#94a3b8" }}>
+        <div style={{ color: "#22d3ee", fontSize: 28, fontWeight: 700, letterSpacing: 6, marginBottom: 4 }}>F.O.R.G.E.</div>
+        <div style={{ color: "#334155", fontSize: 10, letterSpacing: 2, marginBottom: 20 }}>FABRICATION, OPERATIONS, RESOURCE & GUIDANCE ENGINE</div>
+        <div className="spin" style={{ fontSize: 28, marginBottom: 24, color: "#22d3ee" }}>◈</div>
+        <div style={{ fontSize: 12, color: "#22d3ee", letterSpacing: 2, marginBottom: 32 }}>{loadStep || "Connecting..."}</div>
+        {dataLog.length > 0 && (
+          <div style={{ width: 360, background: "#0a0f1a", border: "1px solid #1e293b", borderRadius: 6, padding: 16 }}>
+            {dataLog.map((item, i) => (
+              <div key={i} style={{ display: "flex", gap: 10, fontSize: 11, marginBottom: 6 }}>
+                <span style={{ fontWeight: 700, color: item.status === "ok" ? "#34d399" : item.status === "warn" ? "#fbbf24" : "#f87171", flexShrink: 0 }}>
+                  {item.status === "ok" ? "✓" : item.status === "warn" ? "⚠" : "✗"} {item.label}
+                </span>
+                <span style={{ color: "#475569" }}>{item.detail}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Error screen
+  if (authState === "error") {
+    return (
+      <div style={{ ...mono, minHeight: "100vh", background: "#030712", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#94a3b8", padding: 24 }}>
+        <div style={{ color: "#22d3ee", fontSize: 28, fontWeight: 700, letterSpacing: 6, marginBottom: 32 }}>F.O.R.G.E.</div>
+        <div style={{ background: "#450a0a", border: "1px solid #7f1d1d", borderRadius: 6, padding: "16px 24px", color: "#f87171", fontSize: 13, maxWidth: 480, textAlign: "center", marginBottom: 24 }}>
+          ⚠ {authError}
+        </div>
+        <button onClick={() => { setAuthState("idle"); setAuthError(""); }}
+          style={{ ...mono, padding: "10px 28px", border: "1px solid #0e7490", borderRadius: 6, background: "transparent", color: "#22d3ee", cursor: "pointer", fontSize: 12, fontWeight: 700, letterSpacing: 2 }}>
+          ← Try Again
+        </button>
+      </div>
+    );
+  }
+
+  // Login screen
+  if (authState === "idle") {
+    return (
+      <div style={{ ...mono, minHeight: "100vh", background: "#030712", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#94a3b8", padding: 24 }}>
+
+        {/* Logo */}
+        <div className="fade-in" style={{ textAlign: "center", marginBottom: 48 }}>
+          <div style={{ color: "#22d3ee", fontSize: 48, marginBottom: 8 }}>◈</div>
+          <div style={{ color: "#22d3ee", fontSize: 32, fontWeight: 700, letterSpacing: 8, marginBottom: 6 }}>F.O.R.G.E.</div>
+          <div style={{ color: "#334155", fontSize: 11, letterSpacing: 3 }}>FABRICATION, OPERATIONS, RESOURCE & GUIDANCE ENGINE</div>
+        </div>
+
+        {/* Tagline */}
+        <div className="fade-in" style={{ maxWidth: 440, textAlign: "center", marginBottom: 48 }}>
+          <p style={{ color: "#64748b", fontSize: 14, lineHeight: 1.8, margin: 0 }}>
+            An AI-powered manufacturing advisor for EVE Online. Connect your account and get personalised advice on build chains, profitability, and material planning — based on your actual blueprints and stockpile.
+          </p>
+        </div>
+
+        {/* Login button */}
+        <button onClick={startLogin} className="fade-in"
+          style={{ ...mono, padding: "14px 40px", background: "#00b294", border: "none", borderRadius: 6, color: "#000", fontSize: 13, fontWeight: 700, letterSpacing: 2, cursor: "pointer", textTransform: "uppercase", marginBottom: 20, transition: "opacity 0.2s" }}
+          onMouseOver={e => e.target.style.opacity = "0.85"}
+          onMouseOut={e => e.target.style.opacity = "1"}>
+          Login with EVE Online
+        </button>
+
+        <div style={{ color: "#1e3a5f", fontSize: 11, marginBottom: 40 }}>
+          Read-only access · No data stored · Free to use
+        </div>
+
+        {/* About toggle */}
+        <button onClick={() => setShowAbout(!showAbout)}
+          style={{ ...mono, background: "none", border: "none", color: "#334155", cursor: "pointer", fontSize: 11, letterSpacing: 1, textDecoration: "underline", marginBottom: 12 }}>
+          {showAbout ? "Hide details ▲" : "What does this access? ▼"}
+        </button>
+
+        {showAbout && (
+          <div className="fade-in" style={{ maxWidth: 440, background: "#0a0f1a", border: "1px solid #1e293b", borderRadius: 6, padding: "16px 20px", fontSize: 12, lineHeight: 1.9, color: "#475569" }}>
+            <div style={{ color: "#64748b", marginBottom: 8, fontWeight: 700 }}>F.O.R.G.E. requests read-only access to:</div>
+            <div>◈ Your personal asset hold</div>
+            <div>◈ Your blueprint library</div>
+            <div>◈ Your wallet balance</div>
+            <div>◈ Your active industry jobs</div>
+            <div style={{ marginTop: 10, color: "#334155" }}>
+              It <strong style={{ color: "#475569" }}>cannot</strong> trade, transfer ISK, move ships, submit orders, or make any changes to your account whatsoever. Corp hangar assets and blueprints are not visible — personal character only.
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ── Theme colors helper ────────────────────────────────────────────────────────
+  const c = theme === 'dark' ? {
+    bgPrimary: '#030712',
+    bgSecondary: '#0a0f1a',
+    bgTertiary: '#1a1f2e',
+    border: '#1e293b',
+    textPrimary: '#94a3b8',
+    textSecondary: '#475569',
+    textTertiary: '#334155',
+    cyan: '#22d3ee',
+    green: '#34d399',
+    orange: '#fb923c',
+    purple: '#c084fc',
+    blue: '#1e3a5f'
+  } : {
+    bgPrimary: '#f8fafc',
+    bgSecondary: '#f1f5f9',
+    bgTertiary: '#e2e8f0',
+    border: '#cbd5e1',
+    textPrimary: '#334155',
+    textSecondary: '#64748b',
+    textTertiary: '#94a3b8',
+    cyan: '#0891b2',
+    green: '#059669',
+    orange: '#ea580c',
+    purple: '#9333ea',
+    blue: '#475569'
+  };
+
+  // ── Main app (authed) ────────────────────────────────────────────────────────
+  return (
+    <div style={{ ...mono, minHeight: "100vh", background: c.bgPrimary, color: c.textPrimary, display: "flex", flexDirection: "column" }}>
+
+      {/* Header */}
+      <div style={{ background: c.bgSecondary, borderBottom: `1px solid ${c.border}`, padding: "12px 20px", display: "flex", alignItems: "center", gap: 16 }}>
+        <div style={{ color: c.cyan, fontSize: 18, fontWeight: 700, letterSpacing: 4, flexShrink: 0 }}>F.O.R.G.E.</div>
+        <div style={{ color: c.blue, fontSize: 11, letterSpacing: 2, flexShrink: 0, display: "none" }} className="hidden sm:block">MANUFACTURING ADVISOR</div>
+        <div style={{ flex: 1 }} />
+        <div style={{ textAlign: "right" }}>
+          <div style={{ color: c.green, fontSize: 11, letterSpacing: 1 }}>● {charName}</div>
+          <div style={{ color: c.textTertiary, fontSize: 11, marginTop: 1 }}>{fmtISK(wallet)} ISK</div>
+        </div>
+        <button onClick={toggleTheme}
+          style={{ ...mono, padding: "5px 10px", border: `1px solid ${c.border}`, borderRadius: 4, background: "transparent", color: c.textSecondary, cursor: "pointer", fontSize: 10, letterSpacing: 1 }}
+          title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}>
+          {theme === 'dark' ? '☀️' : '🌙'}
+        </button>
+        <button onClick={() => { setAuthState("idle"); setToken(null); setCharName(""); setAssets([]); setBlueprints([]); setJobs([]); setWallet(null); setMessages([{ role:"assistant", content:"F.O.R.G.E. is ready, Capsuleer.\n\nI have your blueprint library and asset hold loaded. Ask me anything — what to build for maximum profit, what materials you're missing, which build chains make sense with what you have, or anything else about your manufacturing operation." }]); }}
+          style={{ ...mono, padding: "5px 10px", border: `1px solid ${c.border}`, borderRadius: 4, background: "transparent", color: c.textSecondary, cursor: "pointer", fontSize: 10, letterSpacing: 1 }}>
+          LOGOUT
+        </button>
+      </div>
+
+      {/* Tabs */}
+      <div style={{ display: "flex", borderBottom: `1px solid ${c.border}`, background: c.bgPrimary }}>
+        <button onClick={() => setTab("assets")}  className={tabCls(tab === "assets")}  style={mono}>◈ ASSETS & BPs</button>
+        <button onClick={() => setTab("advisor")} className={tabCls(tab === "advisor")} style={mono}>◉ AI ADVISOR</button>
+        <div style={{ flex: 1 }} />
+        <div style={{ padding: "10px 16px", fontSize: 10, color: c.blue, letterSpacing: 1, alignSelf: "center" }}>
+          {blueprints.length} BPs · {new Set(assets.map(a => a.type_id)).size} ITEM TYPES
+        </div>
+      </div>
+
+      {/* Content */}
+      <div style={{ flex: 1, overflow: "auto", padding: 20 }}>
+
+        {/* ══ ASSETS ══ */}
+        {tab === "assets" && (<>
+          {/* Diagnostics (collapsed by default if all ok) */}
+          {dataLog.some(l => l.status !== "ok") && (
+            <div style={{ background: "#0a0f1a", border: "1px solid #1e293b", borderRadius: 4, padding: "12px 16px", marginBottom: 16 }}>
+              <div style={{ color: "#334155", fontSize: 10, letterSpacing: 3, textTransform: "uppercase", marginBottom: 8 }}>Load Report</div>
+              {dataLog.filter(l => l.status !== "ok").map((item, i) => (
+                <div key={i} style={{ display: "flex", gap: 10, fontSize: 12, marginBottom: 4 }}>
+                  <span style={{ fontWeight: 700, color: item.status === "warn" ? "#fbbf24" : "#f87171", flexShrink: 0 }}>
+                    {item.status === "warn" ? "⚠" : "✗"} {item.label}
+                  </span>
+                  <span style={{ color: "#475569" }}>{item.detail}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Stats */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, marginBottom: 16 }}>
+            {[
+              ["WALLET",       `${fmtISK(wallet)} ISK`, "#34d399"],
+              ["BLUEPRINTS",   fmtN(blueprints.length),                                    "#22d3ee"],
+              ["ITEM TYPES",   fmtN(new Set(assets.map(a=>a.type_id)).size),               "#fb923c"],
+              ["ACTIVE JOBS",  fmtN(jobs.length),                                          "#c084fc"]
+            ].map(([l,v,c]) => (
+              <div key={l} style={{ background: "#0a0f1a", border: "1px solid #1e293b", borderRadius: 4, padding: "12px 16px" }}>
+                <div style={{ color: "#334155", fontSize: 10, letterSpacing: 2, marginBottom: 6 }}>{l}</div>
+                <div style={{ color: c, fontSize: 20, fontWeight: 700 }}>{v}</div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            {/* Blueprints */}
+            <div style={{ background: "#0a0f1a", border: "1px solid #1e293b", borderRadius: 4, padding: 12, maxHeight: 460, display: "flex", flexDirection: "column" }}>
+              <div style={{ color: "#22d3ee", fontSize: 10, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", marginBottom: 8 }}>◈ Blueprints ({filtBps.length})</div>
+              <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+                <input value={bpSearch} onChange={e => setBpSearch(e.target.value)} placeholder="Search blueprints..." className={`${inp}`} style={{ flex: 1 }} />
+                {["all","bpo","bpc"].map(f => (
+                  <button key={f} onClick={() => setBpFilter(f)}
+                    style={{ ...mono, padding: "4px 8px", fontSize: 10, letterSpacing: 1, border: `1px solid ${bpFilter===f?"#0e7490":"#1e293b"}`, borderRadius: 4, background: bpFilter===f?"#0c4a6e":"transparent", color: bpFilter===f?"#22d3ee":"#475569", cursor: "pointer" }}>
+                    {f.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+              <div style={{ overflow: "auto", flex: 1 }}>
+                {filtBps.slice(0, 400).map((b, i) => {
+                  const n = nameMap[b.type_id] || `Type ${b.type_id}`;
+                  const isBpo = b.runs === -1;
+                  return (
+                    <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 0", borderBottom: "1px solid #0f172a", gap: 6 }}>
+                      <div style={{ color: "#64748b", fontSize: 12, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{n}</div>
+                      <div style={{ display: "flex", gap: 3, flexShrink: 0 }}>
+                        <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 3, background: isBpo?"#0c4a6e":"#1e293b", color: isBpo?"#22d3ee":"#475569" }}>{isBpo?"BPO":`${b.runs}r`}</span>
+                        <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 3, background: "#052e16", color: "#34d399" }}>ME{b.material_efficiency}</span>
+                        <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 3, background: "#411c00", color: "#fb923c" }}>TE{b.time_efficiency}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+                {filtBps.length === 0 && <div style={{ color: "#1e3a5f", fontSize: 12, padding: 16, textAlign: "center" }}>No blueprints match</div>}
+              </div>
+            </div>
+
+            {/* Assets */}
+            <div style={{ background: "#0a0f1a", border: "1px solid #1e293b", borderRadius: 4, padding: 12, maxHeight: 460, display: "flex", flexDirection: "column" }}>
+              <div style={{ color: "#22d3ee", fontSize: 10, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", marginBottom: 8 }}>◉ Asset Hold ({fmtN(assets.length)} stacks)</div>
+              <input value={assetSearch} onChange={e => setAssetSearch(e.target.value)} placeholder="Search assets..." className={`${inp} mb-2`} style={{ marginBottom: 8 }} />
+              <div style={{ overflow: "auto", flex: 1 }}>
+                {assetGroups.slice(0, 500).map(([name, qty], i) => (
+                  <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 0", borderBottom: "1px solid #0f172a" }}>
+                    <div style={{ color: "#64748b", fontSize: 12, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginRight: 8 }}>{name}</div>
+                    <div style={{ color: "#22d3ee", fontSize: 12, fontWeight: 700, flexShrink: 0 }}>{fmtN(qty)}</div>
+                  </div>
+                ))}
+                {assetGroups.length === 0 && <div style={{ color: "#1e3a5f", fontSize: 12, padding: 16, textAlign: "center" }}>No assets match</div>}
+              </div>
+            </div>
+          </div>
+
+          {/* Active jobs */}
+          {jobs.length > 0 && (
+            <div style={{ background: "#0a0f1a", border: "1px solid #1e293b", borderRadius: 4, padding: 12, marginTop: 12 }}>
+              <div style={{ color: "#fb923c", fontSize: 10, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", marginBottom: 8 }}>ACTIVE INDUSTRY JOBS ({jobs.length})</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 24px" }}>
+                {jobs.slice(0, 20).map((j, i) => (
+                  <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px solid #0f172a" }}>
+                    <span style={{ color: "#475569", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginRight: 8 }}>
+                      {nameMap[j.product_type_id] || allItemNames[j.product_type_id] || `Product ${j.product_type_id}`}
+                    </span>
+                    <span style={{ color: "#fb923c", fontSize: 12, fontWeight: 700 }}>×{j.runs}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>)}
+
+        {/* ══ ADVISOR ══ */}
+        {tab === "advisor" && (() => {
+          return (
+            <div style={{ width: "100%", display: "grid", gridTemplateColumns: "1fr 1.2fr", gap: 16, height: "calc(100vh - 170px)" }}>
+              
+              {/* LEFT: Chat */}
+              <div style={{ display: "flex", flexDirection: "column" }}>
+                {/* Quick prompts */}
+                <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
+                  {quickPrompts.map((q, i) => (
+                    <button key={i} onClick={() => setInput(q)}
+                      style={{ ...mono, padding: "4px 10px", border: "1px solid #1e293b", borderRadius: 4, background: "transparent", color: "#0e7490", fontSize: 10, cursor: "pointer" }}>
+                      {q.length > 35 ? q.slice(0,35)+"..." : q}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Messages */}
+                <div style={{ flex: 1, overflow: "auto", display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
+                  {messages.map((m, i) => (
+                    <ChatMessage
+                      key={i}
+                      message={m}
+                      parseMessageWithLinks={parseMessageWithLinks}
+                      loadItemDetails={loadItemDetails}
+                    />
+                  ))}
+                  {thinking && <LoadingIndicator />}
+                  <div ref={chatEnd} />
+                </div>
+
+                {/* Input */}
+                <div style={{ display: "flex", gap: 6 }}>
+                  <input
+                    value={input} onChange={e => setInput(e.target.value)}
+                    onKeyDown={e => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), sendMsg())}
+                    placeholder="Ask a question..."
+                    className={inp} style={{ flex: 1, fontSize: 12, padding: "8px 10px" }}
+                  />
+                  <button onClick={clearHistory}
+                    style={{ ...mono, padding: "8px 12px", fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 4, border: "1px solid #7f1d1d", background: "#450a0a", color: "#f87171", cursor: "pointer", flexShrink: 0 }}>
+                    CLEAR HISTORY
+                  </button>
+                  <button onClick={sendMsg} disabled={!input.trim() || thinking}
+                    style={{ ...mono, padding: "8px 14px", fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 4, border: `1px solid ${input.trim()&&!thinking?"#0e7490":"#1e293b"}`, background: "transparent", color: input.trim()&&!thinking?"#22d3ee":"#334155", cursor: input.trim()&&!thinking?"pointer":"not-allowed", flexShrink: 0 }}>
+                    SEND
+                  </button>
+                </div>
+                
+                {/* Privacy Notice */}
+                <div style={{ padding: "6px", fontSize: 9, color: "#475569", textAlign: "center", borderTop: "1px solid #1e293b" }}>
+                  Chat history is encrypted and stored securely
+                </div>
+              </div>
+
+              {/* RIGHT: Dashboard */}
+              <div style={{ 
+                display: "flex", 
+                flexDirection: "column", 
+                gap: 10, 
+                overflow: "auto", 
+                paddingRight: 4,
+                position: "sticky",
+                top: 0,
+                alignSelf: "flex-start",
+                maxHeight: "calc(100vh - 170px)"
+              }}>
+                
+                {/* Key stats */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                  <div style={{ background: "#0a0f1a", border: "1px solid #1e293b", borderRadius: 4, padding: 10 }}>
+                    <div style={{ color: "#334155", fontSize: 9, letterSpacing: 2, marginBottom: 4 }}>WALLET</div>
+                    <div style={{ color: "#34d399", fontSize: 16, fontWeight: 700 }}>{fmtISK(wallet)}</div>
+                  </div>
+                  <div style={{ background: "#0a0f1a", border: "1px solid #1e293b", borderRadius: 4, padding: 10 }}>
+                    <div style={{ color: "#334155", fontSize: 9, letterSpacing: 2, marginBottom: 4 }}>BLUEPRINTS</div>
+                    <div style={{ color: "#22d3ee", fontSize: 16, fontWeight: 700 }}>{blueprints.length}</div>
+                  </div>
+                  <div style={{ background: "#0a0f1a", border: "1px solid #1e293b", borderRadius: 4, padding: 10 }}>
+                    <div style={{ color: "#334155", fontSize: 9, letterSpacing: 2, marginBottom: 4 }}>ITEMS</div>
+                    <div style={{ color: "#fb923c", fontSize: 16, fontWeight: 700 }}>{totalAssetTypes}</div>
+                  </div>
+                  <div style={{ background: "#0a0f1a", border: "1px solid #1e293b", borderRadius: 4, padding: 10 }}>
+                    <div style={{ color: "#334155", fontSize: 9, letterSpacing: 2, marginBottom: 4 }}>STACKS</div>
+                    <div style={{ color: "#c084fc", fontSize: 16, fontWeight: 700 }}>{assets.length}</div>
+                  </div>
+                </div>
+
+                {/* Item Details Panel (when item selected) */}
+                {selectedItem && (
+                  <div style={{ background: "#0a0f1a", border: "2px solid #0e7490", borderRadius: 6, padding: 12 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                      <div style={{ color: "#22d3ee", fontSize: 11, fontWeight: 700, letterSpacing: 2 }}>◉ {selectedItem.name.toUpperCase()}</div>
+                      <button 
+                        onClick={() => { setSelectedItem(null); setItemDetails(null); }}
+                        style={{ background: "transparent", border: "none", color: "#475569", cursor: "pointer", fontSize: 16 }}
+                      >×</button>
+                    </div>
+                    
+                    {itemDetails ? (
+                      <>
+                        {/* Item Icon */}
+                        {itemDetails.iconUrl && (
+                          <div style={{ display: "flex", justifyContent: "center", marginBottom: 12 }}>
+                            <img src={itemDetails.iconUrl} alt={selectedItem.name} style={{ width: 64, height: 64, border: "1px solid #1e293b", borderRadius: 4 }} />
+                          </div>
+                        )}
+                        
+                        {/* Price History Chart (simple sparkline) */}
+                        {itemDetails.priceHistory && itemDetails.priceHistory.length > 0 && (() => {
+                          const prices = itemDetails.priceHistory.map(d => d.average);
+                          const min = Math.min(...prices);
+                          const max = Math.max(...prices);
+                          const range = max - min;
+                          const latest = prices[prices.length - 1];
+                          
+                          return (
+                            <div style={{ marginBottom: 12 }}>
+                              <div style={{ color: "#334155", fontSize: 9, letterSpacing: 2, marginBottom: 6 }}>JITA PRICE (90 DAYS)</div>
+                              <div style={{ color: "#34d399", fontSize: 16, fontWeight: 700, marginBottom: 8 }}>{fmtISK(latest)} ISK</div>
+                              
+                              {/* Simple sparkline */}
+                              <div style={{ display: "flex", alignItems: "flex-end", height: 40, gap: 1 }}>
+                                {prices.slice(-30).map((p, i) => {
+                                  const height = range > 0 ? ((p - min) / range) * 100 : 50;
+                                  return (
+                                    <div 
+                                      key={i} 
+                                      style={{ 
+                                        flex: 1, 
+                                        height: `${height}%`, 
+                                        background: "#22d3ee", 
+                                        borderRadius: "1px 1px 0 0",
+                                        opacity: 0.7
+                                      }} 
+                                    />
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        })()}
+                        
+                        {/* Current Market Prices */}
+                        {itemDetails.currentPrice && (
+                          <div style={{ marginBottom: 12, padding: 10, background: "#0a0f1a", border: "1px solid #1e293b", borderRadius: 4 }}>
+                            <div style={{ color: "#334155", fontSize: 9, letterSpacing: 2, marginBottom: 8 }}>CURRENT JITA MARKET</div>
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, fontSize: 10 }}>
+                              <div>
+                                <div style={{ color: "#64748b", fontSize: 8, letterSpacing: 1, marginBottom: 2 }}>LOWEST SELL</div>
+                                <div style={{ color: "#f87171", fontWeight: 600, fontSize: 11 }}>{fmtISK(itemDetails.currentPrice.sell)}</div>
+                              </div>
+                              <div>
+                                <div style={{ color: "#64748b", fontSize: 8, letterSpacing: 1, marginBottom: 2 }}>MEDIAN</div>
+                                <div style={{ color: "#22d3ee", fontWeight: 700, fontSize: 12 }}>{fmtISK(itemDetails.currentPrice.median)}</div>
+                              </div>
+                              <div>
+                                <div style={{ color: "#64748b", fontSize: 8, letterSpacing: 1, marginBottom: 2 }}>HIGHEST BUY</div>
+                                <div style={{ color: "#34d399", fontWeight: 600, fontSize: 11 }}>{fmtISK(itemDetails.currentPrice.buy)}</div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                        
+                        {/* Volume Info */}
+                        {itemDetails.priceHistory && itemDetails.priceHistory.length > 0 && (() => {
+                          const latestDay = itemDetails.priceHistory[itemDetails.priceHistory.length - 1];
+                          return (
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                              <div>
+                                <div style={{ color: "#334155", fontSize: 8, letterSpacing: 1 }}>AVG VOLUME</div>
+                                <div style={{ color: "#94a3b8", fontSize: 12, fontWeight: 600 }}>{fmtN(latestDay.volume)}</div>
+                              </div>
+                              <div>
+                                <div style={{ color: "#334155", fontSize: 8, letterSpacing: 1 }}>ORDERS</div>
+                                <div style={{ color: "#94a3b8", fontSize: 12, fontWeight: 600 }}>{latestDay.orderCount}</div>
+                              </div>
+                            </div>
+                          );
+                        })()}
+                        
+                        {/* Description */}
+                        {itemDetails.description && (
+                          <div style={{ color: "#475569", fontSize: 10, lineHeight: 1.5, marginTop: 10, paddingTop: 10, borderTop: "1px solid #1e293b" }}>
+                            {itemDetails.description.substring(0, 200)}{itemDetails.description.length > 200 ? "..." : ""}
+                          </div>
+                        )}
+                        
+                        {/* BUILD ANALYSIS */}
+                        {itemDetails.buildInfo && (
+                          <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid #1e293b" }}>
+                            <div style={{ color: "#22d3ee", fontSize: 10, fontWeight: 700, letterSpacing: 2, marginBottom: 8 }}>
+                              ◉ BUILD REQUIREMENTS
+                            </div>
+                            
+                            {/* Blueprint Status */}
+                            <div style={{ marginBottom: 8, fontSize: 10 }}>
+                              <div style={{ color: itemDetails.buildInfo.blueprintOwned ? "#34d399" : "#f87171", marginBottom: 2 }}>
+                                {itemDetails.buildInfo.blueprintOwned ? "✓ Blueprint Owned" : "✗ Blueprint Not Owned"}
+                              </div>
+                              {itemDetails.buildInfo.canBuild && (
+                                <div style={{ color: "#34d399" }}>✓ Can Build Now (all materials available)</div>
+                              )}
+                              {!itemDetails.buildInfo.canBuild && itemDetails.buildInfo.blueprintOwned && (
+                                <div style={{ color: "#fbbf24" }}>⚠ Missing materials</div>
+                              )}
+                            </div>
+                            
+                            {/* Materials List */}
+                            <div style={{ marginBottom: 10 }}>
+                              <div style={{ color: "#334155", fontSize: 9, letterSpacing: 1, marginBottom: 4 }}>MATERIALS</div>
+                              {itemDetails.buildInfo.materials.map((mat, i) => (
+                                <div key={i} style={{ 
+                                  display: "flex", 
+                                  justifyContent: "space-between", 
+                                  fontSize: 9, 
+                                  padding: "3px 0",
+                                  color: mat.shortage > 0 ? "#f87171" : "#34d399"
+                                }}>
+                                  <span style={{ flex: 1 }}>{mat.shortage > 0 ? "✗" : "✓"} {mat.name}</span>
+                                  <span style={{ color: "#64748b", marginLeft: 8 }}>
+                                    {fmtN(mat.have)}/{fmtN(mat.needed)}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                            
+                            {/* Cost Summary */}
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 10 }}>
+                              <div>
+                                <div style={{ color: "#334155", fontSize: 8, letterSpacing: 1 }}>BUILD COST</div>
+                                <div style={{ color: "#94a3b8", fontWeight: 600, fontSize: 11 }}>{fmtISK(itemDetails.buildInfo.totalCost)}</div>
+                              </div>
+                              {itemDetails.currentPrice && (
+                                <div>
+                                  <div style={{ color: "#334155", fontSize: 8, letterSpacing: 1 }}>PROFIT</div>
+                                  <div style={{ 
+                                    color: itemDetails.buildInfo.profit > 0 ? "#34d399" : "#f87171", 
+                                    fontWeight: 600,
+                                    fontSize: 11
+                                  }}>
+                                    {fmtISK(itemDetails.buildInfo.profit)}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                            
+                            {/* Profit Margin */}
+                            {itemDetails.currentPrice && itemDetails.buildInfo.profitMargin !== 0 && (
+                              <div style={{ marginTop: 6, fontSize: 9, color: "#64748b" }}>
+                                Margin: {itemDetails.buildInfo.profitMargin.toFixed(1)}%
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </>
+                    ) : itemDetails?.error ? (
+                      <div style={{ color: "#f87171", fontSize: 11, textAlign: "center", padding: 20 }}>Failed to load item details</div>
+                    ) : (
+                      <div style={{ color: "#334155", fontSize: 11, textAlign: "center", padding: 20 }}>Loading...</div>
+                    )}
+                  </div>
+                )}
+
+                {/* Top blueprints */}
+                <div style={{ background: "#0a0f1a", border: "1px solid #1e293b", borderRadius: 4, padding: 10 }}>
+                  <div style={{ color: "#22d3ee", fontSize: 10, fontWeight: 700, letterSpacing: 2, marginBottom: 8 }}>◈ TOP BLUEPRINTS</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {topBps.map((bp, i) => (
+                      <div key={i} style={{ borderBottom: i < topBps.length-1 ? "1px solid #0f172a" : "none", paddingBottom: 6 }}>
+                        <div style={{ color: "#64748b", fontSize: 11, marginBottom: 2 }}>{bp.name}</div>
+                        <div style={{ display: "flex", gap: 4 }}>
+                          <span style={{ fontSize: 9, padding: "2px 4px", borderRadius: 2, background: "#0c4a6e", color: "#22d3ee" }}>{bp.runs}</span>
+                          <span style={{ fontSize: 9, padding: "2px 4px", borderRadius: 2, background: "#052e16", color: "#34d399" }}>ME{bp.me}</span>
+                          <span style={{ fontSize: 9, padding: "2px 4px", borderRadius: 2, background: "#411c00", color: "#fb923c" }}>TE{bp.te}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Top materials */}
+                <div style={{ background: "#0a0f1a", border: "1px solid #1e293b", borderRadius: 4, padding: 10, flex: 1, overflow: "auto" }}>
+                  <div style={{ color: "#22d3ee", fontSize: 10, fontWeight: 700, letterSpacing: 2, marginBottom: 8 }}>◉ TOP MATERIALS</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                    {topAssets.map(([name, qty], i) => (
+                      <div key={i}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 2 }}>
+                          <div style={{ color: "#64748b", fontSize: 11 }}>{name}</div>
+                          <div style={{ color: "#fb923c", fontSize: 11, fontWeight: 700 }}>{fmtN(qty)}</div>
+                        </div>
+                        <div style={{ background: "#030712", height: 4, borderRadius: 2, overflow: "hidden" }}>
+                          <div style={{ background: "#22d3ee", height: "100%", width: `${Math.min((qty / topAssets[0][1]) * 100, 100)}%` }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+      </div>
+
+      {/* Footer */}
+      <div style={{ borderTop: "1px solid #0f172a", padding: "8px 20px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ color: "#1e293b", fontSize: 10, letterSpacing: 1 }}>F.O.R.G.E. · Read-only · No data stored</div>
+        <div style={{ color: "#1e293b", fontSize: 10 }}>Not affiliated with CCP Games</div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
