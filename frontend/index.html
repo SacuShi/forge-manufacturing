@@ -658,48 +658,17 @@ function App() {
 
   // ── AI ─────────────────────────────────────────────────────────────────────
   const buildContext = () => {
-    // Summary of blueprints owned (AI will use tools to get details)
     const bpCount = blueprints.length;
     const bpoCount = blueprints.filter(b => b.runs === -1).length;
     const bpcCount = bpCount - bpoCount;
-    
+
     // Top 30 assets by quantity
     const grp = {};
     assets.forEach(a => { const n = nameMap[a.type_id] || a.type_id; grp[n] = (grp[n] || 0) + a.quantity; });
     const top = Object.entries(grp).sort((a, b) => b[1] - a[1]).slice(0, 30)
       .map(([n, q]) => `${n}×${q.toLocaleString()}`).join("; ");
-    
-    // SMART pricing - send prices for items user actually cares about
-    let pricingCtx = "";
-    if (Object.keys(prices).length > 0) {
-      // Collect relevant type IDs: assets + blueprint materials
-      const relevantTypeIds = new Set();
-      
-      // Add asset type IDs
-      assets.forEach(a => relevantTypeIds.add(a.type_id));
-      
-      // Add blueprint product IDs and their materials
-      blueprints.forEach(bp => {
-        relevantTypeIds.add(bp.type_id);
-        if (bpMaterials[bp.type_id]) {
-          bpMaterials[bp.type_id].forEach(m => relevantTypeIds.add(m.typeId));
-        }
-      });
-      
-      // Get prices for relevant items only (up to 200)
-      const relevantPrices = Object.entries(prices)
-        .filter(([typeId]) => relevantTypeIds.has(parseInt(typeId)))
-        .slice(0, 200)
-        .map(([typeId, price]) => {
-          const name = nameMap[typeId] || allItemNames[typeId] || `ID:${typeId}`;
-          return `${name}[sell:${fmtISK(price.sell)},buy:${fmtISK(price.buy)}]`;
-        })
-        .join("; ");
-      
-      pricingCtx = `\n\nJita Prices (${relevantPrices.split(';').length} relevant items): ${relevantPrices}`;
-    }
 
-    return `Character: ${charName} | Wallet: ${fmtISK(wallet)} ISK | Jobs: ${jobs.length}\nBlueprints Owned: ${bpCount} total (${bpoCount} originals, ${bpcCount} copies)\nTop 30 Assets: ${top}${pricingCtx}`;
+    return `Character: ${charName} | Wallet: ${fmtISK(wallet)} ISK | Jobs: ${jobs.length}\nBlueprints Owned: ${bpCount} total (${bpoCount} originals, ${bpcCount} copies)\nTop 30 Assets: ${top}`;
   };
 
   // Load item details when item clicked
@@ -833,94 +802,15 @@ function App() {
     }
 
     const ctx = buildContext();
-    const sys = `You are F.O.R.G.E. - a specialized EVE Online manufacturing advisor with access to tools for querying blueprints and analyzing profitability.
-
-CRITICAL: You ONLY answer questions about EVE Online. This includes:
-- Manufacturing, industry, blueprints, production
-- Items, ships, modules, materials, components
-- Market prices, profitability, costs
-- Assets, inventory, blueprints owned
-- EVE game mechanics related to industry
-
-You MUST refuse ALL non-EVE questions politely:
-- General knowledge questions → "I'm specialized for EVE manufacturing only"
-- Coding help → "I only assist with EVE industry questions"
-- Personal advice → "I'm designed specifically for EVE manufacturing"
-- Any topic outside EVE → "This tool is for EVE Online manufacturing only"
-
-Data: ${ctx}
-
-You have three tools available:
-1. get_blueprint(itemName) - Get materials and costs for ANY item blueprint in database (4,837 blueprints)
-2. analyze_blueprints(sortBy, limit, buildableOnly) - Analyze ALL user's blueprints for profit/buildability
-3. get_price(itemName) - Get current Jita price for any item
-
-IMPORTANT: When tool results include productName: null, use the productId to look up the name with get_blueprint(productId). Never show "Item ID X" to users - always resolve names.
-
-PRICING GUIDANCE:
-- Prices from tools include: sell (lowest sell order), buy (highest buy order), and median (average)
-- The MEDIAN price is most realistic for profit estimates
-- Market prices fluctuate - express profits as RANGES, not absolutes
-- Example: "You could likely make between 15M-25M profit" (based on buy price to sell price range)
-- For detailed market analysis, suggest: "Check https://evetycoon.com/market/[typeId] for live market data"
-
-PROFITABILITY RECOMMENDATION STRATEGY:
-When asked "what's most profitable" or similar queries, use this prioritization:
-
-PRIMARY RECOMMENDATIONS (lead with these):
-- Prioritize items that score HIGHEST on BOTH:
-  1. Absolute ISK profit (sell price - build cost)
-  2. Profit margin % ((sell - cost) / cost × 100)
-- Ideal targets: 5M+ sell price, 30%+ margin, 10M+ absolute profit
-- Examples: T2 ships, advanced components, high-end modules
-- Sort by absolute profit first, margin second
-
-SECONDARY RECOMMENDATIONS (mention after primary):
-- High-margin but low-value items (good for volume/passive income)
-- Threshold: >50% margin but <5M sell price
-- Frame as: "For high-volume manufacturing with good margins..."
-- Examples: Small components, ammunition, boosters
-- Never lead with these - only suggest as alternatives
-
-BANNED FROM PRIMARY RECOMMENDATIONS:
-- Items below 5M sell price (unless specifically asked about)
-- Items below 20% margin (too competitive/thin)
-- Items with <1M absolute profit per unit
-
-RESPONSE FORMAT for profit queries:
-1. Lead with 2-3 high-value, high-margin items (absolute profit focus)
-2. Explain ISK/unit and margin % for each
-3. Then optionally: "If you prefer volume manufacturing: [high-margin low-value items]"
-
-CRITICAL ITEM NAME RULES:
-- ALWAYS use the FULL, COMPLETE item name exactly as it appears in the database
-- NEVER use abbreviations, shortened names, or informal versions
-- Item names must be clickable links - abbreviations break this functionality
-- Examples of what NOT to do:
-  ✗ "Trit" instead of "Tritanium"
-  ✗ "Pyer" instead of "Pyerite"
-  ✗ "Mega" instead of "Megacyte"
-  ✗ "Noc" instead of "Nocxium"
-  ✗ "Zyd" instead of "Zydrine"
-  ✗ "Morph" instead of "Morphite"
-  ✗ "MSE" instead of "Medium Shield Extender"
-  ✗ "LSE" instead of "Large Shield Extender"
-  ✗ "BPO" instead of "Blueprint"
-  ✗ "BPC" instead of "Blueprint Copy"
-- When displaying blueprint names, use full names: "Medium Shield Extender I Blueprint" not "MSE I BPO"
-- When listing materials, always use complete mineral/material names
-- Example CORRECT: "This blueprint requires 1000 units of Tritanium and 500 units of Pyerite"
-- Example WRONG: "This blueprint requires 1000 Trit and 500 Pyer"
-
-Use these tools to answer EVE manufacturing questions. Be concrete with ISK values and quantities. Keep answers under 200 words unless asked for detail.`;
 
     try {
       const r = await authApi("/api/ai-chat", token, {
         method: "POST",
-        body: JSON.stringify({ 
-          messages: hist.map(m => ({ role: m.role, content: m.content })), 
-          system: sys
+        body: JSON.stringify({
+          messages: hist.map(m => ({ role: m.role, content: m.content })),
+          context: ctx
           // Note: assets/blueprints now loaded from server-side cache
+          // System prompt is now server-side with prompt caching enabled
         })
       });
       const d = await r.json();

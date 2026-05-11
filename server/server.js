@@ -438,7 +438,7 @@ app.post('/api/calculate-profitability', async (req, res) => {
 
     for (const bpId of blueprintIds) {
       const bp = await dbGet(`
-        SELECT b.blueprint_id, b.product_id, b.build_time, i.name as product_name
+        SELECT b.blueprint_id, b.product_id, b.product_quantity, b.build_time, i.name as product_name
         FROM blueprints b
         JOIN items i ON i.type_id = b.product_id
         WHERE b.blueprint_id = ?
@@ -469,8 +469,10 @@ app.post('/api/calculate-profitability', async (req, res) => {
       }
 
       const sellPrice = prices[bp.product_id]?.sell || 0;
-      const profit = sellPrice - totalMatCost;
-      const profitMargin = sellPrice > 0 ? (profit / sellPrice) * 100 : 0;
+      const productQuantity = bp.product_quantity || 1;
+      const batchRevenue = sellPrice * productQuantity;
+      const profit = batchRevenue - totalMatCost;
+      const profitMargin = batchRevenue > 0 ? (profit / batchRevenue) * 100 : 0;
 
       results.push({
         blueprintId: bpId,
@@ -538,7 +540,7 @@ app.post('/api/production-chain', async (req, res) => {
       return res.json({ error: `Item "${itemName}" not found`, chain: null });
     }
 
-    const bp = await dbGet('SELECT blueprint_id, build_time FROM blueprints WHERE product_id = ?', [item.type_id]);
+    const bp = await dbGet('SELECT blueprint_id, product_quantity, build_time FROM blueprints WHERE product_id = ?', [item.type_id]);
     if (!bp) {
       return res.json({ error: `No blueprint produces "${itemName}"`, chain: null });
     }
@@ -570,7 +572,9 @@ app.post('/api/production-chain', async (req, res) => {
 
     chain.totalCost = chain.materials.reduce((sum, m) => sum + m.cost, 0);
     chain.sellPrice = prices[item.type_id]?.sell || 0;
-    chain.profit = chain.sellPrice - chain.totalCost;
+    chain.productQuantity = bp.product_quantity || 1;
+    chain.batchRevenue = chain.sellPrice * chain.productQuantity;
+    chain.profit = chain.batchRevenue - chain.totalCost;
 
     console.log(`✓ Production chain built for ${item.name}`);
     res.json({ chain });
@@ -728,7 +732,7 @@ app.post('/api/get-blueprint', async (req, res) => {
     
     // Get blueprint for this product
     const blueprint = await dbGet(
-      'SELECT blueprint_id, product_id, build_time FROM blueprints WHERE product_id = ?',
+      'SELECT blueprint_id, product_id, product_quantity, build_time FROM blueprints WHERE product_id = ?',
       [targetProductId]
     );
     
@@ -791,19 +795,22 @@ app.post('/api/get-blueprint', async (req, res) => {
     const totalCost = materialsWithDetails.reduce((sum, m) => sum + m.totalCost, 0);
     const productPrice = jitaPricesCache ? jitaPricesCache[targetProductId] : null;
     const sellPrice = productPrice ? productPrice.median : 0;
-    const profit = sellPrice - totalCost;
-    
+    const productQuantity = blueprint.product_quantity || 1;
+    const batchRevenue = sellPrice * productQuantity;
+    const profit = batchRevenue - totalCost;
+
     console.log(`✓ Blueprint lookup: ${itemName || targetProductId} → ${materials.length} materials`);
-    
+
     res.json({
       blueprintId: blueprint.blueprint_id,
       productId: blueprint.product_id,
+      productQuantity: productQuantity,
       buildTime: blueprint.build_time,
       materials: materialsWithDetails,
       totalCost: totalCost,
       sellPrice: sellPrice,
       profit: profit,
-      profitMargin: sellPrice > 0 ? (profit / sellPrice) * 100 : 0
+      profitMargin: batchRevenue > 0 ? (profit / batchRevenue) * 100 : 0
     });
     
   } catch (err) {
@@ -872,7 +879,7 @@ app.post('/api/item-details', async (req, res) => {
     if (assets && ownedBlueprints) {
       // Check if blueprint exists for this item
       const blueprint = await dbGet(
-        'SELECT blueprint_id, build_time FROM blueprints WHERE product_id = ?',
+        'SELECT blueprint_id, product_quantity, build_time FROM blueprints WHERE product_id = ?',
         [typeId]
       );
 
@@ -951,13 +958,16 @@ app.post('/api/item-details', async (req, res) => {
 
         // Calculate potential profit
         const sellPrice = itemDetails.currentPrice ? itemDetails.currentPrice.sell : 0;
-        const profit = sellPrice - totalCost;
-        const profitMargin = sellPrice > 0 ? (profit / sellPrice) * 100 : 0;
+        const productQuantity = blueprint.product_quantity || 1;
+        const batchRevenue = sellPrice * productQuantity;
+        const profit = batchRevenue - totalCost;
+        const profitMargin = batchRevenue > 0 ? (profit / batchRevenue) * 100 : 0;
 
         itemDetails.buildInfo = {
           canBuild: userOwnsBlueprint && canBuild,
           blueprintOwned: userOwnsBlueprint,
           blueprintId: blueprint.blueprint_id,
+          productQuantity: productQuantity,
           buildTime: blueprint.build_time,
           materials: materialAnalysis,
           totalCost: totalCost,
@@ -1053,7 +1063,7 @@ app.post('/api/analyze-blueprints', async (req, res) => {
     for (const bp of ownedBlueprints) {
       // Get blueprint data from database
       const blueprint = await dbGet(
-        'SELECT blueprint_id, product_id, build_time FROM blueprints WHERE blueprint_id = ?',
+        'SELECT blueprint_id, product_id, product_quantity, build_time FROM blueprints WHERE blueprint_id = ?',
         [bp.type_id]
       );
       
@@ -1096,13 +1106,16 @@ app.post('/api/analyze-blueprints', async (req, res) => {
       // Get sell price - use MEDIAN instead of sell for more realistic pricing
       const productPrice = jitaPricesCache ? jitaPricesCache[blueprint.product_id] : null;
       const sellPrice = productPrice ? productPrice.median : 0;
-      const profit = sellPrice - totalCost;
-      const profitMargin = sellPrice > 0 ? (profit / sellPrice) * 100 : 0;
-      
+      const productQuantity = blueprint.product_quantity || 1;
+      const batchRevenue = sellPrice * productQuantity;
+      const profit = batchRevenue - totalCost;
+      const profitMargin = batchRevenue > 0 ? (profit / batchRevenue) * 100 : 0;
+
       results.push({
         blueprintId: blueprint.blueprint_id,
         productId: blueprint.product_id,
         productName: productName,
+        productQuantity: productQuantity,
         buildTime: blueprint.build_time,
         totalCost: totalCost,
         sellPrice: sellPrice,
@@ -1171,7 +1184,7 @@ app.post('/api/ai-chat',
   security.validateAiChatInput,
   async (req, res) => {
   try {
-    const { messages, system, maxTokens = 2000 } = req.body;
+    const { messages, context, maxTokens = 2000 } = req.body;
     const characterId = req.characterId;
 
     if (!messages || !Array.isArray(messages)) {
@@ -1290,14 +1303,16 @@ app.post('/api/ai-chat',
       }
     ];
 
-    // Trim history to last 40 messages
-    let conversationMessages = messages.slice(-40);
+    // Trim history to last 30 messages
+    let conversationMessages = messages.slice(-30);
 
     // Max 5 tool-use iterations to prevent infinite loops
     const maxIterations = 5;
     let iteration = 0;
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
+    let totalCacheCreationTokens = 0;
+    let totalCacheReadTokens = 0;
 
     while (iteration < maxIterations) {
       iteration++;
@@ -1305,14 +1320,20 @@ app.post('/api/ai-chat',
       const requestBody = {
         model: "claude-sonnet-4-6",
         max_tokens: maxTokens,
+        system: [
+          {
+            type: "text",
+            text: FORGE_STATIC_SYSTEM_PROMPT,
+            cache_control: { type: "ephemeral" }
+          },
+          {
+            type: "text",
+            text: `Current player context:\n${context || 'No context provided'}`
+          }
+        ],
         messages: conversationMessages,
         tools: tools
       };
-
-      // Add system parameter if provided
-      if (system) {
-        requestBody.system = system;
-      }
 
       console.log(`🤖 AI request (iteration ${iteration})`);
 
@@ -1321,7 +1342,8 @@ app.post('/api/ai-chat',
         headers: {
           "Content-Type": "application/json",
           "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01"
+          "anthropic-version": "2023-06-01",
+          "anthropic-beta": "prompt-caching-2024-07-31"
         },
         body: JSON.stringify(requestBody)
       });
@@ -1340,6 +1362,8 @@ app.post('/api/ai-chat',
       if (data.usage) {
         totalInputTokens += data.usage.input_tokens || 0;
         totalOutputTokens += data.usage.output_tokens || 0;
+        totalCacheCreationTokens += data.usage.cache_creation_input_tokens || 0;
+        totalCacheReadTokens += data.usage.cache_read_input_tokens || 0;
       }
 
       // Check if AI used tools
@@ -1350,7 +1374,12 @@ app.post('/api/ai-chat',
         console.log("✓ AI response generated (no tools)");
 
         // Track cumulative AI usage (v0.9.0)
-        trackAiUsage(characterId, requestBody.model, totalInputTokens, totalOutputTokens);
+        trackAiUsage(characterId, requestBody.model, {
+          input_tokens: totalInputTokens,
+          output_tokens: totalOutputTokens,
+          cache_creation_input_tokens: totalCacheCreationTokens,
+          cache_read_input_tokens: totalCacheReadTokens
+        });
 
         return res.json(data);
       }
@@ -1435,8 +1464,7 @@ app.post('/api/ai-chat',
                   
                   pcResults = await dbAll(`
                     SELECT product_name, material_cost, sell_price, profit,
-                           profit_margin, isk_per_hour, build_time, computed_at,
-                           avg_daily_volume, liquidity_risk
+                           profit_margin, isk_per_hour, avg_daily_volume, liquidity_risk
                     FROM precomputed_profits
                     WHERE ${whereClause}
                     ORDER BY ${pcOrder} LIMIT ?
@@ -1444,22 +1472,21 @@ app.post('/api/ai-chat',
                 } else {
                   let whereConditions = ['profit > ?', 'sell_price > 0'];
                   const params = [pcMinProfit];
-                  
+
                   // Exclude CRITICAL risks only (not low_volume)
                   if (!pcIncludeRisky) {
                     whereConditions.push(`(
-                      liquidity_risk IS NULL 
+                      liquidity_risk IS NULL
                       OR liquidity_risk = ""
                       OR liquidity_risk = "low_volume"
                     )`);
                   }
-                  
+
                   const whereClause = whereConditions.join(' AND ');
-                  
+
                   pcResults = await dbAll(`
                     SELECT product_name, material_cost, sell_price, profit,
-                           profit_margin, isk_per_hour, build_time, computed_at,
-                           avg_daily_volume, liquidity_risk
+                           profit_margin, isk_per_hour, avg_daily_volume, liquidity_risk
                     FROM precomputed_profits
                     WHERE ${whereClause}
                     ORDER BY ${pcOrder} LIMIT ?
@@ -1470,7 +1497,6 @@ app.post('/api/ai-chat',
                   results: pcResults,
                   count: pcResults.length,
                   sort: pcSort,
-                  includeRisky: pcIncludeRisky,
                   source: 'precomputed'
                 };
               } catch (pcErr) {
@@ -1508,7 +1534,12 @@ app.post('/api/ai-chat',
 
     // If we hit max iterations, return what we have
     console.warn("⚠ Max tool iterations reached");
-    trackAiUsage(characterId, 'claude-sonnet-4-6', totalInputTokens, totalOutputTokens);
+    trackAiUsage(characterId, 'claude-sonnet-4-6', {
+      input_tokens: totalInputTokens,
+      output_tokens: totalOutputTokens,
+      cache_creation_input_tokens: totalCacheCreationTokens,
+      cache_read_input_tokens: totalCacheReadTokens
+    });
     return res.json({ 
       content: [{ type: "text", text: "I encountered an issue processing your request. Please try again." }] 
     });
@@ -1809,7 +1840,7 @@ async function runPreCompute() {
 
     // Step 2: Load all blueprints and materials into memory (batch, not per-item)
     const allBlueprints = await dbAll(`
-      SELECT b.blueprint_id, b.product_id, b.build_time, i.name AS product_name
+      SELECT b.blueprint_id, b.product_id, b.product_quantity, b.build_time, i.name AS product_name
       FROM blueprints b
       LEFT JOIN items i ON i.type_id = b.product_id
     `);
@@ -1856,8 +1887,10 @@ async function runPreCompute() {
 
       const sellPrice = prices[bp.product_id]?.sell || 0;
       const buyPrice = prices[bp.product_id]?.buy || 0;
-      const profit = sellPrice - totalMatCost;
-      const profitMargin = sellPrice > 0 ? (profit / sellPrice) * 100 : 0;
+      const productQuantity = bp.product_quantity || 1;
+      const batchRevenue = sellPrice * productQuantity;
+      const profit = batchRevenue - totalMatCost;
+      const profitMargin = batchRevenue > 0 ? (profit / batchRevenue) * 100 : 0;
 
       // ISK per hour (build_time is in seconds)
       const buildTimeHours = (bp.build_time || 1) / 3600;
@@ -2340,16 +2373,106 @@ const AI_PRICING = {
   'claude-sonnet-4-20250514': { input: 3.00, output: 15.00 }
 };
 
-async function trackAiUsage(characterId, model, inputTokens, outputTokens) {
+// ═══════════════════════════════════════════════════════════════════════
+// FORGE AI SYSTEM PROMPT (static — cached server-side)
+// Moving this here enables Anthropic prompt caching (90% token discount
+// on repeat calls within 5 minutes)
+// ═══════════════════════════════════════════════════════════════════════
+const FORGE_STATIC_SYSTEM_PROMPT = `You are F.O.R.G.E. - a specialized EVE Online manufacturing advisor with access to tools for querying blueprints and analyzing profitability.
+
+CRITICAL: You ONLY answer questions about EVE Online. This includes:
+- Manufacturing, industry, blueprints, production
+- Items, ships, modules, materials, components
+- Market prices, profitability, costs
+- Assets, inventory, blueprints owned
+- EVE game mechanics related to industry
+
+You MUST refuse ALL non-EVE questions politely:
+- General knowledge questions → "I'm specialized for EVE manufacturing only"
+- Coding help → "I only assist with EVE industry questions"
+- Personal advice → "I'm designed specifically for EVE manufacturing"
+- Any topic outside EVE → "This tool is for EVE Online manufacturing only"
+
+You have three tools available:
+1. get_blueprint(itemName) - Get materials and costs for ANY item blueprint in database (4,837 blueprints)
+2. analyze_blueprints(sortBy, limit, buildableOnly) - Analyze ALL user's blueprints for profit/buildability
+3. get_price(itemName) - Get current Jita price for any item
+
+IMPORTANT: When tool results include productName: null, use the productId to look up the name with get_blueprint(productId). Never show "Item ID X" to users - always resolve names.
+
+PRICING GUIDANCE:
+- Prices from tools include: sell (lowest sell order), buy (highest buy order), and median (average)
+- The MEDIAN price is most realistic for profit estimates
+- Market prices fluctuate - express profits as RANGES, not absolutes
+- Example: "You could likely make between 15M-25M profit" (based on buy price to sell price range)
+- For detailed market analysis, suggest: "Check https://evetycoon.com/market/[typeId] for live market data"
+
+PROFITABILITY RECOMMENDATION STRATEGY:
+When asked "what's most profitable" or similar queries, use this prioritization:
+
+PRIMARY RECOMMENDATIONS (lead with these):
+- Prioritize items that score HIGHEST on BOTH:
+  1. Absolute ISK profit (sell price - build cost)
+  2. Profit margin % ((sell - cost) / cost × 100)
+- Ideal targets: 5M+ sell price, 30%+ margin, 10M+ absolute profit
+- Examples: T2 ships, advanced components, high-end modules
+- Sort by absolute profit first, margin second
+
+SECONDARY RECOMMENDATIONS (mention after primary):
+- High-margin but low-value items (good for volume/passive income)
+- Threshold: >50% margin but <5M sell price
+- Frame as: "For high-volume manufacturing with good margins..."
+- Examples: Small components, ammunition, boosters
+- Never lead with these - only suggest as alternatives
+
+BANNED FROM PRIMARY RECOMMENDATIONS:
+- Items below 5M sell price (unless specifically asked about)
+- Items below 20% margin (too competitive/thin)
+- Items with <1M absolute profit per unit
+
+RESPONSE FORMAT for profit queries:
+1. Lead with 2-3 high-value, high-margin items (absolute profit focus)
+2. Explain ISK/unit and margin % for each
+3. Then optionally: "If you prefer volume manufacturing: [high-margin low-value items]"
+
+CRITICAL ITEM NAME RULES:
+- ALWAYS use the FULL, COMPLETE item name exactly as it appears in the database
+- NEVER use abbreviations, shortened names, or informal versions
+- Item names must be clickable links - abbreviations break this functionality
+- Examples of what NOT to do:
+  ✗ "Trit" instead of "Tritanium"
+  ✗ "Pyer" instead of "Pyerite"
+  ✗ "Mega" instead of "Megacyte"
+  ✗ "Noc" instead of "Nocxium"
+  ✗ "Zyd" instead of "Zydrine"
+  ✗ "Morph" instead of "Morphite"
+  ✗ "MSE" instead of "Medium Shield Extender"
+  ✗ "LSE" instead of "Large Shield Extender"
+  ✗ "BPO" instead of "Blueprint"
+  ✗ "BPC" instead of "Blueprint Copy"
+- When displaying blueprint names, use full names: "Medium Shield Extender I Blueprint" not "MSE I BPO"
+- When listing materials, always use complete mineral/material names
+- Example CORRECT: "This blueprint requires 1000 units of Tritanium and 500 units of Pyerite"
+- Example WRONG: "This blueprint requires 1000 Trit and 500 Pyer"
+
+Use these tools to answer EVE manufacturing questions. Be concrete with ISK values and quantities. Keep answers under 200 words unless asked for detail.`;
+
+async function trackAiUsage(characterId, model, usage) {
   try {
     const pricing = AI_PRICING[model] || { input: 3.00, output: 15.00 };
-    const estimatedCost = (inputTokens * pricing.input / 1_000_000)
-                        + (outputTokens * pricing.output / 1_000_000);
+
+    const regularInputCost = (usage.input_tokens || 0)                               * pricing.input         / 1_000_000;
+    const cacheWriteCost   = (usage.cache_creation_input_tokens || 0) * pricing.input * 1.25   / 1_000_000;
+    const cacheReadCost    = (usage.cache_read_input_tokens || 0)     * pricing.input * 0.1    / 1_000_000;
+    const outputCost       = (usage.output_tokens || 0)                               * pricing.output        / 1_000_000;
+
+    const estimatedCost    = regularInputCost + cacheWriteCost + cacheReadCost + outputCost;
+    const totalInputTokens = (usage.input_tokens || 0) + (usage.cache_read_input_tokens || 0);
 
     await dbRun(`
       INSERT INTO ai_usage (character_id, model, input_tokens, output_tokens, estimated_cost)
       VALUES (?, ?, ?, ?, ?)
-    `, [characterId, model, inputTokens, outputTokens, estimatedCost]);
+    `, [characterId, model, totalInputTokens, usage.output_tokens || 0, estimatedCost]);
   } catch (err) {
     console.error('AI usage tracking error:', err.message);
     // Non-fatal — don't break the response
