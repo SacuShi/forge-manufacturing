@@ -94,7 +94,8 @@ export async function apiPost<T>(
  * then flattens the results into a single array.
  */
 export async function esiFetchAll<T>(path: string, token: string): Promise<T[]> {
-  const url = `${ESI_BASE}${path}?datasource=tranquility`;
+  const separator = path.includes('?') ? '&' : '?';
+  const url = `${ESI_BASE}${path}${separator}datasource=tranquility`;
   const headers = { Authorization: `Bearer ${token}` };
 
   const firstRes = await fetch(url, { headers });
@@ -125,7 +126,8 @@ export async function esiFetchAll<T>(path: string, token: string): Promise<T[]> 
  * Token is optional for public endpoints.
  */
 export async function esiGet<T>(path: string, token?: string): Promise<T> {
-  const url = `${ESI_BASE}${path}?datasource=tranquility`;
+  const separator = path.includes('?') ? '&' : '?';
+  const url = `${ESI_BASE}${path}${separator}datasource=tranquility`;
   const headers: Record<string, string> = {};
   if (token) headers['Authorization'] = `Bearer ${token}`;
 

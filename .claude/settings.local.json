@@ -22,7 +22,9 @@
       "Bash(git commit -m 'fix: remove duplicate badge CSS definitions *)",
       "Bash(git commit -m 'fix: add crossOrigin attribute to all image tags for CORS compatibility *)",
       "Bash(grep -n \"\\\\.logo\\\\|\\\\.header\" \"C:\\\\\\\\Users\\\\\\\\AndyMcD\\\\\\\\Desktop\\\\\\\\forge-manufacturing\\\\\\\\.claude\\\\\\\\worktrees\\\\\\\\hardcore-lamport-8943e7\\\\\\\\forge-v1\\\\\\\\src\\\\\\\\styles\\\\\\\\components.css\")",
-      "Bash(git commit -m 'feat: implement FORGE logo with backronym and improve badge styling *)"
+      "Bash(git commit -m 'feat: implement FORGE logo with backronym and improve badge styling *)",
+      "Bash(grep -n \"bp-icon\\\\|bp-card\" \"C:\\\\\\\\Users\\\\\\\\AndyMcD\\\\\\\\Desktop\\\\\\\\forge-manufacturing\\\\\\\\.claude\\\\\\\\worktrees\\\\\\\\hardcore-lamport-8943e7\\\\\\\\forge-v1\\\\\\\\src\\\\\\\\styles\\\\\\\\components.css\")",
+      "Bash(git commit -m 'fix: critical fixes for industry jobs and blueprint icons *)"
     ]
   }
 }

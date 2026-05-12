@@ -266,10 +266,13 @@ const MainContent: FC<MainContentProps> = ({
                     className="bp-icon"
                     src={`https://images.evetech.net/types/${b.type_id}/icon?size=32`}
                     alt={name}
-                    loading="lazy"
                     crossOrigin="anonymous"
                     onError={(e) => {
-                      (e.target as HTMLImageElement).style.visibility = 'hidden';
+                      console.warn(`Failed to load blueprint icon for ${name} (${b.type_id})`);
+                      (e.target as HTMLImageElement).style.display = 'none';
+                    }}
+                    onLoad={() => {
+                      console.log(`Loaded blueprint icon for ${name}`);
                     }}
                   />
                   <span className="bp-name">{name}</span>
