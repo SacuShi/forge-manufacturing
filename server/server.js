@@ -199,6 +199,100 @@ const setCached = (key, data, ttl = 3600000) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════
+// PAGINATED REGION PRICE FETCHER
+// Fetches complete order book from ESI for any region (handles pagination)
+// ═══════════════════════════════════════════════════════════════════════
+async function fetchRegionPrices(regionId) {
+  console.log(`⟳ Fetching prices for region ${regionId}...`);
+  const startTime = Date.now();
+
+  const buyOrders = [];
+  const sellOrders = [];
+
+  // Fetch all pages of sell orders
+  for (let page = 1; page <= 200; page++) {
+    try {
+      const res = await fetch(
+        `https://esi.evetech.net/latest/markets/${regionId}/orders/` +
+        `?datasource=tranquility&order_type=sell&page=${page}`
+      );
+      if (!res.ok) {
+        console.warn(`⚠ Sell orders page ${page} returned ${res.status}, stopping pagination`);
+        break;
+      }
+      const data = await res.json();
+      if (!data || data.length === 0) break;
+      sellOrders.push(...data);
+      const xPages = res.headers.get('x-pages');
+      if (!xPages || page >= parseInt(xPages)) break;
+      await new Promise(r => setTimeout(r, 100));
+    } catch (err) {
+      console.error(`⚠ Error fetching sell orders page ${page}:`, err.message);
+      break;
+    }
+  }
+
+  // Fetch all pages of buy orders
+  for (let page = 1; page <= 200; page++) {
+    try {
+      const res = await fetch(
+        `https://esi.evetech.net/latest/markets/${regionId}/orders/` +
+        `?datasource=tranquility&order_type=buy&page=${page}`
+      );
+      if (!res.ok) {
+        console.warn(`⚠ Buy orders page ${page} returned ${res.status}, stopping pagination`);
+        break;
+      }
+      const data = await res.json();
+      if (!data || data.length === 0) break;
+      buyOrders.push(...data);
+      const xPages = res.headers.get('x-pages');
+      if (!xPages || page >= parseInt(xPages)) break;
+      await new Promise(r => setTimeout(r, 100));
+    } catch (err) {
+      console.error(`⚠ Error fetching buy orders page ${page}:`, err.message);
+      break;
+    }
+  }
+
+  // Process into prices map
+  const prices = {};
+
+  sellOrders.forEach(o => {
+    if (!prices[o.type_id]) prices[o.type_id] = { sell: Infinity, buy: 0 };
+    if (o.price < prices[o.type_id].sell) prices[o.type_id].sell = o.price;
+  });
+
+  buyOrders.forEach(o => {
+    if (!prices[o.type_id]) prices[o.type_id] = { sell: Infinity, buy: 0 };
+    if (o.price > prices[o.type_id].buy) prices[o.type_id].buy = o.price;
+  });
+
+  // Apply outlier filtering and calculate median
+  Object.keys(prices).forEach(typeId => {
+    const p = prices[typeId];
+    if (p.sell === Infinity) p.sell = 0;
+    if (p.buy > 0 && p.sell > p.buy * 5) {
+      const marginPercent = ((p.sell / p.buy) - 1) * 100;
+      console.warn(`⚠ Outlier filtered: typeId ${typeId} margin=${marginPercent.toFixed(0)}% (max 500%)`);
+      p.median = p.buy;
+    } else if (p.buy === 0 && p.sell > 100000000) {
+      console.warn(`⚠ No-bid outlier: typeId ${typeId} sell=${p.sell} (no buy orders, likely scam)`);
+      p.median = p.sell * 0.1;
+    } else {
+      p.median = (p.sell + p.buy) / 2;
+    }
+  });
+
+  const durationMs = Date.now() - startTime;
+  console.log(`✓ Region ${regionId} prices loaded — ${Object.keys(prices).length} items ` +
+              `(${buyOrders.length} buy orders, ${sellOrders.length} sell orders) ` +
+              `in ${(durationMs / 1000).toFixed(1)}s`);
+
+  return prices;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // EVE OAUTH
 // ═══════════════════════════════════════════════════════════════════════
 app.post('/api/eve-token', security.authLimiter, async (req, res) => {
@@ -240,8 +334,32 @@ app.post('/api/eve-token', security.authLimiter, async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════
 // JITA PRICES (Buy/Sell/Median) - Hourly Cache
 // ═══════════════════════════════════════════════════════════════════════
-let jitaPricesCache = null;
-let jitaPricesCacheExpiry = 0;
+// Per-region price cache (Map: regionId -> { prices, expiry })
+// v0.9.4: Only Jita (10000002) is populated. v1.1 will populate multiple regions.
+const regionPriceCache = new Map();
+
+// Backwards-compatible accessor for existing code
+// jitaPricesCache points to the Jita entry in regionPriceCache
+let jitaPricesCacheExpiry = 0; // Keep this for now, used by existing code
+
+Object.defineProperty(global, 'jitaPricesCache', {
+  get: () => {
+    const entry = regionPriceCache.get(10000002);
+    return entry ? entry.prices : null;
+  },
+  set: (value) => {
+    if (value === null) {
+      regionPriceCache.delete(10000002);
+    } else {
+      regionPriceCache.set(10000002, {
+        prices: value,
+        expiry: Date.now() + (60 * 60 * 1000)
+      });
+      jitaPricesCacheExpiry = Date.now() + (60 * 60 * 1000);
+    }
+  },
+  configurable: true
+});
 
 app.get('/api/jita-prices', security.apiLimiter, async (req, res) => {
   try {
@@ -250,84 +368,9 @@ app.get('/api/jita-prices', security.apiLimiter, async (req, res) => {
       return res.json({ prices: jitaPricesCache });
     }
 
-    console.log('⟳ Fetching Jita market data...');
-    const JITA_REGION = 10000002;
-    const prices = {};
-    let totalOrders = 0;
-
-    // Fetch sell orders
-    for (let page = 1; page <= 50; page++) {
-      const res = await fetch(
-        `https://esi.evetech.net/latest/markets/${JITA_REGION}/orders/?datasource=tranquility&order_type=sell&page=${page}`
-      );
-      if (!res.ok) break;
-      const orders = await res.json();
-      if (!orders || orders.length === 0) break;
-
-      orders.forEach(o => {
-        if (!prices[o.type_id]) prices[o.type_id] = { sell: Infinity, buy: 0 };
-        if (o.price < prices[o.type_id].sell) prices[o.type_id].sell = o.price;
-      });
-
-      totalOrders += orders.length;
-      const xPages = res.headers.get('x-pages');
-      if (!xPages || page >= parseInt(xPages)) break;
-      await new Promise(r => setTimeout(r, 100));
-    }
-
-    // Fetch buy orders
-    for (let page = 1; page <= 50; page++) {
-      const res = await fetch(
-        `https://esi.evetech.net/latest/markets/${JITA_REGION}/orders/?datasource=tranquility&order_type=buy&page=${page}`
-      );
-      if (!res.ok) break;
-      const orders = await res.json();
-      if (!orders || orders.length === 0) break;
-
-      orders.forEach(o => {
-        if (!prices[o.type_id]) prices[o.type_id] = { sell: Infinity, buy: 0 };
-        if (o.price > prices[o.type_id].buy) prices[o.type_id].buy = o.price;
-      });
-
-      totalOrders += orders.length;
-      const xPages = res.headers.get('x-pages');
-      if (!xPages || page >= parseInt(xPages)) break;
-      await new Promise(r => setTimeout(r, 100));
-    }
-
-    // Calculate median with outlier filtering
-    Object.keys(prices).forEach(typeId => {
-      const p = prices[typeId];
-      
-      // Step 1: Handle items with no sell orders (prevents Infinity in calculations)
-      if (p.sell === Infinity) {
-        p.sell = 0;
-      }
-      
-      // Step 2: Outlier filtering
-      // Case A: Standard outlier (has buy orders) - use 5x rule (500% margin max)
-      // Based on Adam4EVE research: Real margins rarely exceed 500% except mutaplasmids
-      if (p.buy > 0 && p.sell > p.buy * 5) {
-        const marginPercent = ((p.sell / p.buy) - 1) * 100;
-        console.warn(`⚠ Outlier filtered: typeId ${typeId} margin=${marginPercent.toFixed(0)}% (max 500%)`);
-        p.median = p.buy;
-      }
-      // Case B: No buy orders but suspiciously high sell price (>100M)
-      // Likely scam listing - use heavily discounted price
-      else if (p.buy === 0 && p.sell > 100000000) {
-        console.warn(`⚠ No-bid outlier: typeId ${typeId} sell=${p.sell} (no buy orders, likely scam)`);
-        p.median = p.sell * 0.1; // 90% discount for suspicious no-bid items
-      }
-      // Step 3: Normal median calculation
-      else {
-        p.median = (p.sell + p.buy) / 2;
-      }
-    });
-
+    const prices = await fetchRegionPrices(10000002); // The Forge (Jita)
     jitaPricesCache = prices;
     jitaPricesCacheExpiry = Date.now() + 3600000;
-
-    console.log(`✓ Jita prices cached — ${Object.keys(prices).length} items (${totalOrders} orders)`);
     res.json({ prices });
 
   } catch (err) {
@@ -1007,43 +1050,10 @@ app.post('/api/analyze-blueprints', async (req, res) => {
     // This ensures we always return real prices, never 0 ISK
     if (!jitaPricesCache || Date.now() >= jitaPricesCacheExpiry) {
       console.log('⟳ Loading Jita prices for analysis...');
-      
-      // Load prices from ESI
       try {
-        const buyRes = await fetch('https://esi.evetech.net/latest/markets/10000002/orders/?datasource=tranquility&order_type=buy');
-        const sellRes = await fetch('https://esi.evetech.net/latest/markets/10000002/orders/?datasource=tranquility&order_type=sell');
-        
-        if (buyRes.ok && sellRes.ok) {
-          const buyOrders = await buyRes.json();
-          const sellOrders = await sellRes.json();
-          
-          const prices = {};
-          
-          // Process sell orders (lowest sell = what you pay to buy)
-          sellOrders.forEach(o => {
-            if (!prices[o.type_id]) prices[o.type_id] = { sell: Infinity, buy: 0 };
-            if (o.price < prices[o.type_id].sell) prices[o.type_id].sell = o.price;
-          });
-          
-          // Process buy orders (highest buy = what you get when selling)
-          buyOrders.forEach(o => {
-            if (!prices[o.type_id]) prices[o.type_id] = { sell: Infinity, buy: 0 };
-            if (o.price > prices[o.type_id].buy) prices[o.type_id].buy = o.price;
-          });
-          
-          // Calculate median
-          Object.keys(prices).forEach(typeId => {
-            const p = prices[typeId];
-            if (p.sell === Infinity) p.sell = p.buy;
-            if (p.buy === 0) p.buy = p.sell;
-            p.median = (p.sell + p.buy) / 2;
-          });
-          
-          jitaPricesCache = prices;
-          jitaPricesCacheExpiry = Date.now() + (60 * 60 * 1000); // 1 hour
-          
-          console.log(`✓ Jita prices loaded — ${Object.keys(prices).length} items`);
-        }
+        const prices = await fetchRegionPrices(10000002); // The Forge (Jita)
+        jitaPricesCache = prices;
+        jitaPricesCacheExpiry = Date.now() + (60 * 60 * 1000); // 1 hour
       } catch (err) {
         console.error('⚠ Failed to load prices, proceeding with cached/zero prices:', err.message);
       }
@@ -1577,13 +1587,37 @@ app.post('/api/session-data',
       
       console.log(`💾 Caching session data - Character: ${characterId}, Key: ${sessionKey}`);
       console.log(`   Assets: ${assets.length}, Blueprints: ${blueprints.length}, Prices: ${Object.keys(prices || {}).length}`);
-      
+
+      // v0.9.4: Discover player-owned structures from asset locations
+      // Structure IDs are int64 (> 2^31-1), NPC stations are int32
+      const INT32_MAX = 2147483647;
+      const structureIds = new Set();
+
+      if (assets && Array.isArray(assets)) {
+        assets.forEach(asset => {
+          if (asset.location_id && asset.location_id > INT32_MAX) {
+            structureIds.add(asset.location_id);
+          }
+        });
+      }
+
+      if (jobs && Array.isArray(jobs)) {
+        jobs.forEach(job => {
+          if (job.facility_id && job.facility_id > INT32_MAX) {
+            structureIds.add(job.facility_id);
+          }
+        });
+      }
+
+      console.log(`✓ Discovered ${structureIds.size} accessible structures`);
+
       setCached(sessionKey, {
         assets,
         blueprints,
         prices: prices || {},
         wallet: wallet || 0,
         jobs: jobs || [],
+        accessibleStructures: Array.from(structureIds),
         cachedAt: new Date().toISOString()
       }, 7200000); // 2 hours
 
@@ -1745,73 +1779,12 @@ async function ensureJitaPrices() {
     return jitaPricesCache;
   }
 
-  console.log('⟳ Fetching Jita prices for pre-computation...');
-  const JITA_REGION = 10000002;
-  const prices = {};
-
-  // Fetch sell orders (all pages)
-  for (let page = 1; page <= 50; page++) {
-    const res = await fetch(
-      `https://esi.evetech.net/latest/markets/${JITA_REGION}/orders/?datasource=tranquility&order_type=sell&page=${page}`
-    );
-    if (!res.ok) {
-      console.error(`❌ ESI sell orders fetch failed (page ${page}): ${res.status} ${res.statusText}`);
-      break;
-    }
-    const orders = await res.json();
-    if (!orders || orders.length === 0) break;
-
-    for (const o of orders) {
-      if (!prices[o.type_id]) prices[o.type_id] = { sell: Infinity, buy: 0 };
-      if (o.price < prices[o.type_id].sell) prices[o.type_id].sell = o.price;
-    }
-
-    const xPages = res.headers.get('x-pages');
-    if (!xPages || page >= parseInt(xPages)) break;
-    await new Promise(r => setTimeout(r, 100));
-  }
-
-  // Fetch buy orders (all pages)
-  for (let page = 1; page <= 50; page++) {
-    const res = await fetch(
-      `https://esi.evetech.net/latest/markets/${JITA_REGION}/orders/?datasource=tranquility&order_type=buy&page=${page}`
-    );
-    if (!res.ok) {
-      console.error(`❌ ESI buy orders fetch failed (page ${page}): ${res.status} ${res.statusText}`);
-      break;
-    }
-    const orders = await res.json();
-    if (!orders || orders.length === 0) break;
-
-    for (const o of orders) {
-      if (!prices[o.type_id]) prices[o.type_id] = { sell: Infinity, buy: 0 };
-      if (o.price > prices[o.type_id].buy) prices[o.type_id].buy = o.price;
-    }
-
-    const xPages = res.headers.get('x-pages');
-    if (!xPages || page >= parseInt(xPages)) break;
-    await new Promise(r => setTimeout(r, 100));
-  }
-
-  // Apply outlier filtering (same logic as /api/jita-prices)
-  for (const typeId of Object.keys(prices)) {
-    const p = prices[typeId];
-    if (p.sell === Infinity) p.sell = 0;
-
-    if (p.buy > 0 && p.sell > p.buy * 5) {
-      p.median = p.buy;
-    } else if (p.buy === 0 && p.sell > 100000000) {
-      p.median = p.sell * 0.1;
-    } else {
-      p.median = (p.sell + p.buy) / 2;
-    }
-  }
+  const prices = await fetchRegionPrices(10000002); // The Forge (Jita)
 
   // Update the shared cache so other endpoints benefit too
   jitaPricesCache = prices;
   jitaPricesCacheExpiry = Date.now() + 3600000;
 
-  console.log(`✓ Jita prices loaded — ${Object.keys(prices).length} items`);
   return prices;
 }
 

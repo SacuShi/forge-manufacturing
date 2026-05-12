@@ -1,0 +1,946 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FORGE v1.0 — Mockup</title>
+<style>
+/* ── CSS Variables ─────────────────────────────────────────────────── */
+:root {
+  --color-bg-primary:    #0a0e1a;
+  --color-bg-secondary:  #0f1420;
+  --color-bg-tertiary:   #151b2b;
+  --color-text-primary:  #e0e6ed;
+  --color-text-secondary:#b5bcc7;
+  --color-text-tertiary: #8895a6;
+  --color-accent-primary:#4fc3f7;
+  --color-accent-hover:  #7ae7ff;
+  --color-success:       #4caf50;
+  --color-warning:       #ff9800;
+  --color-danger:        #f44336;
+  --color-info:          #2196f3;
+  --color-border-light:  rgba(139,149,166,0.1);
+  --color-border-medium: rgba(139,149,166,0.2);
+  --color-border-strong: rgba(79,195,247,0.3);
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'Monaco', 'Menlo', 'Courier New', monospace;
+  --border-radius-md: 8px;
+  --border-radius-lg: 12px;
+}
+
+/* ── Reset ─────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  line-height: 1.6;
+}
+
+/* ── App Shell ─────────────────────────────────────────────────────── */
+.app { display: flex; flex-direction: column; height: 100vh; }
+
+/* ── Header ────────────────────────────────────────────────────────── */
+.header {
+  height: 48px;
+  min-height: 48px;
+  background: var(--color-bg-secondary);
+  border-bottom: 0.5px solid var(--color-border-light);
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  z-index: 10;
+}
+.header-left { display: flex; align-items: center; gap: 16px; }
+.header-right { display: flex; align-items: center; gap: 8px; }
+
+.logo {
+  display: flex; align-items: center; gap: 8px;
+  color: var(--color-accent-primary);
+  font-size: 15px; font-weight: 500; letter-spacing: 1px;
+  text-decoration: none;
+}
+.logo-icon {
+  width: 20px; height: 20px;
+  background: var(--color-accent-primary);
+  clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+}
+
+.nav-btn {
+  padding: 6px 12px;
+  background: transparent;
+  border: 0.5px solid var(--color-border-medium);
+  border-radius: 4px;
+  color: var(--color-text-secondary);
+  font: 13px var(--font-sans);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.nav-btn:hover {
+  background: rgba(79,195,247,0.1);
+  border-color: var(--color-accent-primary);
+  color: var(--color-accent-primary);
+}
+.nav-btn.active {
+  background: rgba(79,195,247,0.15);
+  border-color: var(--color-accent-primary);
+  color: var(--color-accent-primary);
+}
+
+.market-teaser {
+  padding: 6px 12px;
+  background: rgba(79,195,247,0.07);
+  border: 0.5px dashed var(--color-border-strong);
+  border-radius: 4px;
+  color: var(--color-text-tertiary);
+  font: 12px var(--font-sans);
+  opacity: 0.7;
+  display: flex; align-items: center; gap: 6px;
+  cursor: not-allowed;
+}
+
+.char-pill {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 10px;
+  background: var(--color-bg-tertiary);
+  border: 0.5px solid rgba(79,195,247,0.2);
+  border-radius: 4px;
+  font-size: 13px;
+}
+.char-avatar {
+  width: 22px; height: 22px; border-radius: 50%;
+  border: 1px solid rgba(79,195,247,0.3);
+  background: #1a2535;
+  overflow: hidden;
+}
+.char-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.char-name { color: var(--color-accent-primary); font-weight: 500; }
+
+.chat-toggle-btn {
+  padding: 6px 14px;
+  background: rgba(79,195,247,0.15);
+  border: 0.5px solid var(--color-accent-primary);
+  border-radius: 4px;
+  color: var(--color-accent-primary);
+  font: 13px var(--font-sans);
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex; align-items: center; gap: 6px;
+}
+.chat-toggle-btn:hover { background: rgba(79,195,247,0.25); }
+.chat-toggle-btn.active {
+  background: rgba(79,195,247,0.12);
+  border-color: rgba(79,195,247,0.5);
+  color: rgba(79,195,247,0.65);
+  box-shadow: inset 0 1px 3px rgba(0,0,0,0.3);
+}
+
+.backronym-letter { color: var(--color-accent-primary); font-weight: 500; }
+
+/* ── Body ──────────────────────────────────────────────────────────── */
+.body { display: flex; flex: 1; overflow: hidden; }
+
+/* ── Left Sidebar ──────────────────────────────────────────────────── */
+.left-sidebar {
+  width: 240px; min-width: 240px;
+  background: var(--color-bg-secondary);
+  border-right: 0.5px solid var(--color-border-light);
+  padding: 16px;
+  overflow-y: auto;
+  display: flex; flex-direction: column; gap: 0;
+}
+
+.char-card {
+  background: var(--color-bg-tertiary);
+  border: 0.5px solid rgba(79,195,247,0.2);
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 16px;
+}
+.char-card-name {
+  font-size: 14px; font-weight: 500;
+  color: var(--color-accent-primary);
+  margin-bottom: 10px;
+  display: flex; align-items: center; gap: 8px;
+}
+.char-card-portrait {
+  width: 36px; height: 36px; border-radius: 50%;
+  border: 1px solid rgba(79,195,247,0.35);
+  overflow: hidden; flex-shrink: 0;
+}
+.char-card-portrait img { width: 100%; height: 100%; object-fit: cover; }
+.stat-line {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-size: 12px; margin-bottom: 5px;
+}
+.stat-line:last-child { margin-bottom: 0; }
+.stat-label { color: var(--color-text-tertiary); }
+.stat-value { color: var(--color-text-primary); font-weight: 500; font-family: var(--font-mono); }
+.stat-value.success { color: var(--color-success); }
+.stat-value.accent  { color: var(--color-accent-primary); }
+
+.section-heading {
+  font-size: 11px; font-weight: 500; letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+  margin: 16px 0 8px;
+}
+
+.quick-btn {
+  display: block; width: 100%;
+  padding: 8px 12px; margin-bottom: 6px;
+  background: transparent;
+  border: 0.5px solid var(--color-border-medium);
+  border-radius: 4px;
+  color: var(--color-text-secondary);
+  font: 12px var(--font-sans);
+  text-align: left; cursor: pointer;
+  transition: all 0.2s;
+  line-height: 1.4;
+}
+.quick-btn:hover {
+  background: rgba(79,195,247,0.1);
+  border-color: var(--color-border-strong);
+  color: var(--color-accent-primary);
+}
+
+.status-dot {
+  display: inline-block;
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--color-success);
+  margin-right: 6px;
+  box-shadow: 0 0 4px rgba(76,175,80,0.6);
+}
+
+/* ── Main Content ──────────────────────────────────────────────────── */
+.main-content {
+  flex: 1; min-width: 0;
+  display: flex; flex-direction: column;
+  overflow: hidden; padding: 20px 20px 0;
+}
+
+.content-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 14px;
+}
+.content-title { font-size: 18px; font-weight: 500; color: var(--color-text-primary); }
+.content-meta { font-size: 12px; color: var(--color-text-tertiary); }
+
+.tabs {
+  display: flex; gap: 4px;
+  border-bottom: 0.5px solid var(--color-border-light);
+  margin-bottom: 14px;
+}
+.tab-btn {
+  padding: 8px 16px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--color-text-tertiary);
+  font: 14px var(--font-sans);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.tab-btn:hover { color: var(--color-text-secondary); }
+.tab-btn.active {
+  border-bottom-color: var(--color-accent-primary);
+  color: var(--color-accent-primary);
+}
+
+.filter-row {
+  display: flex; gap: 8px; align-items: center;
+  margin-bottom: 12px;
+}
+.filter-select, .filter-input {
+  padding: 5px 10px;
+  background: var(--color-bg-tertiary);
+  border: 0.5px solid var(--color-border-medium);
+  border-radius: 4px;
+  color: var(--color-text-primary);
+  font: 12px var(--font-sans);
+  outline: none;
+}
+.filter-select:focus, .filter-input:focus {
+  border-color: var(--color-accent-primary);
+  box-shadow: 0 0 0 2px rgba(79,195,247,0.1);
+}
+.filter-label { font-size: 12px; color: var(--color-text-tertiary); }
+
+.table-wrap {
+  flex: 1; overflow-y: auto;
+  background: var(--color-bg-secondary);
+  border: 0.5px solid var(--color-border-light);
+  border-radius: 6px 6px 0 0;
+}
+table {
+  width: 100%; border-collapse: collapse; font-size: 13px;
+}
+thead th {
+  position: sticky; top: 0; z-index: 2;
+  background: var(--color-bg-tertiary);
+  padding: 11px 8px;
+  text-align: left;
+  font-size: 11px; font-weight: 500; color: var(--color-text-tertiary);
+  text-transform: uppercase; letter-spacing: 0.3px;
+  border-bottom: 0.5px solid var(--color-border-light);
+  white-space: nowrap; cursor: pointer;
+  user-select: none;
+}
+thead th:hover { color: var(--color-text-secondary); }
+thead th.sorted { color: var(--color-accent-primary); }
+thead th.right { text-align: right; }
+thead th.center { text-align: center; }
+
+tbody tr {
+  transition: background 0.15s;
+  cursor: pointer;
+}
+tbody tr:hover { background: rgba(79,195,247,0.05); }
+tbody tr.selected { background: rgba(79,195,247,0.08); }
+tbody td {
+  padding: 10px 8px;
+  border-bottom: 0.5px solid var(--color-border-light);
+  color: var(--color-text-secondary);
+}
+
+.item-cell { display: flex; align-items: center; gap: 8px; }
+.item-icon {
+  width: 24px; height: 24px; border-radius: 3px;
+  flex-shrink: 0; background: rgba(79,195,247,0.12);
+  overflow: hidden;
+}
+.item-icon img {
+  width: 100%; height: 100%; display: block;
+}
+.item-icon img.hide { display: none; }
+.item-name-text { font-weight: 500; color: var(--color-text-primary); }
+.item-name-text small { display: block; font-size: 11px; font-weight: 400; color: var(--color-text-tertiary); }
+
+.num { font-family: var(--font-mono); text-align: right; }
+.num.success { color: var(--color-success); font-weight: 500; }
+.num.warning { color: var(--color-warning); font-weight: 500; }
+.num.danger  { color: var(--color-danger);  font-weight: 500; }
+.num.neutral { color: var(--color-text-secondary); font-weight: 500; }
+td.center { text-align: center; }
+
+.badge {
+  display: inline-block; padding: 3px 7px;
+  border-radius: 3px; font-size: 11px; font-weight: 500;
+  text-align: center;
+}
+.badge.bpo { background: rgba(79,195,247,0.2); color: var(--color-accent-primary); }
+.badge.bpc { background: rgba(79,195,247,0.12); color: #78d4f7; }
+.badge.none { background: rgba(139,149,166,0.15); color: var(--color-text-tertiary); }
+
+.action-btn {
+  padding: 4px 10px;
+  background: rgba(79,195,247,0.2);
+  border: 0.5px solid rgba(79,195,247,0.3);
+  border-radius: 3px;
+  color: var(--color-accent-primary);
+  font: 11px var(--font-sans);
+  cursor: pointer; transition: all 0.2s;
+}
+.action-btn:hover {
+  background: rgba(79,195,247,0.3);
+  border-color: rgba(79,195,247,0.5);
+}
+.action-btn.skip {
+  background: rgba(139,149,166,0.1);
+  border-color: rgba(139,149,166,0.2);
+  color: var(--color-text-tertiary);
+}
+
+/* ── Right Sidebar (Item Details) ──────────────────────────────────── */
+.right-sidebar {
+  width: 280px; min-width: 280px;
+  background: var(--color-bg-secondary);
+  border-left: 0.5px solid var(--color-border-light);
+  padding: 16px;
+  overflow-y: auto;
+  display: flex; flex-direction: column;
+}
+
+.detail-item-hero {
+  display: flex; align-items: center; gap: 12px;
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom: 0.5px solid var(--color-border-light);
+}
+.detail-icon-large {
+  width: 52px; height: 52px; border-radius: 6px;
+  border: 0.5px solid rgba(79,195,247,0.25);
+  overflow: hidden; flex-shrink: 0;
+  background: rgba(79,195,247,0.1);
+}
+.detail-icon-large img { width: 100%; height: 100%; display: block; }
+.detail-item-title { font-size: 15px; font-weight: 500; color: var(--color-text-primary); margin-bottom: 3px; }
+.detail-item-cat   { font-size: 11px; color: var(--color-text-tertiary); }
+
+.detail-section { margin-bottom: 18px; }
+.detail-section-heading {
+  font-size: 11px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--color-text-tertiary);
+  margin-bottom: 8px;
+}
+
+.stat-card {
+  background: var(--color-bg-tertiary);
+  border: 0.5px solid rgba(79,195,247,0.15);
+  border-radius: 4px;
+  padding: 10px 12px;
+  margin-bottom: 6px;
+}
+.stat-card-label  { font-size: 12px; color: var(--color-text-tertiary); margin-bottom: 3px; }
+.stat-card-value  { font-size: 15px; font-weight: 500; color: var(--color-text-primary); font-family: var(--font-mono); }
+.stat-card-value.success { color: var(--color-success); }
+.stat-card-value.warning { color: var(--color-warning); }
+.stat-card-value.danger  { color: var(--color-danger); }
+
+.mat-row {
+  display: flex; justify-content: space-between;
+  font-size: 12px; padding: 5px 0;
+  border-bottom: 0.5px solid var(--color-border-light);
+}
+.mat-row:last-child { border-bottom: none; }
+.mat-row .mat-name {
+  display: flex; align-items: center; gap: 5px;
+  color: var(--color-text-secondary);
+}
+.mat-row .mat-qty { color: var(--color-text-tertiary); font-family: var(--font-mono); font-size: 11px; }
+.mat-icon-sm {
+  width: 14px; height: 14px; border-radius: 2px;
+  background: rgba(79,195,247,0.1); flex-shrink: 0; overflow: hidden;
+}
+.mat-icon-sm img { width: 100%; height: 100%; }
+
+.detail-empty {
+  flex: 1; display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  color: var(--color-text-tertiary); text-align: center;
+  gap: 8px; opacity: 0.6;
+}
+.detail-empty-icon { font-size: 32px; opacity: 0.4; }
+.detail-empty p { font-size: 13px; }
+
+/* ── Chat Sidebar ──────────────────────────────────────────────────── */
+.chat-sidebar {
+  width: 0; overflow: hidden;
+  transition: width 0.25s ease;
+  background: var(--color-bg-secondary);
+  border-left: 0.5px solid var(--color-border-light);
+  display: flex; flex-direction: column;
+}
+.chat-sidebar.open { width: 340px; min-width: 340px; }
+
+.chat-header {
+  padding: 12px 16px;
+  border-bottom: 0.5px solid var(--color-border-light);
+  display: flex; align-items: center; justify-content: space-between;
+  flex-shrink: 0;
+}
+.chat-title { font-size: 13px; font-weight: 500; color: var(--color-accent-primary); }
+.chat-subtitle { font-size: 11px; color: var(--color-text-tertiary); }
+
+.chat-messages {
+  flex: 1; overflow-y: auto;
+  padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.msg { font-size: 13px; line-height: 1.55; }
+.msg.user {
+  background: rgba(79,195,247,0.08);
+  border: 0.5px solid rgba(79,195,247,0.15);
+  border-radius: 6px 6px 2px 6px;
+  padding: 8px 10px;
+  color: var(--color-text-primary);
+  align-self: flex-end; max-width: 90%;
+}
+.msg.assistant {
+  background: var(--color-bg-tertiary);
+  border: 0.5px solid var(--color-border-light);
+  border-radius: 2px 6px 6px 6px;
+  padding: 10px 12px;
+  color: var(--color-text-secondary);
+  max-width: 100%;
+}
+.msg-label { font-size: 10px; color: var(--color-text-tertiary); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.4px; }
+.item-link {
+  display: inline-flex; align-items: center; gap: 4px;
+  color: var(--color-accent-primary); cursor: pointer;
+  border-bottom: 1px dashed rgba(79,195,247,0.4);
+  text-decoration: none; white-space: nowrap;
+}
+.item-link img { width: 16px; height: 16px; border-radius: 2px; }
+.item-link:hover { color: var(--color-accent-hover); border-bottom-color: rgba(79,195,247,0.8); }
+
+.chat-input-area {
+  padding: 10px 12px;
+  border-top: 0.5px solid var(--color-border-light);
+  flex-shrink: 0;
+}
+.chat-input-row { display: flex; gap: 6px; }
+.chat-input {
+  flex: 1; padding: 8px 10px;
+  background: var(--color-bg-tertiary);
+  border: 0.5px solid var(--color-border-medium);
+  border-radius: 4px;
+  color: var(--color-text-primary);
+  font: 12px var(--font-sans);
+  outline: none; resize: none;
+}
+.chat-input:focus {
+  border-color: var(--color-accent-primary);
+  box-shadow: 0 0 0 2px rgba(79,195,247,0.1);
+}
+.chat-send-btn {
+  padding: 8px 12px;
+  background: var(--color-accent-primary);
+  border: none; border-radius: 4px;
+  color: #0a0e1a; font: 12px var(--font-sans); font-weight: 500;
+  cursor: pointer; transition: all 0.2s;
+}
+.chat-send-btn:hover { background: var(--color-accent-hover); }
+
+.quick-prompts { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.quick-prompt {
+  padding: 5px 8px;
+  background: var(--color-bg-tertiary);
+  border: 0.5px solid var(--color-border-medium);
+  border-radius: 3px;
+  color: var(--color-text-tertiary);
+  font: 11px var(--font-sans);
+  text-align: left; cursor: pointer;
+  transition: all 0.15s;
+}
+.quick-prompt:hover {
+  background: rgba(79,195,247,0.08);
+  border-color: rgba(79,195,247,0.25);
+  color: var(--color-text-secondary);
+}
+
+/* ── Scrollbar ─────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(139,149,166,0.3); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(139,149,166,0.5); }
+
+/* ── Mockup banner ─────────────────────────────────────────────────── */
+.mockup-banner {
+  background: rgba(255,152,0,0.12);
+  border-bottom: 0.5px solid rgba(255,152,0,0.3);
+  padding: 4px 16px;
+  font-size: 11px; color: var(--color-warning); text-align: center;
+  letter-spacing: 0.3px;
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- Mockup notice -->
+  <div class="mockup-banner">MOCKUP — Static preview with fake data. Not connected to live backend.</div>
+
+  <!-- Header -->
+  <header class="header">
+    <div class="header-left">
+      <a class="logo" href="#">
+        <div class="logo-icon"></div>
+        FORGE
+      </a>
+      <button class="nav-btn active">Dashboard</button>
+      <button class="nav-btn">Production</button>
+      <button class="nav-btn">Assets</button>
+      <button class="chat-toggle-btn" id="chatToggle" onclick="toggleChat()">
+        &#9656; F.O.R.G.E. AI
+      </button>
+    </div>
+    <div class="header-right">
+      <div class="market-teaser">
+        &#9670; Jita (The Forge) &nbsp;<span style="font-size:10px;opacity:0.7;">[v1.1]</span>
+      </div>
+      <div class="char-pill">
+        <div class="char-avatar">
+          <img src="https://images.evetech.net/characters/95465499/portrait?size=64" alt="character" onerror="this.style.display='none'">
+        </div>
+        <span class="char-name">Gumpy Gallente</span>
+      </div>
+      <button class="nav-btn" style="color:var(--color-text-tertiary);margin-left:16px;">Log out</button>
+    </div>
+  </header>
+
+  <!-- Body -->
+  <div class="body">
+
+    <!-- Left Sidebar -->
+    <aside class="left-sidebar">
+
+      <!-- Character Card -->
+      <div class="char-card">
+        <div class="char-card-name">
+          <div class="char-card-portrait">
+            <img src="https://images.evetech.net/characters/95465499/portrait?size=64" alt="portrait" onerror="this.style.display='none'">
+          </div>
+          <div>
+            Gumpy Gallente
+            <div style="font-size:11px;font-weight:400;color:var(--color-text-tertiary);">
+              <span class="status-dot"></span>Active
+            </div>
+          </div>
+        </div>
+        <div class="stat-line">
+          <span class="stat-label">Wallet</span>
+          <span class="stat-value accent">4,827.3M</span>
+        </div>
+        <div class="stat-line">
+          <span class="stat-label">Active jobs</span>
+          <span class="stat-value">7</span>
+        </div>
+        <div class="stat-line">
+          <span class="stat-label">Blueprints</span>
+          <span class="stat-value">143 (62 BPO)</span>
+        </div>
+        <div class="stat-line">
+          <span class="stat-label">Data refreshed</span>
+          <span class="stat-value" style="font-size:11px;color:var(--color-text-tertiary);">2 min ago</span>
+        </div>
+      </div>
+
+      <!-- Quick Actions -->
+      <div class="section-heading">Quick Actions</div>
+      <button class="quick-btn" onclick="selectRow(0)">&#9660; Show top profit opportunity</button>
+      <button class="quick-btn" onclick="selectRow(2)">&#9634; Blueprints ready to build now</button>
+      <button class="quick-btn">&#9651; Check T2 chain progress</button>
+      <button class="quick-btn">&#9670; Estimate build costs</button>
+
+      <!-- Industry Jobs -->
+      <div class="section-heading" style="margin-top:20px;">Active Jobs</div>
+      <div style="font-size:12px;color:var(--color-text-tertiary);line-height:1.8;">
+        <div style="display:flex;justify-content:space-between;margin-bottom:3px;">
+          <span style="color:var(--color-text-secondary);">Hammerhead II ×5</span>
+          <span>1h 42m</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-bottom:3px;">
+          <span style="color:var(--color-text-secondary);">Drake ×1</span>
+          <span>6h 11m</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-bottom:3px;">
+          <span style="color:var(--color-text-secondary);">Med Shield Ext II ×10</span>
+          <span>22h 05m</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-bottom:3px;">
+          <span style="color:var(--color-text-secondary);">Vagabond ×1</span>
+          <span style="color:var(--color-success);">Done</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <div class="content-header">
+        <div>
+          <div class="content-title">Top Manufacturing Opportunities</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <div class="content-meta">Updated 2 min ago &nbsp;·&nbsp; 16,482 Jita items</div>
+          <button class="nav-btn" style="font-size:11px;padding:4px 10px;">&#8635; Refresh</button>
+        </div>
+      </div>
+
+      <!-- Tabs -->
+      <div class="tabs">
+        <button class="tab-btn active" onclick="switchTab(this,'market')">Market Opportunities</button>
+        <button class="tab-btn" onclick="switchTab(this,'my')">My Blueprints</button>
+      </div>
+
+      <!-- Filters -->
+      <div class="filter-row">
+        <span class="filter-label">Sort:</span>
+        <select class="filter-select">
+          <option>Profit / run</option>
+          <option>Margin %</option>
+          <option>ISK / hour</option>
+          <option>Build time</option>
+        </select>
+        <span class="filter-label">Show:</span>
+        <select class="filter-select">
+          <option>All items</option>
+          <option>Buildable now</option>
+          <option>Ships only</option>
+          <option>T2 modules</option>
+        </select>
+        <input class="filter-input" type="text" placeholder="Search item..." style="width:140px;">
+      </div>
+
+      <!-- Table -->
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:36px;">#</th>
+              <th>Item</th>
+              <th class="right sorted">Profit / run &#9660;</th>
+              <th class="right">Margin</th>
+              <th class="right">ISK / hr</th>
+              <th class="center">Build time</th>
+              <th class="center">Owned</th>
+              <th class="center"></th>
+            </tr>
+          </thead>
+          <tbody id="tableBody">
+          </tbody>
+        </table>
+      </div>
+    </main>
+
+    <!-- Right Sidebar (Item Details) -->
+    <aside class="right-sidebar" id="rightSidebar">
+      <div class="detail-empty" id="detailEmpty">
+        <div class="detail-empty-icon">&#9671;</div>
+        <p>Select an item to view details</p>
+        <p style="font-size:11px;color:var(--color-text-tertiary);">Click any row in the table</p>
+      </div>
+      <div id="detailPanel" style="display:none; flex-direction:column; flex:1;">
+      </div>
+    </aside>
+
+    <!-- Chat Sidebar -->
+    <aside class="chat-sidebar" id="chatSidebar">
+      <div class="chat-header">
+        <div>
+          <div class="chat-title">F.O.R.G.E. AI Advisor</div>
+          <div class="chat-subtitle"><span class="backronym-letter">F</span>abrication, <span class="backronym-letter">O</span>perations, <span class="backronym-letter">R</span>esource &amp; <span class="backronym-letter">G</span>uidance <span class="backronym-letter">E</span>ngine</div>
+        </div>
+        <button class="nav-btn" style="font-size:11px;padding:3px 8px;" onclick="toggleChat()">✕</button>
+      </div>
+      <div class="chat-messages" id="chatMessages">
+        <div class="msg assistant">
+          <div class="msg-label">F.O.R.G.E.</div>
+          Welcome back, Gumpy. Your wallet is at 4,827M ISK with 7 active jobs.
+          Your top opportunity right now is <a class="item-link"><img src="https://images.evetech.net/types/11993/icon?size=32" onerror="this.style.display='none'">Vagabond</a> at 47.2M ISK profit per run (38% margin). You have the BPO and materials in stock.
+        </div>
+        <div class="msg user">
+          <div class="msg-label">You</div>
+          What T2 items should I focus on with 5B ISK?
+        </div>
+        <div class="msg assistant">
+          <div class="msg-label">F.O.R.G.E.</div>
+          With 5B ISK, your best T2 options right now:<br><br>
+          1. <a class="item-link"><img src="https://images.evetech.net/types/11993/icon?size=32" onerror="this.style.display='none'">Vagabond</a> — 47.2M/run, 38% margin, 3h build<br>
+          2. <a class="item-link"><img src="https://images.evetech.net/types/2185/icon?size=32" onerror="this.style.display='none'">Hammerhead II</a> ×20 batch — 18.4M, fast turnover<br>
+          3. <a class="item-link"><img src="https://images.evetech.net/types/2364/icon?size=32" onerror="this.style.display='none'">Med Shield Ext II</a> — 9.1M each, high demand<br><br>
+          I'd stack Vagabond runs first — your BPO has ME10 which cuts mat cost by 9%.
+        </div>
+      </div>
+      <div class="chat-input-area">
+        <div class="chat-input-row">
+          <textarea class="chat-input" rows="2" placeholder="Ask F.O.R.G.E. anything about manufacturing…"></textarea>
+          <button class="chat-send-btn">Send</button>
+        </div>
+        <div class="quick-prompts">
+          <button class="quick-prompt">What's the most profitable opportunity right now?</button>
+          <button class="quick-prompt">Which blueprints can I build with my materials?</button>
+          <button class="quick-prompt">What T2 chains am I closest to completing?</button>
+        </div>
+      </div>
+    </aside>
+
+  </div><!-- /body -->
+</div><!-- /app -->
+
+<script>
+// ── Fake data ───────────────────────────────────────────────────────
+const items = [
+  { rank:1, typeId:11993, name:'Vagabond',              cat:'Heavy Assault Cruiser', profit:47200000, margin:38.2, iskhr:178000000, time:'3h 12m', owned:'BPO', canBuild:true  },
+  { rank:2, typeId:2185,  name:'Hammerhead II',         cat:'Medium Drone',          profit:18400000, margin:31.5, iskhr:96000000,  time:'45m',    owned:'BPO', canBuild:true  },
+  { rank:3, typeId:24698, name:'Drake',                 cat:'Battlecruiser',         profit:15800000, margin:12.4, iskhr:43000000,  time:'8h 44m', owned:'BPO', canBuild:true  },
+  { rank:4, typeId:2364,  name:'Medium Shield Extender II', cat:'T2 Module',         profit:9100000,  margin:27.3, iskhr:84000000,  time:'25m',    owned:'BPC', canBuild:false },
+  { rank:5, typeId:2456,  name:'Hobgoblin II',          cat:'Small Drone',           profit:7200000,  margin:22.8, iskhr:120000000, time:'22m',    owned:'BPO', canBuild:true  },
+  { rank:6, typeId:16229, name:'Brutix',                cat:'Battlecruiser',         profit:6800000,  margin:9.1,  iskhr:21000000,  time:'7h 30m', owned:'BPO', canBuild:false },
+  { rank:7, typeId:12003, name:'Eagle',                 cat:'Heavy Assault Cruiser', profit:52100000, margin:40.7, iskhr:195000000, time:'3h 05m', owned:'—',   canBuild:false },
+  { rank:8, typeId:3557,  name:'200mm Railgun II',      cat:'T2 Weapon',             profit:4300000,  margin:19.2, iskhr:61000000,  time:'1h 02m', owned:'BPO', canBuild:true  },
+  { rank:9, typeId:621,   name:'Caracal',               cat:'Cruiser',               profit:3900000,  margin:8.4,  iskhr:18000000,  time:'5h 15m', owned:'BPO', canBuild:true  },
+  { rank:10,typeId:2281,  name:'Small Shield Extender II', cat:'T2 Module',          profit:3100000,  margin:15.6, iskhr:49000000,  time:'18m',    owned:'BPC', canBuild:true  },
+  { rank:11,typeId:4310,  name:'Incursus',              cat:'Frigate',               profit:1200000,  margin:6.1,  iskhr:9000000,   time:'1h 45m', owned:'—',   canBuild:false },
+  { rank:12,typeId:24692, name:'Myrmidon',              cat:'Battlecruiser',         profit:-800000,  margin:-1.2, iskhr:-3000000,  time:'7h 48m', owned:'—',   canBuild:false },
+];
+
+// Materials for detail panel
+const mats = {
+  11993: [
+    { typeId:34,   name:'Tritanium',   qty:'2,812,450' },
+    { typeId:35,   name:'Pyerite',     qty:'712,300' },
+    { typeId:36,   name:'Mexallon',    qty:'189,200' },
+    { typeId:37,   name:'Isogen',      qty:'28,400' },
+    { typeId:38,   name:'Nocxium',     qty:'7,100' },
+    { typeId:39,   name:'Zydrine',     qty:'1,420' },
+    { typeId:40,   name:'Megacyte',    qty:'284' },
+    { typeId:11399,name:'Morphite',    qty:'142' },
+  ],
+  2185: [
+    { typeId:34,   name:'Tritanium',   qty:'88,200' },
+    { typeId:35,   name:'Pyerite',     qty:'22,050' },
+    { typeId:36,   name:'Mexallon',    qty:'5,880' },
+    { typeId:11_399,name:'Morphite',   qty:'18' },
+  ],
+};
+
+// ── Table rendering ─────────────────────────────────────────────────
+function fmtISK(n) {
+  const abs = Math.abs(n);
+  const sign = n < 0 ? '-' : '';
+  if (abs >= 1e9) return sign + (abs/1e9).toFixed(1) + 'B';
+  if (abs >= 1e6) return sign + (abs/1e6).toFixed(1) + 'M';
+  if (abs >= 1e3) return sign + (abs/1e3).toFixed(0) + 'K';
+  return sign + abs;
+}
+
+function marginClass(m) {
+  if (m < 0)   return 'danger';
+  if (m < 10)  return 'danger';
+  if (m < 25)  return 'warning';
+  return 'success';
+}
+
+function renderTable() {
+  const tbody = document.getElementById('tableBody');
+  tbody.innerHTML = items.map((it, i) => {
+    const mc = marginClass(it.margin);
+    const profitClass = it.profit < 0 ? 'danger' : 'success';
+    const iskhrClass = it.iskhr < 0 ? 'danger' : 'neutral';
+    const ownedClass = it.owned === 'BPO' ? 'bpo' : it.owned === 'BPC' ? 'bpc' : 'none';
+    const actionLabel = it.profit > 0 ? 'Analyse' : 'Skip';
+    const actionClass = it.profit > 0 ? '' : 'skip';
+    return `<tr onclick="selectRow(${i})" id="row-${i}">
+      <td style="color:var(--color-text-tertiary);font-size:12px;text-align:center;">${it.rank}</td>
+      <td>
+        <div class="item-cell">
+          <div class="item-icon">
+            <img src="https://images.evetech.net/types/${it.typeId}/icon?size=32"
+                 alt="${it.name}" onerror="this.parentElement.style.background='rgba(79,195,247,0.1)'">
+          </div>
+          <div class="item-name-text">${it.name}<small>${it.cat}</small></div>
+        </div>
+      </td>
+      <td class="num ${profitClass}">${fmtISK(it.profit)}</td>
+      <td class="num ${mc}">${it.margin > 0 ? '+' : ''}${it.margin.toFixed(1)}%</td>
+      <td class="num ${iskhrClass}">${fmtISK(it.iskhr)}/hr</td>
+      <td class="center" style="color:var(--color-text-secondary);font-size:12px;">${it.time}</td>
+      <td class="center"><span class="badge ${ownedClass}">${it.owned}</span></td>
+      <td class="center"><button class="action-btn ${actionClass}" onclick="event.stopPropagation();selectRow(${i})">${actionLabel}</button></td>
+    </tr>`;
+  }).join('');
+}
+
+// ── Detail panel ────────────────────────────────────────────────────
+function selectRow(idx) {
+  document.querySelectorAll('#tableBody tr').forEach(r => r.classList.remove('selected'));
+  const row = document.getElementById(`row-${idx}`);
+  if (row) row.classList.add('selected');
+
+  const it = items[idx];
+  document.getElementById('detailEmpty').style.display = 'none';
+  const panel = document.getElementById('detailPanel');
+  panel.style.display = 'flex';
+
+  const matList = mats[it.typeId] || mats[11993].slice(0, 4);
+  const mc = marginClass(it.margin);
+  const profitClass = it.profit < 0 ? 'danger' : 'success';
+  const matRows = matList.map(m => `
+    <div class="mat-row">
+      <span class="mat-name">
+        <div class="mat-icon-sm"><img src="https://images.evetech.net/types/${m.typeId}/icon?size=32" onerror="this.style.display='none'"></div>
+        ${m.name}
+      </span>
+      <span class="mat-qty">×${m.qty}</span>
+    </div>`).join('');
+
+  panel.innerHTML = `
+    <div class="detail-item-hero">
+      <div class="detail-icon-large">
+        <img src="https://images.evetech.net/types/${it.typeId}/icon?size=64" alt="${it.name}" onerror="this.parentElement.style.background='rgba(79,195,247,0.1)'">
+      </div>
+      <div>
+        <div class="detail-item-title">${it.name}</div>
+        <div class="detail-item-cat">${it.cat}</div>
+        <div style="margin-top:4px;">
+          <span class="badge ${it.owned === 'BPO' ? 'bpo' : it.owned === 'BPC' ? 'bpc' : 'none'}">${it.owned}</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="detail-section">
+      <div class="detail-section-heading">Profitability</div>
+      <div class="stat-card">
+        <div class="stat-card-label">Profit per run</div>
+        <div class="stat-card-value ${profitClass}">${fmtISK(it.profit)} ISK</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-label">Margin</div>
+        <div class="stat-card-value ${mc}">${it.margin > 0 ? '+' : ''}${it.margin.toFixed(1)}%</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-label">ISK / hour</div>
+        <div class="stat-card-value ${profitClass}">${fmtISK(it.iskhr)}</div>
+      </div>
+    </div>
+
+    <div class="detail-section">
+      <div class="detail-section-heading">Build info</div>
+      <div class="stat-card">
+        <div class="stat-card-label">Build time</div>
+        <div class="stat-card-value">${it.time}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-label">Sell price (Jita)</div>
+        <div class="stat-card-value">${fmtISK(it.profit / (it.margin / 100) + Math.abs(it.profit))} ISK</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-label">Mat cost</div>
+        <div class="stat-card-value">${fmtISK(it.profit / (it.margin / 100))} ISK</div>
+      </div>
+    </div>
+
+    <div class="detail-section">
+      <div class="detail-section-heading">Materials (per run)</div>
+      <div style="background:var(--color-bg-tertiary);border:0.5px solid rgba(79,195,247,0.12);border-radius:4px;padding:8px 10px;">
+        ${matRows}
+      </div>
+    </div>
+
+    <div style="margin-top:auto;padding-top:12px;">
+      <button class="nav-btn" style="font-size:11px;padding:6px 10px;width:100%;">View production chain</button>
+    </div>
+  `;
+}
+
+// ── Tab switching ───────────────────────────────────────────────────
+function switchTab(btn, tab) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+}
+
+// ── Chat toggle ─────────────────────────────────────────────────────
+function toggleChat() {
+  const sidebar = document.getElementById('chatSidebar');
+  const btn = document.getElementById('chatToggle');
+  const isOpen = sidebar.classList.toggle('open');
+  btn.classList.toggle('active', isOpen);
+  btn.textContent = isOpen ? '✕ Close AI' : '▶ F.O.R.G.E. AI';
+}
+function openChat() {
+  const sidebar = document.getElementById('chatSidebar');
+  if (!sidebar.classList.contains('open')) toggleChat();
+}
+
+// ── Init ────────────────────────────────────────────────────────────
+renderTable();
+setTimeout(() => selectRow(0), 200);
+</script>
+</body>
+</html>
