@@ -18,7 +18,7 @@
  */
 
 import type { FC } from 'react';
-import type { ItemDetail, ItemDetailApiResponse } from '../types';
+import type { ItemDetail, ItemDetailApiResponse, EsiBlueprint } from '../types';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -32,6 +32,7 @@ interface RightSidebarProps {
   detailLoading: boolean;
   detailError: string | null;
   detailOpen: boolean;
+  blueprints: EsiBlueprint[];
   onClose: () => void;
 }
 
@@ -65,6 +66,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
   detailLoading,
   detailError,
   detailOpen,
+  blueprints,
   onClose,
 }) => {
   const sidebarClass = `sidebar-right${detailOpen ? ' detail-open' : ''}`;
@@ -83,6 +85,10 @@ const RightSidebar: FC<RightSidebarProps> = ({
 
   const iconUrl = `${ICON_BASE}/${selectedTypeId}/icon?size=64`;
   const name    = selectedName || apiDetail?.name || fallbackDetail?.name || `Item #${selectedTypeId}`;
+  const blueprint = blueprints.find((b) => b.type_id === selectedTypeId);
+  const runsText = blueprint
+    ? (blueprint.quantity === -1 ? 'Unlimited' : `${blueprint.runs}`)
+    : null;
 
   return (
     <aside className={sidebarClass} aria-label={`${name} detail analysis`}>
@@ -94,8 +100,8 @@ const RightSidebar: FC<RightSidebarProps> = ({
             <img
               src={iconUrl}
               alt=""
-              width={52}
-              height={52}
+              width={64}
+              height={64}
               onError={(e) => {
                 (e.currentTarget as HTMLImageElement).style.visibility = 'hidden';
               }}
@@ -125,6 +131,23 @@ const RightSidebar: FC<RightSidebarProps> = ({
             ×
           </button>
         </div>
+
+        {/* ── Runs remaining (for BPC/BPO) ───────────────────────────────── */}
+        {blueprint && (
+          <div style={{
+            padding: '8px 12px',
+            borderBottom: '1px solid var(--color-border-light)',
+            fontSize: 12,
+            color: 'var(--color-text-secondary)',
+            display: 'flex',
+            justifyContent: 'space-between',
+          }}>
+            <span>Runs remaining</span>
+            <span style={{ fontWeight: 500, color: 'var(--color-accent-primary)' }}>
+              {runsText}
+            </span>
+          </div>
+        )}
 
         {/* ── Loading indicator ───────────────────────────────────────────── */}
         {detailLoading && (

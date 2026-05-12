@@ -51,8 +51,8 @@ interface MainContentProps {
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const TABS = [
-  { key: 'market',     label: '◈ Market' },
-  { key: 'blueprints', label: '◈ Blueprints' },
+  { key: 'market',     label: '◈ Market Opportunities' },
+  { key: 'blueprints', label: '◈ Your blueprints' },
   { key: 'assets',     label: '◉ Assets' },
   { key: 'jobs',       label: '⚙ Jobs' },
 ];
@@ -275,7 +275,7 @@ const MainContent: FC<MainContentProps> = ({
                   <div className="bp-badges">
                     {isBpo
                       ? <span className="badge-bpo">BPO</span>
-                      : <span className="badge-runs">{b.runs} runs</span>
+                      : <span className="badge-bpc">BPC</span>
                     }
                     <span className="badge-me">ME{b.material_efficiency}</span>
                     <span className="badge-te">TE{b.time_efficiency}</span>
@@ -311,23 +311,39 @@ const MainContent: FC<MainContentProps> = ({
                 key={i}
                 style={{
                   display: 'flex',
-                  justifyContent: 'space-between',
                   alignItems: 'center',
-                  padding: '5px 0',
+                  justifyContent: 'space-between',
+                  padding: '8px 4px',
                   borderBottom: '0.5px solid var(--color-border-light)',
                   cursor: 'pointer',
                 }}
                 onClick={() => onSelectItem(typeId, name)}
               >
-                <span style={{
-                  fontSize: 12, color: 'var(--color-text-secondary)',
-                  overflow: 'hidden', textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap', flex: 1, marginRight: 8,
-                }}>
-                  {name}
-                </span>
+                <div style={{ display: 'flex', alignItems: 'center', flex: 1, gap: 8, minWidth: 0 }}>
+                  <img
+                    src={`https://images.evetech.net/types/${typeId}/icon?size=32`}
+                    alt={name}
+                    loading="lazy"
+                    style={{
+                      width: 32,
+                      height: 32,
+                      flexShrink: 0,
+                      borderRadius: 2,
+                    }}
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).style.visibility = 'hidden';
+                    }}
+                  />
+                  <span style={{
+                    fontSize: 12, color: 'var(--color-text-secondary)',
+                    overflow: 'hidden', textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap', flex: 1,
+                  }}>
+                    {name}
+                  </span>
+                </div>
                 <span style={{ fontSize: 12, color: 'var(--color-accent-primary)',
-                  fontWeight: 500, flexShrink: 0 }}>
+                  fontWeight: 500, flexShrink: 0, marginLeft: 8 }}>
                   ×{qty.toLocaleString()}
                 </span>
               </div>

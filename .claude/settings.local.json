@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(scp \"C:/Users/AndyMcD/Desktop/forge-manufacturing/.claude/worktrees/hardcore-lamport-8943e7/server/server.js\" gumpy54@forge:/home/gumpy54/forge-server/server.js)",
+      "Bash(npm create *)",
+      "PowerShell(Get-Command node, npm, npx -ErrorAction SilentlyContinue)",
+      "PowerShell($env:PATH -split ';' | Where-Object { $_ -match 'node|npm' })",
+      "PowerShell(Get-ChildItem \"C:\\\\Program Files\\\\nodejs\" -ErrorAction SilentlyContinue | Select-Object Name; Get-ChildItem \"C:\\\\Program Files \\(x86\\)\\\\nodejs\" -ErrorAction SilentlyContinue | Select-Object Name; Test-Path \"$env:APPDATA\\\\npm\")",
+      "PowerShell($env:PATH = [System.Environment]::GetEnvironmentVariable\\(\"PATH\",\"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"PATH\",\"User\"\\); node --version; npm --version)",
+      "Bash(git -C \"C:\\\\Users\\\\AndyMcD\\\\Desktop\\\\forge-manufacturing\\\\.claude\\\\worktrees\\\\agent-abdeb11007b9de904\" log --oneline -5)",
+      "Read(//usr/local/**)",
+      "Read(//c/Users/AndyMcD/.nvm/**)",
+      "PowerShell($env:PATH = \"C:\\\\Program Files\\\\nodejs;\" + $env:PATH; npm --version; node --version)",
+      "Bash(ls /mnt/c/Users/AndyMcD/Desktop/forge-manufacturing/.claude/worktrees/)",
+      "Bash(npm run *)",
+      "Bash(grep -n \"badge-bpo\\\\|badge-runs\" \"C:\\\\\\\\Users\\\\\\\\AndyMcD\\\\\\\\Desktop\\\\\\\\forge-manufacturing\\\\\\\\.claude\\\\\\\\worktrees\\\\\\\\hardcore-lamport-8943e7\\\\\\\\forge-v1\\\\\\\\src\\\\\\\\styles\\\\\\\\components.css\")",
+      "Bash(cd \"C:\\\\\\\\Users\\\\\\\\AndyMcD\\\\\\\\Desktop\\\\\\\\forge-manufacturing\\\\\\\\.claude\\\\\\\\worktrees\\\\\\\\hardcore-lamport-8943e7\\\\\\\\forge-v1\")",
+      "Bash(grep -n \"table-wrap\\\\|\\\\.table\\\\|<table\" \"C:\\\\\\\\Users\\\\\\\\AndyMcD\\\\\\\\Desktop\\\\\\\\forge-manufacturing\\\\\\\\.claude\\\\\\\\worktrees\\\\\\\\hardcore-lamport-8943e7\\\\\\\\forge-v1\\\\\\\\src\\\\\\\\styles\\\\\\\\components.css\")"
+    ]
+  }
+}

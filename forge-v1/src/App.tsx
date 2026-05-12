@@ -174,7 +174,7 @@ const App: FC = () => {
     )
       .then((hist) => {
         if (hist.length > 1) {
-          const limit   = 50;
+          const limit   = 20;
           const limited = hist.length > limit ? hist.slice(-limit) : hist;
           const note    = hist.length > limit
             ? ` (Loaded last ${limit} of ${hist.length} messages)`
@@ -418,6 +418,7 @@ const App: FC = () => {
           detailLoading={detailLoading}
           detailError={detailError}
           detailOpen={detailOpen}
+          blueprints={auth.blueprints}
           onClose={handleCloseDetail}
         />
 
