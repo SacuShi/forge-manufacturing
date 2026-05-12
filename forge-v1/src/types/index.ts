@@ -2,65 +2,39 @@
  * FORGE v1.0 — Shared TypeScript interfaces
  *
  * Central type definitions for all data shapes flowing through the app.
- * These mirror the structures returned by /api/* endpoints in server.js
- * so that future live-data integration requires no type changes.
+ * Split into three sections:
+ *   1. UI types   — consumed by React components
+ *   2. ESI types  — raw responses from EVE Swagger Interface
+ *   3. API types  — responses from the FORGE backend endpoints
  */
 
-// ── Ownership ──────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════
+// 1. UI TYPES
+// ══════════════════════════════════════════════════════════════════════════
 
-/** Blueprint ownership status for a given item */
 export type OwnedStatus = 'BPO' | 'BPC' | '—';
 
-// ── Market / Blueprint items ────────────────────────────────────────────────
-
-/**
- * A single row in the profitability table.
- * Represents either a blueprint the character owns (My Blueprints tab)
- * or a market opportunity (Market Opportunities tab).
- */
 export interface MarketItem {
-  /** Sort position (1-based, default ordering) */
   rank: number;
-  /** EVE Online type ID — used to fetch CCP item icons */
   typeId: number;
-  /** Human-readable item name */
   name: string;
-  /** Item category (e.g. "Heavy Assault Cruiser", "T2 Module") */
   category: string;
-  /** Net profit per manufacturing run in ISK */
   profitPerRun: number;
-  /** Profit margin as a percentage (can be negative) */
   margin: number;
-  /** Estimated ISK earned per hour at this activity */
   iskPerHour: number;
-  /** Human-readable build time (e.g. "3h 12m") */
   buildTime: string;
-  /** Numeric build time in minutes — used for sorting */
+  /** Numeric minutes — used for column sorting */
   buildTimeMinutes: number;
-  /** Whether the character owns the blueprint */
   owned: OwnedStatus;
-  /** True if the character has sufficient materials to build now */
   canBuild: boolean;
 }
 
-// ── Materials ───────────────────────────────────────────────────────────────
-
-/** A single material line in a blueprint's requirements */
 export interface Material {
-  /** EVE type ID of the material (e.g. 34 = Tritanium) */
   typeId: number;
-  /** Human-readable material name */
   name: string;
-  /** Pre-formatted quantity string (e.g. "2,812,450") */
   quantity: string;
 }
 
-// ── Item detail panel ───────────────────────────────────────────────────────
-
-/**
- * Full detail data shown in the right sidebar when an item is selected.
- * Combines profitability metrics with build info and material requirements.
- */
 export interface ItemDetail {
   typeId: number;
   name: string;
@@ -70,24 +44,16 @@ export interface ItemDetail {
   margin: number;
   iskPerHour: number;
   buildTime: string;
-  /** Jita sell price per unit in ISK */
   sellPrice: number;
-  /** Total material cost per run in ISK */
   matCost: number;
   materials: Material[];
 }
-
-// ── Chat ────────────────────────────────────────────────────────────────────
 
 export type ChatRole = 'user' | 'assistant';
 
 /**
  * A single message in the AI advisor conversation.
- *
- * The `content` string may contain item-link tokens in the format:
- *   [[Item Name|typeId]]
- * which ChatPanel parses into clickable ItemLink components at render time.
- * This avoids dangerouslySetInnerHTML for user-facing text.
+ * content may contain [[Name|typeId]] tokens parsed by ChatPanel.
  */
 export interface ChatMessage {
   id: string;
@@ -96,24 +62,17 @@ export interface ChatMessage {
   timestamp: Date;
 }
 
-// ── UI state ─────────────────────────────────────────────────────────────────
-
 export type TabId = 'market' | 'blueprints';
-
 export type SortField = 'rank' | 'profitPerRun' | 'margin' | 'iskPerHour' | 'buildTimeMinutes';
-
 export type SortDirection = 'asc' | 'desc';
 
-/** Active jobs running in manufacturing slots */
 export interface ActiveJob {
   name: string;
   quantity: number;
-  /** Remaining time display string, or 'Done' */
   remaining: string;
   done: boolean;
 }
 
-/** Character summary shown in the left sidebar */
 export interface CharacterInfo {
   characterId: number;
   name: string;
@@ -122,4 +81,108 @@ export interface CharacterInfo {
   blueprintCount: number;
   bpoCount: number;
   activeJobs: ActiveJob[];
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// 2. ESI TYPES (raw EVE Swagger Interface responses)
+// ══════════════════════════════════════════════════════════════════════════
+
+/** ESI blueprint entry from /characters/{id}/blueprints/ */
+export interface EsiBlueprint {
+  type_id: number;
+  /** -1 means BPO (original); positive integer means BPC runs remaining */
+  quantity: number;
+  runs: number;
+  material_efficiency: number;
+  time_efficiency: number;
+  location_id: number;
+  location_flag: string;
+  item_id: number;
+  is_singleton: boolean;
+}
+
+/** ESI asset entry from /characters/{id}/assets/ */
+export interface EsiAsset {
+  type_id: number;
+  quantity: number;
+  location_id: number;
+  location_flag: string;
+  item_id: number;
+  is_singleton: boolean;
+}
+
+/** ESI industry job from /characters/{id}/industry/jobs/ */
+export interface EsiJob {
+  job_id: number;
+  product_type_id: number;
+  blueprint_type_id: number;
+  activity_id: number;
+  runs: number;
+  status: 'active' | 'delivered' | 'cancelled' | 'paused';
+  end_date: string; // ISO 8601
+  facility_id: number;
+}
+
+/** ESI character public info from /characters/{id}/ */
+export interface EsiCharacter {
+  name: string;
+  corporation_id: number;
+  security_status: number;
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// 3. FORGE BACKEND API TYPES
+// ══════════════════════════════════════════════════════════════════════════
+
+/** One row from GET /api/top-profitable */
+export interface TopProfitableItem {
+  blueprint_id: number;
+  product_id: number;
+  product_name: string;
+  material_cost: number;
+  sell_price: number;
+  buy_price: number;
+  profit: number;
+  profit_margin: number;
+  isk_per_hour: number;
+  /** Build time in seconds */
+  build_time: number;
+  material_count: number;
+  computed_at: string;
+  avg_daily_volume: number | null;
+  market_group_id: number | null;
+  liquidity_risk: string | null;
+}
+
+export interface TopProfitableResponse {
+  results: TopProfitableItem[];
+  meta: {
+    count: number;
+    sort: string;
+    minProfit: number;
+    lastComputed: string | null;
+    lastRunStatus: string;
+    riskBreakdown: Record<string, number>;
+  };
+}
+
+/** Anthropic message shape sent to /api/ai-chat */
+export interface AiChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+/** Response from POST /api/ai-chat (Anthropic API response passthrough) */
+export interface AiChatResponse {
+  id: string;
+  type: string;
+  role: string;
+  content: Array<{ type: string; text?: string }>;
+  stop_reason: string;
+  usage: {
+    input_tokens: number;
+    output_tokens: number;
+  };
+  error?: string;
+  code?: string;
 }

@@ -24,13 +24,15 @@ import ItemTable from './ItemTable';
 
 interface MainContentProps {
   items: MarketItem[];
+  loading: boolean;
+  error: string | null;
   selectedTypeId: number | null;
   onSelect: (typeId: number) => void;
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-const MainContent: FC<MainContentProps> = ({ items, selectedTypeId, onSelect }) => {
+const MainContent: FC<MainContentProps> = ({ items, loading, error, selectedTypeId, onSelect }) => {
   /* ── Local state ─────────────────────────────────────────────────────────── */
   const [activeTab,     setActiveTab]     = useState<TabId>('market');
   const [sortField,     setSortField]     = useState<SortField>('rank');
@@ -130,41 +132,59 @@ const MainContent: FC<MainContentProps> = ({ items, selectedTypeId, onSelect }) 
         </div>
       )}
 
-      {/* ── Tab panels ────────────────────────────────────────────────────── */}
-      <div
-        id="tabpanel-market"
-        role="tabpanel"
-        aria-labelledby="tab-market"
-        hidden={activeTab !== 'market'}
-        style={{ flex: 1, display: activeTab === 'market' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}
-      >
-        <ItemTable
-          items={displayItems}
-          selectedTypeId={selectedTypeId}
-          sortField={sortField}
-          sortDirection={sortDirection}
-          onSort={handleSort}
-          onSelect={onSelect}
-        />
-      </div>
+      {/* ── Loading / error state ─────────────────────────────────────────── */}
+      {loading && (
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          color: 'var(--color-text-tertiary)', fontSize: 14 }}>
+          Loading market data…
+        </div>
+      )}
+      {error && !loading && (
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          color: 'var(--color-danger)', fontSize: 13 }}>
+          Failed to load market data: {error}
+        </div>
+      )}
 
-      <div
-        id="tabpanel-blueprints"
-        role="tabpanel"
-        aria-labelledby="tab-blueprints"
-        hidden={activeTab !== 'blueprints'}
-        style={{
-          flex: 1,
-          display: activeTab === 'blueprints' ? 'flex' : 'none',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: 'var(--color-text-tertiary)',
-          fontSize: '14px',
-          opacity: 0.6,
-        }}
-      >
-        Blueprint management coming in v1.1
-      </div>
+      {/* ── Tab panels ────────────────────────────────────────────────────── */}
+      {!loading && !error && (
+        <>
+          <div
+            id="tabpanel-market"
+            role="tabpanel"
+            aria-labelledby="tab-market"
+            hidden={activeTab !== 'market'}
+            style={{ flex: 1, display: activeTab === 'market' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}
+          >
+            <ItemTable
+              items={displayItems}
+              selectedTypeId={selectedTypeId}
+              sortField={sortField}
+              sortDirection={sortDirection}
+              onSort={handleSort}
+              onSelect={onSelect}
+            />
+          </div>
+
+          <div
+            id="tabpanel-blueprints"
+            role="tabpanel"
+            aria-labelledby="tab-blueprints"
+            hidden={activeTab !== 'blueprints'}
+            style={{
+              flex: 1,
+              display: activeTab === 'blueprints' ? 'flex' : 'none',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'var(--color-text-tertiary)',
+              fontSize: '14px',
+              opacity: 0.6,
+            }}
+          >
+            Blueprint management coming in v1.1
+          </div>
+        </>
+      )}
 
     </main>
   );

@@ -37,7 +37,6 @@ import {
   type ReactNode,
 } from 'react';
 import type { ChatMessage } from '../types';
-import { QUICK_PROMPTS } from '../data/mockData';
 import ItemLink from './ItemLink';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -45,6 +44,8 @@ import ItemLink from './ItemLink';
 interface ChatPanelProps {
   open: boolean;
   messages: ChatMessage[];
+  /** Quick prompt strings shown as chips before the first user message */
+  quickPrompts: string[];
   /** Called when the user sends a message (draft text, trimmed) */
   onSend: (text: string) => void;
   /** Called when user clicks an [[ItemLink]] inside an assistant message */
@@ -103,7 +104,7 @@ function parseMessageContent(
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-const ChatPanel: FC<ChatPanelProps> = ({ open, messages, onSend, onItemSelect }) => {
+const ChatPanel: FC<ChatPanelProps> = ({ open, messages, quickPrompts, onSend, onItemSelect }) => {
   const [draft, setDraft]   = useState('');
   const messagesEndRef      = useRef<HTMLDivElement>(null);
   const textareaRef         = useRef<HTMLTextAreaElement>(null);
@@ -228,7 +229,7 @@ const ChatPanel: FC<ChatPanelProps> = ({ open, messages, onSend, onItemSelect })
         {/* Quick prompt chips — shown until the user sends their first message */}
         {showChips && (
           <div className="quick-prompts" aria-label="Suggested questions">
-            {QUICK_PROMPTS.map((prompt) => (
+            {quickPrompts.map((prompt) => (
               <button
                 key={prompt}
                 type="button"

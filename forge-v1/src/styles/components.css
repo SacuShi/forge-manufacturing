@@ -966,3 +966,128 @@ tbody td.align-center {
   border-color: rgba(79, 195, 247, 0.25);
   color: var(--color-text-secondary);
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   LOGIN SCREEN
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.login-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  max-width: 400px;
+  width: 100%;
+  padding: 40px 24px;
+  text-align: center;
+}
+
+.login-logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Reuse the hex icon — scaled up for the login screen */
+.login-logo .logo-icon {
+  width: 48px;
+  height: 48px;
+}
+
+.login-title {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: 3px;
+  color: var(--color-accent-primary);
+}
+
+.login-subtitle {
+  font-size: 13px;
+  color: var(--color-text-tertiary);
+  line-height: 1.6;
+}
+
+.login-description {
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+  max-width: 300px;
+}
+
+.login-error {
+  padding: 10px 16px;
+  background: rgba(244, 67, 54, 0.1);
+  border: 0.5px solid rgba(244, 67, 54, 0.4);
+  border-radius: var(--radius-sm);
+  color: var(--color-danger);
+  font-size: 13px;
+  line-height: 1.5;
+  max-width: 320px;
+}
+
+.eve-login-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: opacity 0.2s, transform 0.15s;
+}
+
+.eve-login-btn:hover  { opacity: 0.9; transform: scale(1.02); }
+.eve-login-btn:active { transform: scale(0.98); }
+
+.login-note {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  opacity: 0.7;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   LOADING SCREEN
+   ══════════════════════════════════════════════════════════════════════════ */
+
+@keyframes forge-spin {
+  to { transform: rotate(360deg); }
+}
+
+.loading-spinner {
+  width: 36px;
+  height: 36px;
+  border: 2px solid var(--color-border-medium);
+  border-top-color: var(--color-accent-primary);
+  border-radius: 50%;
+  animation: forge-spin 0.8s linear infinite;
+}
+
+.load-log {
+  list-style: none;
+  width: 260px;
+  text-align: left;
+  margin-top: 8px;
+}
+
+.load-log-row {
+  display: grid;
+  grid-template-columns: 18px 1fr auto;
+  gap: 4px;
+  align-items: baseline;
+  font-size: 12px;
+  padding: 3px 0;
+  border-bottom: 0.5px solid var(--color-border-light);
+}
+
+.load-log-row:last-child { border-bottom: none; }
+
+.load-log-icon  { font-size: 11px; text-align: center; }
+.load-log-label { color: var(--color-text-secondary); }
+.load-log-detail {
+  color: var(--color-text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: right;
+}

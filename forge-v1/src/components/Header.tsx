@@ -32,6 +32,8 @@ interface HeaderProps {
   chatOpen: boolean;
   /** Called when the F.O.R.G.E. AI toggle button is clicked */
   onToggleChat: () => void;
+  /** Called when the Logout button is clicked */
+  onLogout: () => void;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -40,7 +42,7 @@ const PORTRAIT_BASE = 'https://images.evetech.net/characters';
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-const Header: FC<HeaderProps> = ({ character, chatOpen, onToggleChat }) => {
+const Header: FC<HeaderProps> = ({ character, chatOpen, onToggleChat, onLogout }) => {
   const portraitUrl = `${PORTRAIT_BASE}/${character.characterId}/portrait?size=32`;
 
   return (
@@ -106,7 +108,12 @@ const Header: FC<HeaderProps> = ({ character, chatOpen, onToggleChat }) => {
         </div>
 
         {/* Logout — .btn-logout CSS adds the extra left margin gap */}
-        <button type="button" className="btn btn-logout" aria-label="Log out of FORGE">
+        <button
+          type="button"
+          className="btn btn-logout"
+          aria-label="Log out of FORGE"
+          onClick={onLogout}
+        >
           Logout
         </button>
 

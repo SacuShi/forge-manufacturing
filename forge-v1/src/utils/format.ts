@@ -68,3 +68,21 @@ export function formatMargin(margin: number): string {
   if (margin < 0) return `−${Math.abs(margin).toFixed(1)}%`;
   return `+${margin.toFixed(1)}%`;
 }
+
+// ── Build time ───────────────────────────────────────────────────────────────
+
+/**
+ * Converts a build time in seconds (as stored in precomputed_profits)
+ * into a compact human-readable string.
+ * @example formatBuildTime(11520)  → "3h 12m"
+ * @example formatBuildTime(2700)   → "45m"
+ * @example formatBuildTime(86400)  → "24h"
+ */
+export function formatBuildTime(seconds: number): string {
+  if (!seconds || seconds <= 0) return '—';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (h > 0 && m > 0) return `${h}h ${m}m`;
+  if (h > 0) return `${h}h`;
+  return `${m}m`;
+}
