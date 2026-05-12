@@ -2,30 +2,16 @@
  * FORGE v1.0 — ChatPanel component
  *
  * Right-edge slide-in AI advisor panel (340px when open, 0 when closed).
- * Width transition is handled purely by CSS (.chat-panel / .chat-panel.open).
+ * Width transition handled purely by CSS (.chat-panel / .chat-panel.open).
  *
- * Layout:
- *   [Chat header — title + backronym subtitle]
- *   [Scrollable message list]
- *   [Input area — textarea + Send button + quick prompt chips]
+ * Features:
+ *   - Quick prompt chips (fill the input for editing before sending)
+ *   - Thinking indicator (pulsing spinner while waiting for AI)
+ *   - [[Name|typeId]] token parsing → clickable ItemLink elements
+ *   - Chat history persistence (clear button with confirm dialog)
+ *   - Enter sends; Shift+Enter inserts newline
  *
- * Message rendering:
- *   User messages      → plain text in a styled bubble.
- *   Assistant messages → content may contain [[Name|typeId]] tokens.
- *     These are parsed into ItemLink elements at render time via
- *     parseMessageContent(), avoiding dangerouslySetInnerHTML entirely.
- *
- * State:
- *   - draft  : current textarea value (local)
- *   - Message history is owned by App and passed in via props,
- *     so quick prompts fired from LeftSidebar appear here automatically.
- *
- * Keyboard:
- *   Enter (without Shift) sends the draft. Shift+Enter inserts a newline.
- *
- * Security:
- *   - No dangerouslySetInnerHTML — token parsing uses regex + React nodes.
- *   - Icon URLs in ItemLink use numeric typeIds only.
+ * Security: no dangerouslySetInnerHTML — tokens parsed via regex + React nodes.
  */
 
 import {
@@ -44,25 +30,17 @@ import ItemLink from './ItemLink';
 interface ChatPanelProps {
   open: boolean;
   messages: ChatMessage[];
-  /** Quick prompt strings shown as chips before the first user message */
+  thinking: boolean;
   quickPrompts: string[];
-  /** Called when the user sends a message (draft text, trimmed) */
   onSend: (text: string) => void;
-  /** Called when user clicks an [[ItemLink]] inside an assistant message */
   onItemSelect: (typeId: number) => void;
+  onClearHistory?: () => void;
 }
 
 // ── Token parser ─────────────────────────────────────────────────────────────
 
 /**
- * Parses an assistant message string that may contain [[Name|typeId]] tokens
- * and returns an array of React nodes (plain strings + ItemLink elements).
- *
- * @example
- *   "Best bet is [[Vagabond|11993]] right now."
- *   → ["Best bet is ", <ItemLink typeId={11993} name="Vagabond" />, " right now."]
- *
- * Uses a stateful regex exec loop so partial matches don't cause issues.
+ * Parses [[Name|typeId]] tokens in assistant messages into ItemLink elements.
  */
 function parseMessageContent(
   content: string,
@@ -74,14 +52,11 @@ function parseMessageContent(
   let match: RegExpExecArray | null;
 
   while ((match = TOKEN_RE.exec(content)) !== null) {
-    /* Text segment before this token */
     if (match.index > lastIndex) {
       nodes.push(content.slice(lastIndex, match.index));
     }
-
     const name   = match[1];
     const typeId = parseInt(match[2], 10);
-
     nodes.push(
       <ItemLink
         key={`${typeId}-${match.index}`}
@@ -90,11 +65,9 @@ function parseMessageContent(
         onClick={onItemSelect}
       />
     );
-
     lastIndex = match.index + match[0].length;
   }
 
-  /* Trailing text after the last token */
   if (lastIndex < content.length) {
     nodes.push(content.slice(lastIndex));
   }
@@ -104,22 +77,29 @@ function parseMessageContent(
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-const ChatPanel: FC<ChatPanelProps> = ({ open, messages, quickPrompts, onSend, onItemSelect }) => {
-  const [draft, setDraft]   = useState('');
-  const messagesEndRef      = useRef<HTMLDivElement>(null);
-  const textareaRef         = useRef<HTMLTextAreaElement>(null);
+const ChatPanel: FC<ChatPanelProps> = ({
+  open,
+  messages,
+  thinking,
+  quickPrompts,
+  onSend,
+  onItemSelect,
+  onClearHistory,
+}) => {
+  const [draft, setDraft] = useState('');
+  const messagesEndRef    = useRef<HTMLDivElement>(null);
+  const textareaRef       = useRef<HTMLTextAreaElement>(null);
 
-  /* Auto-scroll to the bottom whenever messages change */
+  /* Auto-scroll to the bottom whenever messages/thinking changes */
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 60);
+  }, [messages, thinking]);
 
-  /* Focus the textarea when the panel opens */
+  /* Focus textarea when panel opens */
   useEffect(() => {
     if (open) {
-      // Small delay allows the CSS width transition to complete first
-      const timer = setTimeout(() => textareaRef.current?.focus(), 260);
-      return () => clearTimeout(timer);
+      const t = setTimeout(() => textareaRef.current?.focus(), 260);
+      return () => clearTimeout(t);
     }
   }, [open]);
 
@@ -127,12 +107,11 @@ const ChatPanel: FC<ChatPanelProps> = ({ open, messages, quickPrompts, onSend, o
 
   const handleSend = () => {
     const text = draft.trim();
-    if (!text) return;
+    if (!text || thinking) return;
     onSend(text);
     setDraft('');
   };
 
-  /** Enter sends; Shift+Enter inserts a newline */
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -140,15 +119,23 @@ const ChatPanel: FC<ChatPanelProps> = ({ open, messages, quickPrompts, onSend, o
     }
   };
 
+  /** Quick prompt: fill the input (so user can edit before sending) */
   const handleQuickPrompt = (prompt: string) => {
-    onSend(prompt);
+    setDraft(prompt);
+    textareaRef.current?.focus();
   };
 
-  /* Whether to show quick prompt chips (only before any user message) */
+  const handleClear = () => {
+    if (!onClearHistory) return;
+    if (window.confirm('Clear all chat history? This cannot be undone.')) {
+      onClearHistory();
+    }
+  };
+
+  /* Whether to show chips (before user sends any message) */
   const showChips = !messages.some((m) => m.role === 'user');
 
   /* ── Render ────────────────────────────────────────────────────────────── */
-
   return (
     <section
       className={`chat-panel${open ? ' open' : ''}`}
@@ -159,11 +146,6 @@ const ChatPanel: FC<ChatPanelProps> = ({ open, messages, quickPrompts, onSend, o
       <div className="chat-header">
         <div>
           <div className="chat-title">F.O.R.G.E. AI</div>
-          {/*
-           * Backronym subtitle — initial letters highlighted with
-           * .backronym-letter so the acronym origin is visually obvious.
-           * Using &amp; for the ampersand (JSX XSS safe).
-           */}
           <div className="chat-subtitle">
             <span className="backronym-letter">F</span>abrication,{' '}
             <span className="backronym-letter">O</span>perations,{' '}
@@ -172,6 +154,16 @@ const ChatPanel: FC<ChatPanelProps> = ({ open, messages, quickPrompts, onSend, o
             <span className="backronym-letter">E</span>ngine
           </div>
         </div>
+        {onClearHistory && (
+          <button
+            type="button"
+            className="chat-clear-btn"
+            onClick={handleClear}
+            aria-label="Clear chat history"
+          >
+            CLEAR
+          </button>
+        )}
       </div>
 
       {/* ── Message list ──────────────────────────────────────────────────── */}
@@ -182,12 +174,11 @@ const ChatPanel: FC<ChatPanelProps> = ({ open, messages, quickPrompts, onSend, o
         aria-label="Conversation history"
         aria-atomic="false"
       >
-        {messages.map((msg) => (
-          <div key={msg.id} className="msg">
+        {messages.map((msg, i) => (
+          <div key={msg.id ?? i} className="msg">
             <div className="msg-label">
               {msg.role === 'user' ? 'You' : 'F.O.R.G.E.'}
             </div>
-
             {msg.role === 'user' ? (
               <div className="msg-user">{msg.content}</div>
             ) : (
@@ -198,7 +189,18 @@ const ChatPanel: FC<ChatPanelProps> = ({ open, messages, quickPrompts, onSend, o
           </div>
         ))}
 
-        {/* Scroll anchor — scrolled into view after new messages */}
+        {/* Thinking indicator */}
+        {thinking && (
+          <div className="msg">
+            <div className="msg-label">F.O.R.G.E.</div>
+            <div className="msg-assistant" style={{ color: 'var(--color-text-tertiary)' }}>
+              <span className="spin" style={{ display: 'inline-block', marginRight: 6 }}>◈</span>
+              Thinking…
+            </div>
+          </div>
+        )}
+
+        {/* Scroll anchor */}
         <div ref={messagesEndRef} aria-hidden="true" />
       </div>
 
@@ -214,19 +216,20 @@ const ChatPanel: FC<ChatPanelProps> = ({ open, messages, quickPrompts, onSend, o
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={handleKeyDown}
             aria-label="Message input — press Enter to send, Shift+Enter for new line"
+            disabled={thinking}
           />
           <button
             type="button"
             className="chat-send-btn"
             onClick={handleSend}
-            disabled={!draft.trim()}
+            disabled={!draft.trim() || thinking}
             aria-label="Send message"
           >
             Send
           </button>
         </div>
 
-        {/* Quick prompt chips — shown until the user sends their first message */}
+        {/* Quick prompt chips */}
         {showChips && (
           <div className="quick-prompts" aria-label="Suggested questions">
             {quickPrompts.map((prompt) => (
@@ -236,7 +239,7 @@ const ChatPanel: FC<ChatPanelProps> = ({ open, messages, quickPrompts, onSend, o
                 className="quick-prompt-btn"
                 onClick={() => handleQuickPrompt(prompt)}
               >
-                {prompt}
+                {prompt.length > 40 ? prompt.slice(0, 40) + '…' : prompt}
               </button>
             ))}
           </div>

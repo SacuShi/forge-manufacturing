@@ -1,81 +1,132 @@
 /**
  * FORGE v1.0 — Global reset and layout
  *
- * Minimal reset + full-height app shell layout.
- * All colours use CSS variables from variables.css.
+ * Minimal reset + full-height app shell.
+ * Includes responsive overlay helpers and the mobile menu button.
  */
 
 /* ── Reset ─────────────────────────────────────────────────────────────────── */
-*,
-*::before,
-*::after {
+*, *::before, *::after {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
 }
 
-html,
-body,
-#root {
+html, body, #root {
   height: 100%;
   overflow: hidden;
 }
 
 body {
   font-family: var(--font-sans);
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.6;
   background: var(--color-bg-primary);
   color: var(--color-text-primary);
-  /* Prevent default browser text-select highlight colour clashing with dark theme */
   -webkit-font-smoothing: antialiased;
+  transition: background 0.3s, color 0.3s;
 }
 
 /* ── App shell ─────────────────────────────────────────────────────────────── */
 
-/** Outer wrapper: stacks header above the three-column body */
 .app {
   display: flex;
   flex-direction: column;
   height: 100vh;
 }
 
-/** Three-column row beneath the header */
 .app-body {
   display: flex;
   flex: 1;
-  overflow: hidden; /* Each column scrolls internally */
+  overflow: hidden;
+  position: relative;
 }
 
-/* ── Scrollbar styling ─────────────────────────────────────────────────────── */
-::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+/* ── Scrollbars ────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar        { width: 5px; height: 5px; }
+::-webkit-scrollbar-track  { background: var(--scrollbar-track); }
+::-webkit-scrollbar-thumb  { background: var(--scrollbar-thumb); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
+
+/* ── Animations ────────────────────────────────────────────────────────────── */
+@keyframes forge-spin { to { transform: rotate(360deg); } }
+
+.spin {
+  animation: forge-spin 1.2s linear infinite;
+  display: inline-block;
 }
-::-webkit-scrollbar-track {
+
+/* ── Sidebar overlay (tablet + mobile drawer backdrop) ────────────────────── */
+.sidebar-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 19;
+}
+
+/* ── Mobile menu button (hidden on desktop) ────────────────────────────────── */
+.menu-btn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
   background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: var(--color-border-medium);
-  border-radius: 3px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(139, 149, 166, 0.4);
+  border: 0.5px solid var(--color-border-medium);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 14px;
+  font-family: inherit;
+  flex-shrink: 0;
 }
 
-/* ── Semantic colour utility classes ───────────────────────────────────────── */
-/* Applied dynamically by format.ts helpers — do not use directly in JSX */
+/* ── Utility classes ───────────────────────────────────────────────────────── */
 .success { color: var(--color-success); }
 .warning { color: var(--color-warning); }
 .danger  { color: var(--color-danger);  }
-.info    { color: var(--color-info);    }
+.mono    { font-family: var(--font-mono); }
+
+/* Hide on mobile */
+.hide-mobile { /* applied via @media below */ }
 
 /* ── Focus ring ────────────────────────────────────────────────────────────── */
-/* Replaces default browser outline with brand-coloured ring */
 :focus-visible {
   outline: 2px solid var(--color-accent-primary);
   outline-offset: 2px;
 }
 
-/* ── Monospace numbers ─────────────────────────────────────────────────────── */
-.mono { font-family: var(--font-mono); }
+/* ══════════════════════════════════════════════════════════════════════════════
+   RESPONSIVE — TABLET  ≤ 1199px
+   ══════════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 1199px) {
+  /* Sidebar overlay appears when detail panel is open */
+  .sidebar-overlay.detail-open {
+    display: block;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   RESPONSIVE — MOBILE  ≤ 767px
+   ══════════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 767px) {
+  .menu-btn {
+    display: flex;
+  }
+
+  /* Hide market teaser in header */
+  .market-teaser {
+    display: none !important;
+  }
+
+  /* Hide char name (show avatar only) */
+  .char-pill-name {
+    display: none !important;
+  }
+
+  /* Hide non-essential table columns */
+  .hide-mobile {
+    display: none !important;
+  }
+}

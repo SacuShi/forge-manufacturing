@@ -1,51 +1,95 @@
 /**
  * FORGE v1.0 — MainContent component
  *
- * Central flex-1 column containing the tab bar and the active tab's content.
+ * Central flex-1 column with four tabs:
+ *   market     — Sortable profitable items table (/api/top-profitable)
+ *   blueprints — ESI blueprint library with ME/TE/runs, search, BPO filter
+ *   assets     — ESI asset inventory with search
+ *   jobs       — Active manufacturing jobs
  *
- * Tabs:
- *   1. Market Opportunities (default) — sortable ItemTable
- *   2. My Blueprints                  — placeholder for v1.1
+ * Tabs are navigated from the LeftSidebar nav, or via the tab bar at top.
  *
- * Owns:
- *   - Active tab state
- *   - Sort field + direction state (passed down to ItemTable)
- *   - Owned filter state (applied before sorting)
- *
- * Selection events bubble up to App via onSelect so the RightSidebar
- * and ItemTable selection highlight stay in sync.
+ * Owns: sort, filter state for the market tab; search/filter for blueprints.
+ * Blueprint names are resolved via the itemNames Map (useItemNames hook).
  */
 
 import { useState, useMemo, type FC } from 'react';
-import type { MarketItem, TabId, SortField, SortDirection } from '../types';
+import type {
+  MarketItem,
+  SortField,
+  SortDirection,
+  EsiBlueprint,
+  EsiAsset,
+  ActiveJob,
+} from '../types';
 import ItemTable from './ItemTable';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
 interface MainContentProps {
-  items: MarketItem[];
-  loading: boolean;
-  error: string | null;
+  activeTab: string;
+  onTabChange: (tab: string) => void;
+
+  // Market tab
+  marketItems: MarketItem[];
+  marketLoading: boolean;
+  marketError: string | null;
   selectedTypeId: number | null;
-  onSelect: (typeId: number) => void;
+  /** Called when a market table row is clicked — only passes typeId */
+  onMarketSelect: (typeId: number) => void;
+
+  // Blueprints/Assets/Jobs tabs
+  blueprints: EsiBlueprint[];
+  assets: EsiAsset[];
+  activeJobs: ActiveJob[];
+  itemNames: Map<number, string>;
+
+  /** Called when any item is selected (typeId + name) — opens RightSidebar */
+  onSelectItem: (typeId: number, name: string) => void;
 }
+
+// ── Constants ────────────────────────────────────────────────────────────────
+
+const TABS = [
+  { key: 'market',     label: '◈ Market' },
+  { key: 'blueprints', label: '◈ Blueprints' },
+  { key: 'assets',     label: '◉ Assets' },
+  { key: 'jobs',       label: '⚙ Jobs' },
+];
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-const MainContent: FC<MainContentProps> = ({ items, loading, error, selectedTypeId, onSelect }) => {
-  /* ── Local state ─────────────────────────────────────────────────────────── */
-  const [activeTab,     setActiveTab]     = useState<TabId>('market');
+const MainContent: FC<MainContentProps> = ({
+  activeTab,
+  onTabChange,
+  marketItems,
+  marketLoading,
+  marketError,
+  selectedTypeId,
+  onMarketSelect,
+  blueprints,
+  assets,
+  activeJobs,
+  itemNames,
+  onSelectItem,
+}) => {
+  /* ── Market sort / filter state ─────────────────────────────────────────── */
   const [sortField,     setSortField]     = useState<SortField>('rank');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
   const [filterOwned,   setFilterOwned]   = useState<string>('all');
 
-  /* ── Handlers ────────────────────────────────────────────────────────────── */
+  /* ── Blueprint tab state ─────────────────────────────────────────────────── */
+  const [bpSearch, setBpSearch] = useState('');
+  const [bpFilter, setBpFilter] = useState<'all' | 'bpo' | 'bpc'>('all');
 
-  /**
-   * Toggle direction when clicking the same column; reset to descending
-   * when switching to a new column (highest values first is the natural
-   * default for profit/margin/iskPerHour).
-   */
+  /* ── Asset tab state ─────────────────────────────────────────────────────── */
+  const [assetSearch, setAssetSearch] = useState('');
+
+  /* ── Helpers ─────────────────────────────────────────────────────────────── */
+  const getBpName = (typeId: number) =>
+    itemNames.get(typeId) ?? `Blueprint #${typeId}`;
+
+  /* ── Sort handler ────────────────────────────────────────────────────────── */
   const handleSort = (field: SortField) => {
     if (field === sortField) {
       setSortDirection((d) => (d === 'asc' ? 'desc' : 'asc'));
@@ -55,135 +99,289 @@ const MainContent: FC<MainContentProps> = ({ items, loading, error, selectedType
     }
   };
 
-  /* ── Derived data ────────────────────────────────────────────────────────── */
-
-  /** Filter then sort the item list; recomputed only when inputs change */
+  /* ── Derived: filtered + sorted market items ─────────────────────────────── */
   const displayItems = useMemo<MarketItem[]>(() => {
-    let list = [...items];
-
+    let list = [...marketItems];
     if (filterOwned !== 'all') {
-      list = list.filter((item) => item.owned === filterOwned);
+      list = list.filter((i) => i.owned === filterOwned);
     }
-
     list.sort((a, b) => {
-      // All SortField values are numeric keys on MarketItem
       const aVal = a[sortField as keyof MarketItem] as number;
       const bVal = b[sortField as keyof MarketItem] as number;
       return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
     });
-
     return list;
-  }, [items, filterOwned, sortField, sortDirection]);
+  }, [marketItems, filterOwned, sortField, sortDirection]);
 
-  const ownedCount = items.filter((i) => i.owned !== '—').length;
+  /* ── Derived: filtered blueprints ───────────────────────────────────────── */
+  const filteredBps = useMemo(() => {
+    return blueprints
+      .filter((b) => {
+        const name        = getBpName(b.type_id).toLowerCase();
+        const matchSearch = !bpSearch || name.includes(bpSearch.toLowerCase());
+        const matchFilter =
+          bpFilter === 'all' ||
+          (bpFilter === 'bpo' ? b.quantity === -1 : b.quantity > 0);
+        return matchSearch && matchFilter;
+      })
+      .sort((a, b) => getBpName(a.type_id).localeCompare(getBpName(b.type_id)));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [blueprints, bpSearch, bpFilter, itemNames]);
+
+  /* ── Derived: grouped assets ─────────────────────────────────────────────── */
+  const assetGroups = useMemo(() => {
+    const g = new Map<string, { qty: number; typeId: number }>();
+    assets.forEach((a) => {
+      const name = itemNames.get(a.type_id) ?? `Item #${a.type_id}`;
+      const prev = g.get(name);
+      if (prev) {
+        prev.qty += a.quantity;
+      } else {
+        g.set(name, { qty: a.quantity, typeId: a.type_id });
+      }
+    });
+    return Array.from(g.entries())
+      .sort(([, a], [, b]) => b.qty - a.qty)
+      .filter(([name]) =>
+        !assetSearch || name.toLowerCase().includes(assetSearch.toLowerCase())
+      );
+  }, [assets, itemNames, assetSearch]);
 
   /* ── Render ──────────────────────────────────────────────────────────────── */
-
   return (
     <main className="main-content" aria-label="Manufacturing data">
 
-      {/* ── Content header ────────────────────────────────────────────────── */}
-      <div className="content-header">
-        <h1 className="content-title">
-          {activeTab === 'market' ? 'Market Opportunities' : 'My Blueprints'}
-        </h1>
-        <span className="content-meta" aria-live="polite">
-          {activeTab === 'market'
-            ? `${displayItems.length} item${displayItems.length !== 1 ? 's' : ''} · Jita 4-4 · updated just now`
-            : `${ownedCount} blueprints`}
-        </span>
-      </div>
-
-      {/* ── Tabs ──────────────────────────────────────────────────────────── */}
-      <div className="tabs" role="tablist" aria-label="Content area tabs">
-        {(['market', 'blueprints'] as TabId[]).map((tab) => (
+      {/* ── Tab bar ───────────────────────────────────────────────────────── */}
+      <div className="main-tabs" role="tablist" aria-label="Content area tabs">
+        {TABS.map((t) => (
           <button
-            key={tab}
+            key={t.key}
             type="button"
             role="tab"
-            id={`tab-${tab}`}
-            className="tab-btn"
-            aria-selected={activeTab === tab}
-            aria-controls={`tabpanel-${tab}`}
-            onClick={() => setActiveTab(tab)}
+            className={`main-tab${activeTab === t.key ? ' active' : ''}`}
+            aria-selected={activeTab === t.key}
+            onClick={() => onTabChange(t.key)}
           >
-            {tab === 'market' ? 'Market Opportunities' : 'My Blueprints'}
+            {t.label}
           </button>
         ))}
       </div>
 
-      {/* ── Filter row (market tab only) ──────────────────────────────────── */}
+      {/* ── Market Opportunities ──────────────────────────────────────────── */}
       {activeTab === 'market' && (
-        <div className="filter-row">
-          <label className="filter-label" htmlFor="owned-filter">
-            Owned:
-          </label>
-          <select
-            id="owned-filter"
-            className="filter-select"
-            value={filterOwned}
-            onChange={(e) => setFilterOwned(e.target.value)}
-          >
-            <option value="all">All</option>
-            <option value="BPO">BPO only</option>
-            <option value="BPC">BPC only</option>
-            <option value="—">Not owned</option>
-          </select>
-        </div>
-      )}
-
-      {/* ── Loading / error state ─────────────────────────────────────────── */}
-      {loading && (
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
-          color: 'var(--color-text-tertiary)', fontSize: 14 }}>
-          Loading market data…
-        </div>
-      )}
-      {error && !loading && (
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
-          color: 'var(--color-danger)', fontSize: 13 }}>
-          Failed to load market data: {error}
-        </div>
-      )}
-
-      {/* ── Tab panels ────────────────────────────────────────────────────── */}
-      {!loading && !error && (
         <>
-          <div
-            id="tabpanel-market"
-            role="tabpanel"
-            aria-labelledby="tab-market"
-            hidden={activeTab !== 'market'}
-            style={{ flex: 1, display: activeTab === 'market' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}
-          >
-            <ItemTable
-              items={displayItems}
-              selectedTypeId={selectedTypeId}
-              sortField={sortField}
-              sortDirection={sortDirection}
-              onSort={handleSort}
-              onSelect={onSelect}
-            />
+          {/* Content header + filter row */}
+          <div className="content-header" style={{ padding: '12px 20px 0' }}>
+            <h1 className="content-title">Market Opportunities</h1>
+            <span className="content-meta" aria-live="polite">
+              {displayItems.length} item{displayItems.length !== 1 ? 's' : ''} · Jita 4-4
+            </span>
           </div>
 
-          <div
-            id="tabpanel-blueprints"
-            role="tabpanel"
-            aria-labelledby="tab-blueprints"
-            hidden={activeTab !== 'blueprints'}
-            style={{
-              flex: 1,
-              display: activeTab === 'blueprints' ? 'flex' : 'none',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: 'var(--color-text-tertiary)',
-              fontSize: '14px',
-              opacity: 0.6,
-            }}
-          >
-            Blueprint management coming in v1.1
+          <div className="filter-row" style={{ padding: '8px 20px' }}>
+            <label className="filter-label" htmlFor="owned-filter">Blueprint owned:</label>
+            <select
+              id="owned-filter"
+              className="filter-select"
+              value={filterOwned}
+              onChange={(e) => setFilterOwned(e.target.value)}
+            >
+              <option value="all">All</option>
+              <option value="BPO">BPO only</option>
+              <option value="BPC">BPC only</option>
+              <option value="—">Not owned</option>
+            </select>
           </div>
+
+          {marketLoading && (
+            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: 'var(--color-text-tertiary)', fontSize: 13 }}>
+              <div className="loading-spinner" style={{ width: 24, height: 24, marginRight: 10 }} />
+              Loading market data…
+            </div>
+          )}
+          {marketError && !marketLoading && (
+            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: 'var(--color-danger)', fontSize: 13 }}>
+              Failed to load market data: {marketError}
+            </div>
+          )}
+          {!marketLoading && !marketError && (
+            <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+              <ItemTable
+                items={displayItems}
+                selectedTypeId={selectedTypeId}
+                sortField={sortField}
+                sortDirection={sortDirection}
+                onSort={handleSort}
+                onSelect={onMarketSelect}
+              />
+            </div>
+          )}
         </>
+      )}
+
+      {/* ── My Blueprints ─────────────────────────────────────────────────── */}
+      {activeTab === 'blueprints' && (
+        <div className="main-panel">
+          {/* Search + filter controls */}
+          <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+            <input
+              type="text"
+              value={bpSearch}
+              onChange={(e) => setBpSearch(e.target.value)}
+              placeholder="Search blueprints…"
+              className="filter-input"
+              style={{ flex: 1 }}
+              aria-label="Search blueprints"
+            />
+            {(['all', 'bpo', 'bpc'] as const).map((f) => (
+              <button
+                key={f}
+                type="button"
+                className={`btn${bpFilter === f ? ' active' : ''}`}
+                onClick={() => setBpFilter(f)}
+                style={{ fontSize: 10, padding: '5px 10px', letterSpacing: 1 }}
+              >
+                {f.toUpperCase()}
+              </button>
+            ))}
+          </div>
+
+          {/* Blueprint list */}
+          <div className="bp-list">
+            {filteredBps.map((b) => {
+              const name  = getBpName(b.type_id);
+              const isBpo = b.quantity === -1;
+              return (
+                <div
+                  key={b.item_id}
+                  className="bp-card"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onSelectItem(b.type_id, name)}
+                  onKeyDown={(e) => e.key === 'Enter' && onSelectItem(b.type_id, name)}
+                >
+                  <img
+                    className="bp-icon"
+                    src={`https://images.evetech.net/types/${b.type_id}/icon?size=32`}
+                    alt={name}
+                    loading="lazy"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).style.visibility = 'hidden';
+                    }}
+                  />
+                  <span className="bp-name">{name}</span>
+                  <div className="bp-badges">
+                    {isBpo
+                      ? <span className="badge-bpo">BPO</span>
+                      : <span className="badge-runs">{b.runs} runs</span>
+                    }
+                    <span className="badge-me">ME{b.material_efficiency}</span>
+                    <span className="badge-te">TE{b.time_efficiency}</span>
+                  </div>
+                </div>
+              );
+            })}
+            {filteredBps.length === 0 && (
+              <div style={{ color: 'var(--color-text-tertiary)', fontSize: 12,
+                padding: 24, textAlign: 'center' }}>
+                {blueprints.length === 0 ? 'No blueprints found in your library.' : 'No blueprints match your search.'}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── My Assets ─────────────────────────────────────────────────────── */}
+      {activeTab === 'assets' && (
+        <div className="main-panel">
+          <input
+            type="text"
+            value={assetSearch}
+            onChange={(e) => setAssetSearch(e.target.value)}
+            placeholder="Search assets…"
+            className="filter-input"
+            style={{ width: '100%', marginBottom: 10 }}
+            aria-label="Search assets"
+          />
+          <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 220px)' }}>
+            {assetGroups.slice(0, 500).map(([name, { qty, typeId }], i) => (
+              <div
+                key={i}
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  padding: '5px 0',
+                  borderBottom: '0.5px solid var(--color-border-light)',
+                  cursor: 'pointer',
+                }}
+                onClick={() => onSelectItem(typeId, name)}
+              >
+                <span style={{
+                  fontSize: 12, color: 'var(--color-text-secondary)',
+                  overflow: 'hidden', textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap', flex: 1, marginRight: 8,
+                }}>
+                  {name}
+                </span>
+                <span style={{ fontSize: 12, color: 'var(--color-accent-primary)',
+                  fontWeight: 500, flexShrink: 0 }}>
+                  ×{qty.toLocaleString()}
+                </span>
+              </div>
+            ))}
+            {assetGroups.length === 0 && (
+              <div style={{ color: 'var(--color-text-tertiary)', fontSize: 12,
+                padding: 24, textAlign: 'center' }}>
+                {assets.length === 0 ? 'No assets found.' : 'No assets match your search.'}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Active Jobs ───────────────────────────────────────────────────── */}
+      {activeTab === 'jobs' && (
+        <div className="main-panel">
+          {activeJobs.length === 0 ? (
+            <div style={{ color: 'var(--color-text-tertiary)', fontSize: 13,
+              padding: 24, textAlign: 'center' }}>
+              No active manufacturing jobs
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {activeJobs.map((job, i) => (
+                <div
+                  key={i}
+                  style={{
+                    background: 'var(--color-bg-tertiary)',
+                    border: '0.5px solid var(--color-border-light)',
+                    borderRadius: 4,
+                    padding: '10px 14px',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                  }}
+                >
+                  <span style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>
+                    {job.quantity > 1 ? `×${job.quantity} ` : ''}{job.name}
+                  </span>
+                  <span style={{
+                    fontSize: 12,
+                    color: job.done ? 'var(--color-success)' : 'var(--color-warning)',
+                    fontWeight: 500,
+                    flexShrink: 0,
+                    marginLeft: 12,
+                  }}>
+                    {job.remaining}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       )}
 
     </main>

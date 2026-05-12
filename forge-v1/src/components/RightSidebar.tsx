@@ -1,14 +1,16 @@
 /**
  * FORGE v1.0 — RightSidebar component
  *
- * Fixed 280px right panel showing the detail analysis for the selected item.
- * Renders an empty-state prompt when no item is selected.
+ * Fixed 280px right panel. Shows full item analysis for the selected item.
  *
- * When populated, the panel has four sections:
- *   1. Hero       — large item icon, name, category, ownership badge
- *   2. Financials — sell price, material cost, profit/run, margin, ISK/hr
- *   3. Blueprint  — build time (more fields in v1.1: ME/TE levels, runs)
- *   4. Materials  — icon + name + quantity for each required material
+ * Data sources (in priority order):
+ *   1. apiDetail (ItemDetailApiResponse) — live from /api/item-details
+ *      Contains: price history sparkline, live market prices, material
+ *      breakdown with have/needed, build cost, profit.
+ *   2. fallbackDetail (ItemDetail) — derived from top-profitable results
+ *      Shown immediately while apiDetail is loading.
+ *
+ * On tablet (<1200px): overlays as a fixed right panel, toggled by detailOpen.
  *
  * Security:
  *   - All icon URLs use numeric typeId only.
@@ -16,20 +18,21 @@
  */
 
 import type { FC } from 'react';
-import type { ItemDetail } from '../types';
-import {
-  formatISK,
-  formatISKPerHour,
-  formatMargin,
-  marginColourClass,
-  profitColourClass,
-} from '../utils/format';
+import type { ItemDetail, ItemDetailApiResponse } from '../types';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
 interface RightSidebarProps {
-  /** Full detail record for the selected item, or null if nothing is selected */
-  detail: ItemDetail | null;
+  selectedTypeId: number | null;
+  selectedName: string;
+  /** Fallback: derived from top-profitable data (immediate, no extra fetch) */
+  fallbackDetail: ItemDetail | null;
+  /** Live detail from /api/item-details (richer: materials, sparkline, prices) */
+  apiDetail: ItemDetailApiResponse | null;
+  detailLoading: boolean;
+  detailError: string | null;
+  detailOpen: boolean;
+  onClose: () => void;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -38,56 +41,58 @@ const ICON_BASE = 'https://images.evetech.net/types';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function ownedBadgeClass(owned: ItemDetail['owned']): string {
-  if (owned === 'BPO') return 'badge badge-bpo';
-  if (owned === 'BPC') return 'badge badge-bpc';
-  return 'badge badge-none';
+function formatISK(n: number | null | undefined): string {
+  if (n == null || isNaN(n)) return '—';
+  const abs = Math.abs(n);
+  if (abs >= 1e12) return (n / 1e12).toFixed(2) + 'T ISK';
+  if (abs >= 1e9)  return (n / 1e9).toFixed(2) + 'B ISK';
+  if (abs >= 1e6)  return (n / 1e6).toFixed(1) + 'M ISK';
+  if (abs >= 1e3)  return (n / 1e3).toFixed(0) + 'K ISK';
+  return Math.round(n).toLocaleString() + ' ISK';
 }
 
-// ── Sub-components ───────────────────────────────────────────────────────────
-
-/** A single labelled metric inside the detail panel */
-const StatCard: FC<{ label: string; value: string; valueClass?: string }> = ({
-  label,
-  value,
-  valueClass = '',
-}) => (
-  <div className="stat-card">
-    <div className="stat-card-label">{label}</div>
-    <div className={`stat-card-value${valueClass ? ` ${valueClass}` : ''}`}>{value}</div>
-  </div>
-);
+function fmtN(n: number): string {
+  return n.toLocaleString();
+}
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-const RightSidebar: FC<RightSidebarProps> = ({ detail }) => {
+const RightSidebar: FC<RightSidebarProps> = ({
+  selectedTypeId,
+  selectedName,
+  fallbackDetail,
+  apiDetail,
+  detailLoading,
+  detailError,
+  detailOpen,
+  onClose,
+}) => {
+  const sidebarClass = `sidebar-right${detailOpen ? ' detail-open' : ''}`;
+
   /* ── Empty state ─────────────────────────────────────────────────────────── */
-  if (!detail) {
+  if (!selectedTypeId) {
     return (
-      <aside className="sidebar-right" aria-label="Item detail">
+      <aside className={sidebarClass} aria-label="Item detail">
         <div className="detail-empty">
           <div className="detail-empty-icon" aria-hidden="true">⊕</div>
-          <p>Select an item to see its profit analysis</p>
+          <p>Select an item to see its analysis</p>
         </div>
       </aside>
     );
   }
 
-  /* ── Populated state ─────────────────────────────────────────────────────── */
-  const heroIconUrl = `${ICON_BASE}/${detail.typeId}/icon?size=64`;
-  const profitClass = profitColourClass(detail.profitPerRun);
-  const marginClass = marginColourClass(detail.margin);
-  const iskHrClass  = profitColourClass(detail.iskPerHour);
+  const iconUrl = `${ICON_BASE}/${selectedTypeId}/icon?size=64`;
+  const name    = selectedName || apiDetail?.name || fallbackDetail?.name || `Item #${selectedTypeId}`;
 
   return (
-    <aside className="sidebar-right" aria-label={`${detail.name} detail analysis`}>
+    <aside className={sidebarClass} aria-label={`${name} detail analysis`}>
       <div className="detail-panel">
 
-        {/* ── Hero ────────────────────────────────────────────────────────── */}
+        {/* ── Header ──────────────────────────────────────────────────────── */}
         <div className="detail-hero">
           <div className="detail-icon">
             <img
-              src={heroIconUrl}
+              src={iconUrl}
               alt=""
               width={52}
               height={52}
@@ -96,71 +101,222 @@ const RightSidebar: FC<RightSidebarProps> = ({ detail }) => {
               }}
             />
           </div>
-          <div>
-            <div className="detail-item-name">{detail.name}</div>
-            <div className="detail-item-cat">{detail.category}</div>
-            <span className={ownedBadgeClass(detail.owned)}>{detail.owned}</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="detail-item-name">{name}</div>
+            {fallbackDetail && (
+              <div className="detail-item-cat">{fallbackDetail.category || 'Manufacturing'}</div>
+            )}
+            {fallbackDetail && (
+              <span className={
+                fallbackDetail.owned === 'BPO' ? 'badge badge-bpo' :
+                fallbackDetail.owned === 'BPC' ? 'badge badge-bpc' :
+                'badge badge-none'
+              }>
+                {fallbackDetail.owned}
+              </span>
+            )}
           </div>
+          <button
+            type="button"
+            className="detail-close-btn"
+            onClick={onClose}
+            aria-label="Close detail panel"
+          >
+            ×
+          </button>
         </div>
 
-        {/* ── Financials ──────────────────────────────────────────────────── */}
-        <div className="detail-section">
-          <div className="detail-section-heading">Financials</div>
-          <StatCard label="Sell Price"     value={formatISK(detail.sellPrice)} />
-          <StatCard label="Material Cost"  value={formatISK(detail.matCost)} />
-          <StatCard label="Profit / Run"   value={formatISK(detail.profitPerRun)}       valueClass={profitClass} />
-          <StatCard label="Margin"         value={formatMargin(detail.margin)}           valueClass={marginClass} />
-          <StatCard label="ISK / Hour"     value={formatISKPerHour(detail.iskPerHour)}   valueClass={iskHrClass}  />
-        </div>
-
-        {/* ── Blueprint ───────────────────────────────────────────────────── */}
-        <div className="detail-section">
-          <div className="detail-section-heading">Blueprint</div>
-          <StatCard label="Build Time" value={detail.buildTime} />
-        </div>
-
-        {/* ── Materials ───────────────────────────────────────────────────── */}
-        {detail.materials.length > 0 && (
-          <div className="detail-section">
-            <div className="detail-section-heading">Materials</div>
-            <div className="mat-list">
-              {detail.materials.map((mat) => {
-                const matIconUrl = `${ICON_BASE}/${mat.typeId}/icon?size=32`;
-                return (
-                  <div key={mat.typeId} className="mat-row">
-                    <span className="mat-name">
-                      <span className="mat-icon">
-                        <img
-                          src={matIconUrl}
-                          alt=""
-                          width={14}
-                          height={14}
-                          onError={(e) => {
-                            (e.currentTarget as HTMLImageElement).style.visibility = 'hidden';
-                          }}
-                        />
-                      </span>
-                      {mat.name}
-                    </span>
-                    <span className="mat-qty">{mat.quantity}</span>
-                  </div>
-                );
-              })}
-            </div>
+        {/* ── Loading indicator ───────────────────────────────────────────── */}
+        {detailLoading && (
+          <div style={{ color: 'var(--color-text-tertiary)', fontSize: 11, textAlign: 'center', padding: 16 }}>
+            <div className="loading-spinner" style={{ width: 20, height: 20, margin: '0 auto 8px' }} />
+            Loading item details…
           </div>
         )}
 
-        {/* ── Footer action ────────────────────────────────────────────────── */}
-        <div className="detail-footer">
-          <button
-            type="button"
-            className="btn"
-            style={{ width: '100%' }}
-            aria-label={`Analyse T2 production chain for ${detail.name}`}
-          >
-            Analyse T2 Chain →
-          </button>
-        </div>
+        {/* ── API error (non-fatal) ────────────────────────────────────────── */}
+        {detailError && !detailLoading && (
+          <div style={{ color: 'var(--color-danger)', fontSize: 11, textAlign: 'center', padding: 12 }}>
+            ⚠ {detailError}
+          </div>
+        )}
+
+        {/* ── Live data from /api/item-details ────────────────────────────── */}
+        {apiDetail && !detailLoading && (
+          <>
+            {/* Build status badge */}
+            {apiDetail.buildInfo && (
+              <div style={{ marginBottom: 10 }}>
+                {apiDetail.buildInfo.blueprintOwned && apiDetail.buildInfo.canBuild && (
+                  <span className="status-badge can-build">✓ Can Build Now</span>
+                )}
+                {apiDetail.buildInfo.blueprintOwned && !apiDetail.buildInfo.canBuild && (
+                  <span className="status-badge missing">⚠ Missing Materials</span>
+                )}
+                {!apiDetail.buildInfo.blueprintOwned && (
+                  <span className="status-badge no-bp">✗ No Blueprint</span>
+                )}
+              </div>
+            )}
+
+            {/* Price history sparkline */}
+            {apiDetail.priceHistory && apiDetail.priceHistory.length > 0 && (() => {
+              const prices = apiDetail.priceHistory!.map((d) => d.average);
+              const min    = Math.min(...prices);
+              const max    = Math.max(...prices);
+              const range  = max - min;
+              const latest = prices[prices.length - 1];
+              return (
+                <div className="detail-section">
+                  <div className="detail-section-heading">Jita Price (90 Days)</div>
+                  <div style={{ color: 'var(--color-success)', fontSize: 15, fontWeight: 500, marginBottom: 8 }}>
+                    {formatISK(latest)}
+                  </div>
+                  <div className="sparkline">
+                    {prices.slice(-30).map((p, i) => {
+                      const height = range > 0 ? ((p - min) / range) * 100 : 50;
+                      return (
+                        <div
+                          key={i}
+                          className="sparkline-bar"
+                          style={{ height: `${Math.max(height, 4)}%` }}
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Current market prices */}
+            {apiDetail.currentPrice && (
+              <div className="detail-section">
+                <div className="detail-section-heading">Current Jita Market</div>
+                <div className="price-grid">
+                  <div>
+                    <div className="price-cell-label">LOWEST SELL</div>
+                    <div className="price-cell-value" style={{ color: 'var(--color-danger)' }}>
+                      {formatISK(apiDetail.currentPrice.sell)}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="price-cell-label">MEDIAN</div>
+                    <div className="price-cell-value" style={{ color: 'var(--color-accent-primary)' }}>
+                      {formatISK(apiDetail.currentPrice.median)}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="price-cell-label">HIGHEST BUY</div>
+                    <div className="price-cell-value" style={{ color: 'var(--color-success)' }}>
+                      {formatISK(apiDetail.currentPrice.buy)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Build analysis & materials */}
+            {apiDetail.buildInfo && (
+              <div className="detail-section">
+                <div className="detail-section-heading">Build Requirements</div>
+                <div className="mat-list" style={{ marginBottom: 10 }}>
+                  {apiDetail.buildInfo.materials.map((mat, i) => (
+                    <div key={i} className={`mat-row${mat.shortage > 0 ? ' mat-bad' : ' mat-ok'}`}>
+                      <span className="mat-name">
+                        <span className="mat-icon">
+                          <img
+                            src={`${ICON_BASE}/${mat.materialId}/icon?size=32`}
+                            alt=""
+                            width={14}
+                            height={14}
+                            onError={(e) => {
+                              (e.currentTarget as HTMLImageElement).style.visibility = 'hidden';
+                            }}
+                          />
+                        </span>
+                        {mat.shortage > 0 ? '✗' : '✓'} {mat.name}
+                      </span>
+                      <span className="mat-qty">{fmtN(mat.have)}/{fmtN(mat.needed)}</span>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontSize: 11 }}>
+                  <div className="stat-card">
+                    <div className="stat-card-label">Build Cost</div>
+                    <div className="stat-card-value">{formatISK(apiDetail.buildInfo.totalCost)}</div>
+                  </div>
+                  <div className="stat-card">
+                    <div className="stat-card-label">Profit</div>
+                    <div
+                      className="stat-card-value"
+                      style={{ color: apiDetail.buildInfo.profit > 0 ? 'var(--color-success)' : 'var(--color-danger)' }}
+                    >
+                      {formatISK(apiDetail.buildInfo.profit)}
+                    </div>
+                  </div>
+                </div>
+                {apiDetail.buildInfo.profitMargin !== 0 && (
+                  <div style={{ marginTop: 6, fontSize: 11, color: 'var(--color-text-tertiary)' }}>
+                    Margin: {apiDetail.buildInfo.profitMargin.toFixed(1)}%
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Description */}
+            {apiDetail.description && (
+              <div className="description-text">
+                {apiDetail.description.length > 240
+                  ? apiDetail.description.substring(0, 240) + '…'
+                  : apiDetail.description}
+              </div>
+            )}
+          </>
+        )}
+
+        {/* ── Fallback: precomputed financials (shown if no apiDetail yet) ── */}
+        {!apiDetail && !detailLoading && fallbackDetail && (
+          <>
+            <div className="detail-section">
+              <div className="detail-section-heading">Financials</div>
+              <div className="stat-card">
+                <div className="stat-card-label">Sell Price</div>
+                <div className="stat-card-value">{formatISK(fallbackDetail.sellPrice)}</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-card-label">Material Cost</div>
+                <div className="stat-card-value">{formatISK(fallbackDetail.matCost)}</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-card-label">Profit / Run</div>
+                <div
+                  className="stat-card-value"
+                  style={{ color: fallbackDetail.profitPerRun > 0 ? 'var(--color-success)' : 'var(--color-danger)' }}
+                >
+                  {formatISK(fallbackDetail.profitPerRun)}
+                </div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-card-label">Margin</div>
+                <div className="stat-card-value">
+                  {fallbackDetail.margin.toFixed(1)}%
+                </div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-card-label">ISK / Hour</div>
+                <div className="stat-card-value">{formatISK(fallbackDetail.iskPerHour)}</div>
+              </div>
+            </div>
+
+            <div className="detail-section">
+              <div className="detail-section-heading">Blueprint</div>
+              <div className="stat-card">
+                <div className="stat-card-label">Build Time</div>
+                <div className="stat-card-value">{fallbackDetail.buildTime}</div>
+              </div>
+            </div>
+          </>
+        )}
 
       </div>
     </aside>

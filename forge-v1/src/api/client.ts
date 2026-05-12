@@ -12,6 +12,44 @@
 
 const ESI_BASE = 'https://esi.evetech.net/latest';
 
+// ── Generic fetch helpers ────────────────────────────────────────────────────
+
+/**
+ * Basic fetch wrapper — returns the raw Response so callers can inspect
+ * status codes and parse the body themselves.
+ */
+export async function apiFetch(
+  endpoint: string,
+  options: RequestInit = {}
+): Promise<Response> {
+  return fetch(endpoint, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(options.headers ?? {}),
+    },
+  });
+}
+
+/**
+ * Authenticated fetch — adds a Bearer Authorization header.
+ * Returns the raw Response object.
+ */
+export async function authFetch(
+  endpoint: string,
+  token: string,
+  options: RequestInit = {}
+): Promise<Response> {
+  return fetch(endpoint, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+      ...(options.headers ?? {}),
+    },
+  });
+}
+
 // ── FORGE backend ────────────────────────────────────────────────────────────
 
 /** GET from the FORGE backend (optionally authenticated) */

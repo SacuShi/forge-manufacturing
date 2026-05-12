@@ -2,10 +2,11 @@
  * FORGE v1.0 — Shared TypeScript interfaces
  *
  * Central type definitions for all data shapes flowing through the app.
- * Split into three sections:
+ * Split into four sections:
  *   1. UI types   — consumed by React components
  *   2. ESI types  — raw responses from EVE Swagger Interface
  *   3. API types  — responses from the FORGE backend endpoints
+ *   4. Auth types — authentication state machine
  */
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -54,12 +55,13 @@ export type ChatRole = 'user' | 'assistant';
 /**
  * A single message in the AI advisor conversation.
  * content may contain [[Name|typeId]] tokens parsed by ChatPanel.
+ * id and timestamp are optional for backward compatibility.
  */
 export interface ChatMessage {
-  id: string;
   role: ChatRole;
   content: string;
-  timestamp: Date;
+  id?: string;
+  timestamp?: Date;
 }
 
 export type TabId = 'market' | 'blueprints';
@@ -81,6 +83,13 @@ export interface CharacterInfo {
   blueprintCount: number;
   bpoCount: number;
   activeJobs: ActiveJob[];
+}
+
+/** Loading log entry for the LoadingScreen */
+export interface DataLogItem {
+  label: string;
+  status: 'ok' | 'warn' | 'err';
+  detail: string;
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -166,23 +175,60 @@ export interface TopProfitableResponse {
   };
 }
 
-/** Anthropic message shape sent to /api/ai-chat */
-export interface AiChatMessage {
-  role: 'user' | 'assistant';
-  content: string;
-}
-
-/** Response from POST /api/ai-chat (Anthropic API response passthrough) */
+/** Response from POST /api/ai-chat */
 export interface AiChatResponse {
-  id: string;
-  type: string;
-  role: string;
-  content: Array<{ type: string; text?: string }>;
-  stop_reason: string;
-  usage: {
-    input_tokens: number;
-    output_tokens: number;
-  };
+  id?: string;
+  type?: string;
+  role?: string;
+  content?: Array<{ type: string; text?: string }>;
+  stop_reason?: string;
+  usage?: { input_tokens: number; output_tokens: number };
   error?: string;
   code?: string;
 }
+
+/** Material row in /api/item-details response */
+export interface ItemDetailMaterial {
+  materialId: number;
+  name: string;
+  needed: number;
+  have: number;
+  shortage: number;
+  unitCost?: number;
+  totalCost?: number;
+  shortfallCost?: number;
+}
+
+/** Full response from POST /api/item-details */
+export interface ItemDetailApiResponse {
+  name?: string;
+  description?: string;
+  iconUrl?: string;
+  priceHistory?: Array<{
+    date: string;
+    average: number;
+    highest: number;
+    lowest: number;
+    volume: number;
+    orderCount: number;
+  }>;
+  currentPrice?: {
+    sell: number;
+    buy: number;
+    median: number;
+  };
+  buildInfo?: {
+    blueprintOwned: boolean;
+    canBuild: boolean;
+    materials: ItemDetailMaterial[];
+    totalCost: number;
+    profit: number;
+    profitMargin: number;
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// 4. AUTH TYPES
+// ══════════════════════════════════════════════════════════════════════════
+
+export type AuthStatus = 'idle' | 'exchanging' | 'loading' | 'authed' | 'error';

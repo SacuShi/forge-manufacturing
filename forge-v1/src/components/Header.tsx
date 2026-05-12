@@ -4,17 +4,10 @@
  * Top 48px application bar. Layout (left → right):
  *
  *   LEFT:
- *     [◈ FORGE logo]  [Dashboard btn]  [F.O.R.G.E. AI toggle btn]
+ *     [☰ menu btn (mobile only)]  [◈ FORGE logo]  [F.O.R.G.E. AI toggle]
  *
  *   RIGHT:
- *     [◎ Jita 4-4 ▾ (teaser)]  [Character pill]  [Logout btn ← extra gap]
- *
- * The F.O.R.G.E. AI button uses .btn-chat and gains the .open modifier
- * class when the chat panel is open, visually receding (inset shadow)
- * to signal the active/depressed state.
- *
- * The Logout button gets .btn-logout which adds margin-left: 16px via CSS,
- * providing double the gap versus other header buttons.
+ *     [◎ Jita 4-4 teaser]  [☀/🌙 theme]  [Character pill]  [Logout]
  *
  * Security:
  *   - Portrait URL uses numeric characterId only.
@@ -28,11 +21,11 @@ import type { CharacterInfo } from '../types';
 
 interface HeaderProps {
   character: CharacterInfo;
-  /** Whether the chat panel is currently open */
   chatOpen: boolean;
-  /** Called when the F.O.R.G.E. AI toggle button is clicked */
+  theme: string;
   onToggleChat: () => void;
-  /** Called when the Logout button is clicked */
+  onMenuToggle: () => void;
+  onThemeToggle: () => void;
   onLogout: () => void;
 }
 
@@ -42,7 +35,15 @@ const PORTRAIT_BASE = 'https://images.evetech.net/characters';
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-const Header: FC<HeaderProps> = ({ character, chatOpen, onToggleChat, onLogout }) => {
+const Header: FC<HeaderProps> = ({
+  character,
+  chatOpen,
+  theme,
+  onToggleChat,
+  onMenuToggle,
+  onThemeToggle,
+  onLogout,
+}) => {
   const portraitUrl = `${PORTRAIT_BASE}/${character.characterId}/portrait?size=32`;
 
   return (
@@ -51,20 +52,21 @@ const Header: FC<HeaderProps> = ({ character, chatOpen, onToggleChat, onLogout }
       {/* ── Left group ──────────────────────────────────────────────────────── */}
       <div className="header-left">
 
+        {/* Mobile menu toggle — hidden on desktop via CSS */}
+        <button
+          type="button"
+          className="menu-btn"
+          aria-label="Toggle navigation menu"
+          onClick={onMenuToggle}
+        >
+          ☰
+        </button>
+
         {/* Logo mark */}
         <span className="logo" aria-label="FORGE Manufacturing Intelligence">
           <span className="logo-icon" aria-hidden="true" />
           FORGE
         </span>
-
-        {/* Dashboard nav button — active by default in v1.0 */}
-        <button
-          type="button"
-          className="btn active"
-          aria-current="page"
-        >
-          Dashboard
-        </button>
 
         {/* F.O.R.G.E. AI panel toggle */}
         <button
@@ -82,14 +84,21 @@ const Header: FC<HeaderProps> = ({ character, chatOpen, onToggleChat, onLogout }
       {/* ── Right group ─────────────────────────────────────────────────────── */}
       <div className="header-right">
 
-        {/* Market region selector — teaser for v1.1, not interactive */}
-        <span
-          className="market-teaser"
-          role="note"
-          aria-label="Market region: Jita 4-4 (region selector coming in v1.1)"
-        >
+        {/* Market region teaser */}
+        <span className="market-teaser" role="note" aria-label="Market: Jita 4-4">
           ◎ Jita 4-4 ▾
         </span>
+
+        {/* Theme toggle */}
+        <button
+          type="button"
+          className="btn"
+          aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+          onClick={onThemeToggle}
+          style={{ fontSize: 14, padding: '4px 8px' }}
+        >
+          {theme === 'dark' ? '☀️' : '🌙'}
+        </button>
 
         {/* Character pill */}
         <div className="char-pill" role="status" aria-label={`Logged in as ${character.name}`}>
@@ -107,7 +116,7 @@ const Header: FC<HeaderProps> = ({ character, chatOpen, onToggleChat, onLogout }
           <span className="char-pill-name">{character.name}</span>
         </div>
 
-        {/* Logout — .btn-logout CSS adds the extra left margin gap */}
+        {/* Logout */}
         <button
           type="button"
           className="btn btn-logout"
