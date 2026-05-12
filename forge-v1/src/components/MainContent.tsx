@@ -89,6 +89,39 @@ const MainContent: FC<MainContentProps> = ({
   const getBpName = (typeId: number) =>
     itemNames.get(typeId) ?? `Blueprint #${typeId}`;
 
+  /** Reverse name→typeId map for looking up product icons from blueprint names */
+  const nameToTypeId = useMemo(() => {
+    const m = new Map<string, number>();
+    itemNames.forEach((name, typeId) => m.set(name.toLowerCase(), typeId));
+    return m;
+  }, [itemNames]);
+
+  /**
+   * Given a blueprint type_id, return the product type_id for its icon.
+   * Strategy: look up the blueprint name (e.g. "Hammerhead II Blueprint"),
+   * strip the " Blueprint" suffix, then reverse-look up that product name.
+   */
+  const getProductTypeId = (bpTypeId: number): number | null => {
+    const bpName = itemNames.get(bpTypeId);
+    if (!bpName) return null;
+    const productName = bpName.replace(/ Blueprint$/i, '').toLowerCase();
+    return nameToTypeId.get(productName) ?? null;
+  };
+
+  /** Human-readable label for ESI activity_id */
+  const activityLabel = (id: number | undefined): string => {
+    switch (id) {
+      case 1:  return 'Mfg';
+      case 3:  return 'TE Research';
+      case 4:  return 'ME Research';
+      case 5:  return 'Copying';
+      case 8:  return 'Invention';
+      case 9:  return 'Reaction';
+      case 11: return 'Rev.Eng';
+      default: return '';
+    }
+  };
+
   /* ── Sort handler ────────────────────────────────────────────────────────── */
   const handleSort = (field: SortField) => {
     if (field === sortField) {
@@ -251,8 +284,9 @@ const MainContent: FC<MainContentProps> = ({
           {/* Blueprint list */}
           <div className="bp-list">
             {filteredBps.map((b) => {
-              const name  = getBpName(b.type_id);
-              const isBpo = b.quantity === -1;
+              const name          = getBpName(b.type_id);
+              const isBpo         = b.quantity === -1;
+              const productTypeId = getProductTypeId(b.type_id);
               return (
                 <div
                   key={b.item_id}
@@ -262,9 +296,32 @@ const MainContent: FC<MainContentProps> = ({
                   onClick={() => onSelectItem(b.type_id, name)}
                   onKeyDown={(e) => e.key === 'Enter' && onSelectItem(b.type_id, name)}
                 >
-                  {/* Blueprint icon placeholder (blueprints don't have icons in ESI) */}
-                  <div className="bp-icon bp-icon-placeholder">
-                    <span style={{ fontSize: 18, fontWeight: 700 }}>◇</span>
+                  {/* Product icon — use product_type_id (not blueprint_type_id) for real item icon */}
+                  <div className="bp-icon">
+                    {productTypeId ? (
+                      <img
+                        src={`https://images.evetech.net/types/${productTypeId}/icon?size=32`}
+                        alt={name}
+                        width={32}
+                        height={32}
+                        crossOrigin="anonymous"
+                        onError={(e) => {
+                          // Fallback to diamond if icon not found
+                          const el = e.currentTarget as HTMLImageElement;
+                          el.style.display = 'none';
+                          const next = el.nextSibling as HTMLElement | null;
+                          if (next) next.style.display = 'inline';
+                        }}
+                      />
+                    ) : null}
+                    <span
+                      style={{
+                        fontSize: 18, fontWeight: 700,
+                        display: productTypeId ? 'none' : 'inline',
+                      }}
+                    >
+                      ◇
+                    </span>
                   </div>
                   <span className="bp-name">{name}</span>
                   <div className="bp-badges">
@@ -360,11 +417,13 @@ const MainContent: FC<MainContentProps> = ({
           {activeJobs.length === 0 ? (
             <div style={{ color: 'var(--color-text-tertiary)', fontSize: 13,
               padding: 24, textAlign: 'center' }}>
-              No active manufacturing jobs
+              No active industry jobs
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {activeJobs.map((job, i) => (
+              {activeJobs.map((job, i) => {
+                const label = activityLabel(job.activityId);
+                return (
                 <div
                   key={i}
                   style={{
@@ -377,9 +436,18 @@ const MainContent: FC<MainContentProps> = ({
                     alignItems: 'center',
                   }}
                 >
-                  <span style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>
-                    {job.quantity > 1 ? `×${job.quantity} ` : ''}{job.name}
-                  </span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    {label && (
+                      <div style={{ fontSize: 10, color: 'var(--color-text-tertiary)',
+                        letterSpacing: '0.5px', marginBottom: 2, textTransform: 'uppercase' }}>
+                        {label}
+                      </div>
+                    )}
+                    <span style={{ fontSize: 13, color: 'var(--color-text-secondary)',
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>
+                      {job.quantity > 1 ? `×${job.quantity} ` : ''}{job.name}
+                    </span>
+                  </div>
                   <span style={{
                     fontSize: 12,
                     color: job.done ? 'var(--color-success)' : 'var(--color-warning)',
@@ -390,7 +458,8 @@ const MainContent: FC<MainContentProps> = ({
                     {job.remaining}
                   </span>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

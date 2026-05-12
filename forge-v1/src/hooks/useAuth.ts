@@ -195,13 +195,13 @@ export function useAuth(): AuthState & {
           `/characters/${cid}/industry/jobs/?include_completed=true`,
           acc
         );
-        // Include manufacturing (1), reactions (11), invention (8), and other industry activities
-        const mfgJobs = allJobs.filter(
-          (j) => j.status === 'active' && (j.activity_id === 1 || j.activity_id === 11 || j.activity_id === 8)
-        );
+        // Include ALL active jobs regardless of activity type:
+        //   1=Manufacturing, 3=TE Research, 4=ME Research, 5=Copying,
+        //   8=Invention, 9=Reactions, 11=Reverse Engineering (T3)
+        const activeEsiJobs = allJobs.filter((j) => j.status === 'active');
 
-        // Resolve product names for each active job
-        const namePromises = mfgJobs.map(async (job) => {
+        // Resolve product names for each active job via ESI universe/types
+        const namePromises = activeEsiJobs.map(async (job) => {
           try {
             const typeInfo = await esiGet<{ name: string }>(
               `/universe/types/${job.product_type_id}/`
@@ -214,13 +214,14 @@ export function useAuth(): AuthState & {
 
         const names = await Promise.all(namePromises);
 
-        activeJobs = mfgJobs.map((job, i) => {
+        activeJobs = activeEsiJobs.map((job, i) => {
           const { label, done } = formatTimeRemaining(job.end_date);
           return {
-            name:      names[i],
-            quantity:  job.runs,
-            remaining: label,
+            name:       names[i],
+            quantity:   job.runs,
+            remaining:  label,
             done,
+            activityId: job.activity_id,
           };
         });
 

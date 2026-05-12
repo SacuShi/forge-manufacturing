@@ -73,6 +73,8 @@ export interface ActiveJob {
   quantity: number;
   remaining: string;
   done: boolean;
+  /** ESI activity_id: 1=Mfg, 3=TE Research, 4=ME Research, 5=Copy, 8=Invention, 9=Reactions, 11=Rev.Eng */
+  activityId?: number;
 }
 
 export interface CharacterInfo {
