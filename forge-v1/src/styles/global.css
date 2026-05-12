@@ -1,0 +1,81 @@
+/**
+ * FORGE v1.0 — Global reset and layout
+ *
+ * Minimal reset + full-height app shell layout.
+ * All colours use CSS variables from variables.css.
+ */
+
+/* ── Reset ─────────────────────────────────────────────────────────────────── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.6;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  /* Prevent default browser text-select highlight colour clashing with dark theme */
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── App shell ─────────────────────────────────────────────────────────────── */
+
+/** Outer wrapper: stacks header above the three-column body */
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/** Three-column row beneath the header */
+.app-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden; /* Each column scrolls internally */
+}
+
+/* ── Scrollbar styling ─────────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-medium);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(139, 149, 166, 0.4);
+}
+
+/* ── Semantic colour utility classes ───────────────────────────────────────── */
+/* Applied dynamically by format.ts helpers — do not use directly in JSX */
+.success { color: var(--color-success); }
+.warning { color: var(--color-warning); }
+.danger  { color: var(--color-danger);  }
+.info    { color: var(--color-info);    }
+
+/* ── Focus ring ────────────────────────────────────────────────────────────── */
+/* Replaces default browser outline with brand-coloured ring */
+:focus-visible {
+  outline: 2px solid var(--color-accent-primary);
+  outline-offset: 2px;
+}
+
+/* ── Monospace numbers ─────────────────────────────────────────────────────── */
+.mono { font-family: var(--font-mono); }
