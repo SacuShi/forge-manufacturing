@@ -57,6 +57,47 @@
   flex-shrink: 0;
 }
 
+/* FORGE logo with pale blue hexagon and backronym */
+.forge-logo-container {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-right: 4px;
+}
+
+.forge-logo {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.forge-logo:hover {
+  opacity: 0.8;
+}
+
+.forge-icon {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+}
+
+.forge-text {
+  font-size: 15px;
+  font-weight: 500;
+  color: #4fc3f7;
+  letter-spacing: 1px;
+}
+
+.forge-backronym {
+  font-size: 10px;
+  color: #8bb5d1;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+  user-select: none;
+}
+
 .btn {
   padding: 6px 12px;
   background: transparent;
@@ -535,9 +576,9 @@ tbody td.align-center { text-align: center; }
   white-space: nowrap;
 }
 
-.badge-bpo  { background: rgba(79, 195, 247, 0.2);   color: var(--color-accent-primary); }
-.badge-bpc  { background: rgba(79, 195, 247, 0.12);  color: var(--color-accent-primary); opacity: 0.75; }
-.badge-none { background: rgba(139, 149, 166, 0.15); color: var(--color-text-tertiary); }
+.badge-bpo  { background: rgba(79, 195, 247, 0.2);    color: #4fc3f7; border: 0.5px solid rgba(79, 195, 247, 0.3); }
+.badge-bpc  { background: rgba(33, 150, 243, 0.15);  color: #1976d2; border: 0.5px solid rgba(33, 150, 243, 0.25); }
+.badge-none { background: rgba(139, 149, 166, 0.15); color: #8895a6; border: 0.5px solid rgba(139, 149, 166, 0.2); }
 
 /* Row action button */
 .row-action {

@@ -62,11 +62,35 @@ const Header: FC<HeaderProps> = ({
           ☰
         </button>
 
-        {/* Logo mark */}
-        <span className="logo" aria-label="FORGE Manufacturing Intelligence">
-          <span className="logo-icon" aria-hidden="true" />
-          FORGE
-        </span>
+        {/* Logo mark with backronym */}
+        <div className="forge-logo-container" aria-label="FORGE Manufacturing Intelligence">
+          <div className="forge-logo">
+            {/* Pale blue hexagon SVG */}
+            <svg
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+              className="forge-icon"
+            >
+              <path
+                d="M12 2L20.66 7V17L12 22L3.34 17V7L12 2Z"
+                stroke="#8bb5d1"
+                strokeWidth="2"
+                fill="rgba(139, 181, 209, 0.15)"
+              />
+            </svg>
+            <span className="forge-text">FORGE</span>
+          </div>
+          <div className="forge-backronym">
+            <span style={{ color: '#4fc3f7', fontWeight: 600 }}>F</span>abrication,{' '}
+            <span style={{ color: '#4fc3f7', fontWeight: 600 }}>O</span>perations,{' '}
+            <span style={{ color: '#4fc3f7', fontWeight: 600 }}>R</span>esource &{' '}
+            <span style={{ color: '#4fc3f7', fontWeight: 600 }}>G</span>uidance{' '}
+            <span style={{ color: '#4fc3f7', fontWeight: 600 }}>E</span>ngine
+          </div>
+        </div>
 
         {/* F.O.R.G.E. AI panel toggle */}
         <button
@@ -108,6 +132,7 @@ const Header: FC<HeaderProps> = ({
               alt=""
               width={22}
               height={22}
+              crossOrigin="anonymous"
               onError={(e) => {
                 (e.currentTarget as HTMLImageElement).style.visibility = 'hidden';
               }}
