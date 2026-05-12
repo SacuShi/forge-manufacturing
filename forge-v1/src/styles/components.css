@@ -536,7 +536,7 @@ tbody td.align-center { text-align: center; }
 }
 
 .badge-bpo  { background: rgba(79, 195, 247, 0.2);   color: var(--color-accent-primary); }
-.badge-bpc  { background: rgba(79, 195, 247, 0.12);  color: #78d4f7; }
+.badge-bpc  { background: rgba(79, 195, 247, 0.12);  color: var(--color-accent-primary); opacity: 0.75; }
 .badge-none { background: rgba(139, 149, 166, 0.15); color: var(--color-text-tertiary); }
 
 /* Row action button */
@@ -604,15 +604,6 @@ tbody td.align-center { text-align: center; }
 
 .bp-badges { display: flex; gap: 3px; flex-shrink: 0; }
 
-.badge-bpo, .badge-bpc, .badge-runs, .badge-me, .badge-te {
-  font-size: 9px;
-  padding: 2px 5px;
-  border-radius: 3px;
-  font-weight: 700;
-}
-
-.badge-bpo  { background: rgba(79,  195, 247, 0.2);   color: var(--color-accent-primary); }
-.badge-bpc  { background: rgba(79,  195, 247, 0.12);  color: var(--color-accent-primary); opacity: 0.75; }
 .badge-runs { background: var(--color-bg-tertiary); color: var(--color-text-secondary); border: 0.5px solid var(--color-border-medium); }
 .badge-me   { background: rgba(76,  175, 80,  0.15);  color: var(--color-success); }
 .badge-te   { background: rgba(255, 152, 0,   0.15);  color: var(--color-warning); }

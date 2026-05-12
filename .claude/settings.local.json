@@ -18,7 +18,8 @@
       "Bash(npm run *)",
       "Bash(grep -n \"badge-bpo\\\\|badge-runs\" \"C:\\\\\\\\Users\\\\\\\\AndyMcD\\\\\\\\Desktop\\\\\\\\forge-manufacturing\\\\\\\\.claude\\\\\\\\worktrees\\\\\\\\hardcore-lamport-8943e7\\\\\\\\forge-v1\\\\\\\\src\\\\\\\\styles\\\\\\\\components.css\")",
       "Bash(cd \"C:\\\\\\\\Users\\\\\\\\AndyMcD\\\\\\\\Desktop\\\\\\\\forge-manufacturing\\\\\\\\.claude\\\\\\\\worktrees\\\\\\\\hardcore-lamport-8943e7\\\\\\\\forge-v1\")",
-      "Bash(grep -n \"table-wrap\\\\|\\\\.table\\\\|<table\" \"C:\\\\\\\\Users\\\\\\\\AndyMcD\\\\\\\\Desktop\\\\\\\\forge-manufacturing\\\\\\\\.claude\\\\\\\\worktrees\\\\\\\\hardcore-lamport-8943e7\\\\\\\\forge-v1\\\\\\\\src\\\\\\\\styles\\\\\\\\components.css\")"
+      "Bash(grep -n \"table-wrap\\\\|\\\\.table\\\\|<table\" \"C:\\\\\\\\Users\\\\\\\\AndyMcD\\\\\\\\Desktop\\\\\\\\forge-manufacturing\\\\\\\\.claude\\\\\\\\worktrees\\\\\\\\hardcore-lamport-8943e7\\\\\\\\forge-v1\\\\\\\\src\\\\\\\\styles\\\\\\\\components.css\")",
+      "Bash(git commit -m 'fix: remove duplicate badge CSS definitions *)"
     ]
   }
 }
