@@ -102,6 +102,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
               alt=""
               width={64}
               height={64}
+              crossOrigin="anonymous"
               onError={(e) => {
                 (e.currentTarget as HTMLImageElement).style.visibility = 'hidden';
               }}
@@ -252,6 +253,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
                             alt=""
                             width={14}
                             height={14}
+                            crossOrigin="anonymous"
                             onError={(e) => {
                               (e.currentTarget as HTMLImageElement).style.visibility = 'hidden';
                             }}

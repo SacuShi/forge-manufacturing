@@ -267,6 +267,7 @@ const MainContent: FC<MainContentProps> = ({
                     src={`https://images.evetech.net/types/${b.type_id}/icon?size=32`}
                     alt={name}
                     loading="lazy"
+                    crossOrigin="anonymous"
                     onError={(e) => {
                       (e.target as HTMLImageElement).style.visibility = 'hidden';
                     }}
@@ -324,6 +325,7 @@ const MainContent: FC<MainContentProps> = ({
                     src={`https://images.evetech.net/types/${typeId}/icon?size=32`}
                     alt={name}
                     loading="lazy"
+                    crossOrigin="anonymous"
                     style={{
                       width: 32,
                       height: 32,
