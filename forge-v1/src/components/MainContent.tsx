@@ -262,19 +262,10 @@ const MainContent: FC<MainContentProps> = ({
                   onClick={() => onSelectItem(b.type_id, name)}
                   onKeyDown={(e) => e.key === 'Enter' && onSelectItem(b.type_id, name)}
                 >
-                  <img
-                    className="bp-icon"
-                    src={`https://images.evetech.net/types/${b.type_id}/icon?size=32`}
-                    alt={name}
-                    crossOrigin="anonymous"
-                    onError={(e) => {
-                      console.warn(`Failed to load blueprint icon for ${name} (${b.type_id})`);
-                      (e.target as HTMLImageElement).style.display = 'none';
-                    }}
-                    onLoad={() => {
-                      console.log(`Loaded blueprint icon for ${name}`);
-                    }}
-                  />
+                  {/* Blueprint icon placeholder (blueprints don't have icons in ESI) */}
+                  <div className="bp-icon bp-icon-placeholder">
+                    <span style={{ fontSize: 18, fontWeight: 700 }}>◇</span>
+                  </div>
                   <span className="bp-name">{name}</span>
                   <div className="bp-badges">
                     {isBpo
@@ -310,7 +301,7 @@ const MainContent: FC<MainContentProps> = ({
             aria-label="Search assets"
           />
           <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 220px)' }}>
-            {assetGroups.slice(0, 500).map(([name, { qty, typeId }], i) => (
+            {assetGroups.map(([name, { qty, typeId }], i) => (
               <div
                 key={i}
                 style={{

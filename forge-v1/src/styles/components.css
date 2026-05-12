@@ -632,6 +632,14 @@ tbody td.align-center { text-align: center; }
   flex-shrink: 0;
   background: var(--color-bg-tertiary);
   border: 0.5px solid var(--color-border-light);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bp-icon-placeholder {
+  color: var(--color-accent-primary);
+  font-size: 18px;
 }
 
 .bp-name {
