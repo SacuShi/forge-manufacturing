@@ -192,11 +192,12 @@ export function useAuth(): AuthState & {
       let activeJobs: ActiveJob[] = [];
       try {
         const allJobs = await esiGet<EsiJob[]>(
-          `/characters/${cid}/industry/jobs/?include_completed=false`,
+          `/characters/${cid}/industry/jobs/?include_completed=true`,
           acc
         );
+        // Include manufacturing (1), reactions (11), invention (8), and other industry activities
         const mfgJobs = allJobs.filter(
-          (j) => j.status === 'active' && j.activity_id === 1
+          (j) => j.status === 'active' && (j.activity_id === 1 || j.activity_id === 11 || j.activity_id === 8)
         );
 
         // Resolve product names for each active job
