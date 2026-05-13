@@ -394,7 +394,9 @@ app.get('/api/item-names', security.apiLimiter, async (req, res) => {
     }
 
     console.log('⟳ Loading item names from database...');
-    const rows = await dbAll('SELECT type_id, name FROM items WHERE published = 1');
+    // Load ALL items regardless of published flag — assets can contain containers,
+    // mission items and legacy types that have published = 0 in the SDE.
+    const rows = await dbAll('SELECT type_id, name FROM items WHERE name IS NOT NULL AND name != \'\'');
     
     const items = {};
     rows.forEach(row => {
