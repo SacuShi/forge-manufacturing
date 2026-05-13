@@ -296,8 +296,8 @@ const MainContent: FC<MainContentProps> = ({
                   onClick={() => onSelectItem(b.type_id, name)}
                   onKeyDown={(e) => e.key === 'Enter' && onSelectItem(b.type_id, name)}
                 >
-                  {/* Product icon — use product_type_id (not blueprint_type_id) for real item icon */}
-                  <div className="bp-icon">
+                  {/* Product icon — BPO gets dark navy + pale blue edge; BPC gets pale blue bg + dark edge */}
+                  <div className={`bp-icon ${isBpo ? 'bp-icon-bpo' : 'bp-icon-bpc'}`}>
                     {productTypeId ? (
                       <img
                         src={`https://images.evetech.net/types/${productTypeId}/icon?size=32`}

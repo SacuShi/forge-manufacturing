@@ -626,15 +626,27 @@ tbody td.align-center { text-align: center; }
 .bp-card:hover { border-color: var(--color-accent-primary); }
 
 .bp-icon {
-  width: 32px;
-  height: 32px;
-  border-radius: 3px;
+  width: 36px;
+  height: 36px;
+  border-radius: 4px;
   flex-shrink: 0;
-  background: var(--color-bg-tertiary);
-  border: 0.5px solid var(--color-border-light);
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
+}
+
+/* BPO — dark navy background, pale blue edge (original, valuable) */
+.bp-icon-bpo {
+  background: #0d1f3c;
+  border: 1.5px solid #4fc3f7;
+  box-shadow: 0 0 4px rgba(79, 195, 247, 0.25);
+}
+
+/* BPC — pale blue tinted background, dark navy edge (copy, limited runs) */
+.bp-icon-bpc {
+  background: rgba(79, 195, 247, 0.12);
+  border: 1.5px solid #1a3a5c;
 }
 
 .bp-icon-placeholder {

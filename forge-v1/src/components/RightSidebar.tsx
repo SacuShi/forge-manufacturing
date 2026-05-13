@@ -3,37 +3,43 @@
  *
  * Fixed 280px right panel. Shows full item analysis for the selected item.
  *
+ * When a blueprint is clicked (selectedTypeId matches an ESI blueprint type_id):
+ *   - Shows the PRODUCT icon (not the generic blueprint icon)
+ *   - Shows BPO/BPC badge, ME/TE, runs remaining
+ *   - Materials list with have/needed tick (✓) or cross (✗)
+ *   - Material cost breakdown per ingredient
+ *   - Chain items flagged (materials the user can themselves manufacture)
+ *
  * Data sources (in priority order):
  *   1. apiDetail (ItemDetailApiResponse) — live from /api/item-details
- *      Contains: price history sparkline, live market prices, material
- *      breakdown with have/needed, build cost, profit.
- *   2. fallbackDetail (ItemDetail) — derived from top-profitable results
+ *      Contains: price history, market prices, material breakdown, build cost.
+ *   2. fallbackDetail (ItemDetail) — derived from top-profitable results.
  *      Shown immediately while apiDetail is loading.
- *
- * On tablet (<1200px): overlays as a fixed right panel, toggled by detailOpen.
  *
  * Security:
  *   - All icon URLs use numeric typeId only.
  *   - No dangerouslySetInnerHTML.
  */
 
-import type { FC } from 'react';
+import { useMemo, type FC } from 'react';
 import type { ItemDetail, ItemDetailApiResponse, EsiBlueprint } from '../types';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
 interface RightSidebarProps {
-  selectedTypeId: number | null;
-  selectedName: string;
+  selectedTypeId:  number | null;
+  selectedName:    string;
   /** Fallback: derived from top-profitable data (immediate, no extra fetch) */
-  fallbackDetail: ItemDetail | null;
+  fallbackDetail:  ItemDetail | null;
   /** Live detail from /api/item-details (richer: materials, sparkline, prices) */
-  apiDetail: ItemDetailApiResponse | null;
-  detailLoading: boolean;
-  detailError: string | null;
-  detailOpen: boolean;
-  blueprints: EsiBlueprint[];
-  onClose: () => void;
+  apiDetail:       ItemDetailApiResponse | null;
+  detailLoading:   boolean;
+  detailError:     string | null;
+  detailOpen:      boolean;
+  blueprints:      EsiBlueprint[];
+  /** Item name map (typeId → name) — used for product icon lookup + chain detection */
+  itemNames:       Map<number, string>;
+  onClose:         () => void;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -67,9 +73,33 @@ const RightSidebar: FC<RightSidebarProps> = ({
   detailError,
   detailOpen,
   blueprints,
+  itemNames,
   onClose,
 }) => {
   const sidebarClass = `sidebar-right${detailOpen ? ' detail-open' : ''}`;
+
+  // ── Reverse name→typeId map (for product icon + chain item detection) ──────
+  const nameToTypeId = useMemo(() => {
+    const m = new Map<string, number>();
+    itemNames.forEach((name, typeId) => m.set(name.toLowerCase(), typeId));
+    return m;
+  }, [itemNames]);
+
+  /**
+   * Set of product type IDs that the user can manufacture.
+   * Built from blueprints: strip " Blueprint" from each blueprint name → look up product typeId.
+   */
+  const ownedProductTypeIds = useMemo(() => {
+    const s = new Set<number>();
+    blueprints.forEach((bp) => {
+      const bpName = itemNames.get(bp.type_id);
+      if (!bpName) return;
+      const productName = bpName.replace(/ Blueprint$/i, '').toLowerCase();
+      const productTypeId = nameToTypeId.get(productName);
+      if (productTypeId) s.add(productTypeId);
+    });
+    return s;
+  }, [blueprints, itemNames, nameToTypeId]);
 
   /* ── Empty state ─────────────────────────────────────────────────────────── */
   if (!selectedTypeId) {
@@ -83,15 +113,33 @@ const RightSidebar: FC<RightSidebarProps> = ({
     );
   }
 
-  const iconUrl = `${ICON_BASE}/${selectedTypeId}/icon?size=64`;
-  const name    = selectedName || apiDetail?.name || fallbackDetail?.name || `Item #${selectedTypeId}`;
-  const blueprint = blueprints.find((b) => b.type_id === selectedTypeId);
-  const runsText = blueprint
-    ? (blueprint.quantity === -1 ? 'Unlimited' : `${blueprint.runs}`)
-    : null;
+  // ── Detect if the selected item is a blueprint ────────────────────────────
+  const blueprint     = blueprints.find((b) => b.type_id === selectedTypeId);
+  const isBlueprintClick = blueprint !== undefined;
+  const isBpo = blueprint?.quantity === -1;
+
+  /**
+   * For blueprint clicks: derive the product type_id so we can show the
+   * product's icon and name instead of the generic blueprint icon/name.
+   */
+  const productTypeId: number | null = useMemo(() => {
+    if (!isBlueprintClick) return null;
+    const bpName = selectedName || itemNames.get(selectedTypeId) || '';
+    const productName = bpName.replace(/ Blueprint$/i, '').toLowerCase();
+    return nameToTypeId.get(productName) ?? null;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedTypeId, selectedName, isBlueprintClick, nameToTypeId]);
+
+  // Icon: use product icon for blueprints, item icon for everything else
+  const displayTypeId = (isBlueprintClick && productTypeId) ? productTypeId : selectedTypeId;
+  const iconUrl       = `${ICON_BASE}/${displayTypeId}/icon?size=64`;
+
+  // Display name: strip " Blueprint" suffix when clicked from blueprints tab
+  const rawName    = selectedName || apiDetail?.name || fallbackDetail?.name || `Item #${selectedTypeId}`;
+  const displayName = isBlueprintClick ? rawName.replace(/ Blueprint$/i, '') : rawName;
 
   return (
-    <aside className={sidebarClass} aria-label={`${name} detail analysis`}>
+    <aside className={sidebarClass} aria-label={`${displayName} detail analysis`}>
       <div className="detail-panel">
 
         {/* ── Header ──────────────────────────────────────────────────────── */}
@@ -109,19 +157,25 @@ const RightSidebar: FC<RightSidebarProps> = ({
             />
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div className="detail-item-name">{name}</div>
+            <div className="detail-item-name">{displayName}</div>
             {fallbackDetail && (
               <div className="detail-item-cat">{fallbackDetail.category || 'Manufacturing'}</div>
             )}
-            {fallbackDetail && (
-              <span className={
-                fallbackDetail.owned === 'BPO' ? 'badge badge-bpo' :
-                fallbackDetail.owned === 'BPC' ? 'badge badge-bpc' :
-                'badge badge-none'
-              }>
-                {fallbackDetail.owned}
-              </span>
-            )}
+            {/* Owned status badge (market-click fallback OR blueprint-click) */}
+            {(fallbackDetail || isBlueprintClick) && (() => {
+              const owned = isBlueprintClick
+                ? (isBpo ? 'BPO' : 'BPC')
+                : fallbackDetail?.owned;
+              return owned ? (
+                <span className={
+                  owned === 'BPO' ? 'badge badge-bpo' :
+                  owned === 'BPC' ? 'badge badge-bpc' :
+                  'badge badge-none'
+                }>
+                  {owned}
+                </span>
+              ) : null;
+            })()}
           </div>
           <button
             type="button"
@@ -133,20 +187,41 @@ const RightSidebar: FC<RightSidebarProps> = ({
           </button>
         </div>
 
-        {/* ── Runs remaining (for BPC/BPO) ───────────────────────────────── */}
+        {/* ── Blueprint info block (BPO/BPC, ME, TE, Runs) ───────────────── */}
         {blueprint && (
-          <div style={{
-            padding: '8px 12px',
-            borderBottom: '1px solid var(--color-border-light)',
-            fontSize: 12,
-            color: 'var(--color-text-secondary)',
-            display: 'flex',
-            justifyContent: 'space-between',
-          }}>
-            <span>Runs remaining</span>
-            <span style={{ fontWeight: 500, color: 'var(--color-accent-primary)' }}>
-              {runsText}
-            </span>
+          <div className="detail-section" style={{ paddingBottom: 6 }}>
+            <div className="detail-section-heading">Blueprint Details</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 4 }}>
+              <div className="stat-card" style={{ textAlign: 'center' }}>
+                <div className="stat-card-label">TYPE</div>
+                <div className="stat-card-value" style={{ fontSize: 12 }}>
+                  {isBpo ? 'BPO' : 'BPC'}
+                </div>
+              </div>
+              <div className="stat-card" style={{ textAlign: 'center' }}>
+                <div className="stat-card-label">ME</div>
+                <div className="stat-card-value" style={{ color: 'var(--color-success)', fontSize: 12 }}>
+                  {blueprint.material_efficiency}%
+                </div>
+              </div>
+              <div className="stat-card" style={{ textAlign: 'center' }}>
+                <div className="stat-card-label">TE</div>
+                <div className="stat-card-value" style={{ color: 'var(--color-warning)', fontSize: 12 }}>
+                  {blueprint.time_efficiency}%
+                </div>
+              </div>
+              <div className="stat-card" style={{ textAlign: 'center' }}>
+                <div className="stat-card-label">RUNS</div>
+                <div className="stat-card-value" style={{ fontSize: 12 }}>
+                  {isBpo ? '∞' : blueprint.runs}
+                </div>
+              </div>
+            </div>
+            {!isBpo && (
+              <div style={{ marginTop: 4, fontSize: 10, color: 'var(--color-text-tertiary)' }}>
+                {blueprint.runs} run{blueprint.runs !== 1 ? 's' : ''} remaining on this BPC
+              </div>
+            )}
           </div>
         )}
 
@@ -168,9 +243,9 @@ const RightSidebar: FC<RightSidebarProps> = ({
         {/* ── Live data from /api/item-details ────────────────────────────── */}
         {apiDetail && !detailLoading && (
           <>
-            {/* Build status badge */}
+            {/* Build readiness badge */}
             {apiDetail.buildInfo && (
-              <div style={{ marginBottom: 10 }}>
+              <div style={{ padding: '6px 12px' }}>
                 {apiDetail.buildInfo.blueprintOwned && apiDetail.buildInfo.canBuild && (
                   <span className="status-badge can-build">✓ Can Build Now</span>
                 )}
@@ -239,39 +314,25 @@ const RightSidebar: FC<RightSidebarProps> = ({
               </div>
             )}
 
-            {/* Build analysis & materials */}
+            {/* ── Build requirements + materials ───────────────────────────── */}
             {apiDetail.buildInfo && (
               <div className="detail-section">
-                <div className="detail-section-heading">Build Requirements</div>
-                <div className="mat-list" style={{ marginBottom: 10 }}>
-                  {apiDetail.buildInfo.materials.map((mat, i) => (
-                    <div key={i} className={`mat-row${mat.shortage > 0 ? ' mat-bad' : ' mat-ok'}`}>
-                      <span className="mat-name">
-                        <span className="mat-icon">
-                          <img
-                            src={`${ICON_BASE}/${mat.materialId}/icon?size=32`}
-                            alt=""
-                            width={14}
-                            height={14}
-                            crossOrigin="anonymous"
-                            onError={(e) => {
-                              (e.currentTarget as HTMLImageElement).style.visibility = 'hidden';
-                            }}
-                          />
-                        </span>
-                        {mat.shortage > 0 ? '✗' : '✓'} {mat.name}
-                      </span>
-                      <span className="mat-qty">{fmtN(mat.have)}/{fmtN(mat.needed)}</span>
-                    </div>
-                  ))}
+                <div className="detail-section-heading">
+                  Build Requirements
+                  <span style={{ float: 'right', fontSize: 10, color: 'var(--color-text-tertiary)',
+                    fontWeight: 400, letterSpacing: 0 }}>
+                    have / needed
+                  </span>
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontSize: 11 }}>
+
+                {/* Cost summary row */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 8 }}>
                   <div className="stat-card">
-                    <div className="stat-card-label">Build Cost</div>
+                    <div className="stat-card-label">Material Cost</div>
                     <div className="stat-card-value">{formatISK(apiDetail.buildInfo.totalCost)}</div>
                   </div>
                   <div className="stat-card">
-                    <div className="stat-card-label">Profit</div>
+                    <div className="stat-card-label">Profit / Run</div>
                     <div
                       className="stat-card-value"
                       style={{ color: apiDetail.buildInfo.profit > 0 ? 'var(--color-success)' : 'var(--color-danger)' }}
@@ -280,6 +341,81 @@ const RightSidebar: FC<RightSidebarProps> = ({
                     </div>
                   </div>
                 </div>
+
+                {/* Materials list */}
+                <div className="mat-list">
+                  {apiDetail.buildInfo.materials.map((mat, i) => {
+                    const ok       = mat.shortage <= 0;
+                    const isChain  = ownedProductTypeIds.has(mat.materialId);
+                    return (
+                      <div key={i} className={`mat-row${ok ? ' mat-ok' : ' mat-bad'}`}>
+                        <span className="mat-icon">
+                          <img
+                            src={`${ICON_BASE}/${mat.materialId}/icon?size=32`}
+                            alt=""
+                            width={16}
+                            height={16}
+                            crossOrigin="anonymous"
+                            onError={(e) => {
+                              (e.currentTarget as HTMLImageElement).style.visibility = 'hidden';
+                            }}
+                          />
+                        </span>
+                        <span className="mat-name" style={{ flex: 1 }}>
+                          <span style={{
+                            color: ok ? 'var(--color-success)' : 'var(--color-danger)',
+                            fontWeight: 700,
+                            marginRight: 4,
+                          }}>
+                            {ok ? '✓' : '✗'}
+                          </span>
+                          {mat.name}
+                          {/* Chain item badge — user has a BP to manufacture this */}
+                          {isChain && (
+                            <span style={{
+                              marginLeft: 4,
+                              fontSize: 9,
+                              background: 'rgba(192, 132, 252, 0.2)',
+                              color: '#c084fc',
+                              border: '0.5px solid rgba(192, 132, 252, 0.35)',
+                              borderRadius: 2,
+                              padding: '1px 4px',
+                              verticalAlign: 'middle',
+                            }}>
+                              ⛓ chain
+                            </span>
+                          )}
+                        </span>
+                        <span className="mat-qty">
+                          {fmtN(mat.have)}/{fmtN(mat.needed)}
+                        </span>
+                        {/* Per-material cost if available */}
+                        {mat.totalCost != null && mat.totalCost > 0 && (
+                          <span style={{ fontSize: 9, color: 'var(--color-text-tertiary)',
+                            marginLeft: 4, flexShrink: 0 }}>
+                            {formatISK(mat.totalCost)}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Shortage summary */}
+                {(() => {
+                  const missing = apiDetail.buildInfo!.materials.filter((m) => m.shortage > 0);
+                  if (missing.length === 0) return null;
+                  const shortfallTotal = missing.reduce((s, m) => s + (m.shortfallCost ?? 0), 0);
+                  return (
+                    <div style={{ marginTop: 6, padding: '6px 8px', borderRadius: 3,
+                      background: 'rgba(244, 67, 54, 0.08)', border: '0.5px solid rgba(244, 67, 54, 0.2)',
+                      fontSize: 10, color: 'var(--color-danger)' }}>
+                      {missing.length} material{missing.length !== 1 ? 's' : ''} short
+                      {shortfallTotal > 0 && <> · {formatISK(shortfallTotal)} to buy</>}
+                    </div>
+                  );
+                })()}
+
                 {apiDetail.buildInfo.profitMargin !== 0 && (
                   <div style={{ marginTop: 6, fontSize: 11, color: 'var(--color-text-tertiary)' }}>
                     Margin: {apiDetail.buildInfo.profitMargin.toFixed(1)}%
@@ -299,7 +435,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
           </>
         )}
 
-        {/* ── Fallback: precomputed financials (shown if no apiDetail yet) ── */}
+        {/* ── Fallback: precomputed financials (shown while apiDetail loads) ── */}
         {!apiDetail && !detailLoading && fallbackDetail && (
           <>
             <div className="detail-section">
@@ -323,9 +459,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
               </div>
               <div className="stat-card">
                 <div className="stat-card-label">Margin</div>
-                <div className="stat-card-value">
-                  {fallbackDetail.margin.toFixed(1)}%
-                </div>
+                <div className="stat-card-value">{fallbackDetail.margin.toFixed(1)}%</div>
               </div>
               <div className="stat-card">
                 <div className="stat-card-label">ISK / Hour</div>
@@ -341,6 +475,15 @@ const RightSidebar: FC<RightSidebarProps> = ({
               </div>
             </div>
           </>
+        )}
+
+        {/* ── Blueprint click with no apiDetail yet — show what we have ── */}
+        {isBlueprintClick && !apiDetail && !detailLoading && !fallbackDetail && (
+          <div style={{ padding: 16, color: 'var(--color-text-tertiary)', fontSize: 12,
+            textAlign: 'center' }}>
+            No market data for this blueprint.
+            <br />Select an item from the Market tab for full analysis.
+          </div>
         )}
 
       </div>

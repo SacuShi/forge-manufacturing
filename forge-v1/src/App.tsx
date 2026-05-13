@@ -419,6 +419,7 @@ const App: FC = () => {
           detailError={detailError}
           detailOpen={detailOpen}
           blueprints={auth.blueprints}
+          itemNames={itemNames}
           onClose={handleCloseDetail}
         />
 
