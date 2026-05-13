@@ -78,30 +78,48 @@ const RightSidebar: FC<RightSidebarProps> = ({
 }) => {
   const sidebarClass = `sidebar-right${detailOpen ? ' detail-open' : ''}`;
 
-  // ── Reverse name→typeId map (for product icon + chain item detection) ──────
+  // ── ALL hooks must be called before any early return ─────────────────────
+
+  // Reverse name→typeId map (for product icon + chain item detection)
   const nameToTypeId = useMemo(() => {
     const m = new Map<string, number>();
     itemNames.forEach((name, typeId) => m.set(name.toLowerCase(), typeId));
     return m;
   }, [itemNames]);
 
-  /**
-   * Set of product type IDs that the user can manufacture.
-   * Built from blueprints: strip " Blueprint" from each blueprint name → look up product typeId.
-   */
+  // Set of product type IDs the user can manufacture (for chain item badges)
   const ownedProductTypeIds = useMemo(() => {
     const s = new Set<number>();
     blueprints.forEach((bp) => {
       const bpName = itemNames.get(bp.type_id);
       if (!bpName) return;
       const productName = bpName.replace(/ Blueprint$/i, '').toLowerCase();
-      const productTypeId = nameToTypeId.get(productName);
-      if (productTypeId) s.add(productTypeId);
+      const pid = nameToTypeId.get(productName);
+      if (pid) s.add(pid);
     });
     return s;
   }, [blueprints, itemNames, nameToTypeId]);
 
-  /* ── Empty state ─────────────────────────────────────────────────────────── */
+  // Blueprint detection + product type_id lookup — all computed before any return
+  const blueprint        = blueprints.find((b) => b.type_id === (selectedTypeId ?? -1));
+  const isBlueprintClick = blueprint !== undefined;
+  const isBpo            = blueprint?.quantity === -1;
+
+  const productTypeId = useMemo<number | null>(() => {
+    if (!selectedTypeId || !isBlueprintClick) return null;
+    const bpName = selectedName || itemNames.get(selectedTypeId) || '';
+    const productName = bpName.replace(/ Blueprint$/i, '').toLowerCase();
+    return nameToTypeId.get(productName) ?? null;
+  }, [selectedTypeId, selectedName, isBlueprintClick, itemNames, nameToTypeId]);
+
+  // Derived display values (safe to compute even when selectedTypeId is null)
+  const displayTypeId = (isBlueprintClick && productTypeId) ? productTypeId : (selectedTypeId ?? 0);
+  const iconUrl       = selectedTypeId ? `${ICON_BASE}/${displayTypeId}/icon?size=64` : '';
+  const rawName       = selectedName || apiDetail?.name || fallbackDetail?.name
+                        || (selectedTypeId ? `Item #${selectedTypeId}` : '');
+  const displayName   = isBlueprintClick ? rawName.replace(/ Blueprint$/i, '') : rawName;
+
+  /* ── Empty state — rendered AFTER all hooks ──────────────────────────────── */
   if (!selectedTypeId) {
     return (
       <aside className={sidebarClass} aria-label="Item detail">
@@ -112,31 +130,6 @@ const RightSidebar: FC<RightSidebarProps> = ({
       </aside>
     );
   }
-
-  // ── Detect if the selected item is a blueprint ────────────────────────────
-  const blueprint     = blueprints.find((b) => b.type_id === selectedTypeId);
-  const isBlueprintClick = blueprint !== undefined;
-  const isBpo = blueprint?.quantity === -1;
-
-  /**
-   * For blueprint clicks: derive the product type_id so we can show the
-   * product's icon and name instead of the generic blueprint icon/name.
-   */
-  const productTypeId: number | null = useMemo(() => {
-    if (!isBlueprintClick) return null;
-    const bpName = selectedName || itemNames.get(selectedTypeId) || '';
-    const productName = bpName.replace(/ Blueprint$/i, '').toLowerCase();
-    return nameToTypeId.get(productName) ?? null;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedTypeId, selectedName, isBlueprintClick, nameToTypeId]);
-
-  // Icon: use product icon for blueprints, item icon for everything else
-  const displayTypeId = (isBlueprintClick && productTypeId) ? productTypeId : selectedTypeId;
-  const iconUrl       = `${ICON_BASE}/${displayTypeId}/icon?size=64`;
-
-  // Display name: strip " Blueprint" suffix when clicked from blueprints tab
-  const rawName    = selectedName || apiDetail?.name || fallbackDetail?.name || `Item #${selectedTypeId}`;
-  const displayName = isBlueprintClick ? rawName.replace(/ Blueprint$/i, '') : rawName;
 
   return (
     <aside className={sidebarClass} aria-label={`${displayName} detail analysis`}>
