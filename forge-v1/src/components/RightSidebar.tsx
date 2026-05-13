@@ -87,37 +87,48 @@ const RightSidebar: FC<RightSidebarProps> = ({
     return m;
   }, [itemNames]);
 
-  // Set of product type IDs the user can manufacture (for chain item badges)
-  const ownedProductTypeIds = useMemo(() => {
-    const s = new Set<number>();
+  /**
+   * Map: productTypeId → EsiBlueprint
+   * Allows detecting a blueprint even when the caller passed the PRODUCT type_id
+   * (which is what MainContent now does so /api/item-details gets correct data).
+   * Also builds the set of owned product type IDs for chain item badges.
+   */
+  const { productToBlueprintMap, ownedProductTypeIds } = useMemo(() => {
+    const ptbMap = new Map<number, EsiBlueprint>();
+    const ownedSet = new Set<number>();
     blueprints.forEach((bp) => {
       const bpName = itemNames.get(bp.type_id);
       if (!bpName) return;
       const productName = bpName.replace(/ Blueprint$/i, '').toLowerCase();
       const pid = nameToTypeId.get(productName);
-      if (pid) s.add(pid);
+      if (pid) {
+        ptbMap.set(pid, bp);
+        ownedSet.add(pid);
+      }
     });
-    return s;
+    return { productToBlueprintMap: ptbMap, ownedProductTypeIds: ownedSet };
   }, [blueprints, itemNames, nameToTypeId]);
 
-  // Blueprint detection + product type_id lookup — all computed before any return
-  const blueprint        = blueprints.find((b) => b.type_id === (selectedTypeId ?? -1));
+  /**
+   * Detect blueprint:
+   *   1. Direct match — selectedTypeId is a blueprint type_id (legacy/edge case)
+   *   2. Product match — selectedTypeId is the product type_id (normal blueprint tab click)
+   */
+  const blueprint = useMemo(() => {
+    if (!selectedTypeId) return undefined;
+    return blueprints.find((b) => b.type_id === selectedTypeId)
+        ?? productToBlueprintMap.get(selectedTypeId);
+  }, [selectedTypeId, blueprints, productToBlueprintMap]);
+
   const isBlueprintClick = blueprint !== undefined;
   const isBpo            = blueprint?.quantity === -1;
 
-  const productTypeId = useMemo<number | null>(() => {
-    if (!selectedTypeId || !isBlueprintClick) return null;
-    const bpName = selectedName || itemNames.get(selectedTypeId) || '';
-    const productName = bpName.replace(/ Blueprint$/i, '').toLowerCase();
-    return nameToTypeId.get(productName) ?? null;
-  }, [selectedTypeId, selectedName, isBlueprintClick, itemNames, nameToTypeId]);
-
-  // Derived display values (safe to compute even when selectedTypeId is null)
-  const displayTypeId = (isBlueprintClick && productTypeId) ? productTypeId : (selectedTypeId ?? 0);
-  const iconUrl       = selectedTypeId ? `${ICON_BASE}/${displayTypeId}/icon?size=64` : '';
-  const rawName       = selectedName || apiDetail?.name || fallbackDetail?.name
-                        || (selectedTypeId ? `Item #${selectedTypeId}` : '');
-  const displayName   = isBlueprintClick ? rawName.replace(/ Blueprint$/i, '') : rawName;
+  // Since MainContent now passes product type_id, selectedTypeId IS the product typeId.
+  // We only need a fallback strip for edge cases where blueprint type_id was passed.
+  const rawName     = selectedName || apiDetail?.name || fallbackDetail?.name
+                      || (selectedTypeId ? `Item #${selectedTypeId}` : '');
+  const displayName = rawName.replace(/ Blueprint$/i, '');
+  const iconUrl     = selectedTypeId ? `${ICON_BASE}/${selectedTypeId}/icon?size=64` : '';
 
   /* ── Empty state — rendered AFTER all hooks ──────────────────────────────── */
   if (!selectedTypeId) {

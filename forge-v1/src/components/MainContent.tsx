@@ -287,14 +287,18 @@ const MainContent: FC<MainContentProps> = ({
               const name          = getBpName(b.type_id);
               const isBpo         = b.quantity === -1;
               const productTypeId = getProductTypeId(b.type_id);
+              // Pass the PRODUCT typeId + product name so /api/item-details
+              // returns full market + build data (blueprint type_id has no market data)
+              const selectId   = productTypeId ?? b.type_id;
+              const selectName = name.replace(/ Blueprint$/i, '');
               return (
                 <div
                   key={b.item_id}
                   className="bp-card"
                   role="button"
                   tabIndex={0}
-                  onClick={() => onSelectItem(b.type_id, name)}
-                  onKeyDown={(e) => e.key === 'Enter' && onSelectItem(b.type_id, name)}
+                  onClick={() => onSelectItem(selectId, selectName)}
+                  onKeyDown={(e) => e.key === 'Enter' && onSelectItem(selectId, selectName)}
                 >
                   {/* Product icon — BPO gets dark navy + pale blue edge; BPC gets pale blue bg + dark edge */}
                   <div className={`bp-icon ${isBpo ? 'bp-icon-bpo' : 'bp-icon-bpc'}`}>
