@@ -462,6 +462,49 @@
   color: var(--color-text-tertiary);
 }
 
+/* Pill filter buttons (replaces the owned dropdown on Market tab) */
+.pill-filter {
+  padding: 3px 10px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+  background: var(--color-bg-tertiary);
+  border: 0.5px solid var(--color-border-medium);
+  color: var(--color-text-secondary);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+.pill-filter:hover {
+  background: rgba(79, 195, 247, 0.08);
+  border-color: rgba(79, 195, 247, 0.3);
+  color: var(--color-text-primary);
+}
+.pill-filter.active {
+  background: rgba(79, 195, 247, 0.15);
+  border-color: var(--color-accent-primary);
+  color: var(--color-accent-primary);
+}
+
+/* Mini stats bar — buildable count, top profit, avg margin */
+.market-stats-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+  margin-left: auto;
+  white-space: nowrap;
+}
+.market-stats-bar .stat-hi {
+  color: var(--color-accent-primary);
+  font-weight: 600;
+}
+.market-stats-bar .stat-sep {
+  opacity: 0.4;
+}
+
 .filter-select, .filter-input {
   padding: 5px 10px;
   background: var(--color-bg-tertiary);

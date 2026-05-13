@@ -77,6 +77,7 @@ const MainContent: FC<MainContentProps> = ({
   const [sortField,     setSortField]     = useState<SortField>('rank');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
   const [filterOwned,   setFilterOwned]   = useState<string>('all');
+  const [marketSearch,  setMarketSearch]  = useState('');
 
   /* ── Blueprint tab state ─────────────────────────────────────────────────── */
   const [bpSearch, setBpSearch] = useState('');
@@ -135,16 +136,27 @@ const MainContent: FC<MainContentProps> = ({
   /* ── Derived: filtered + sorted market items ─────────────────────────────── */
   const displayItems = useMemo<MarketItem[]>(() => {
     let list = [...marketItems];
-    if (filterOwned !== 'all') {
+
+    // Name search
+    if (marketSearch.trim()) {
+      const q = marketSearch.trim().toLowerCase();
+      list = list.filter((i) => i.name.toLowerCase().includes(q));
+    }
+
+    // Ownership pill filter
+    if (filterOwned === 'can-build') {
+      list = list.filter((i) => i.canBuild);
+    } else if (filterOwned === 'BPO' || filterOwned === 'BPC') {
       list = list.filter((i) => i.owned === filterOwned);
     }
+
     list.sort((a, b) => {
       const aVal = a[sortField as keyof MarketItem] as number;
       const bVal = b[sortField as keyof MarketItem] as number;
       return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
     });
     return list;
-  }, [marketItems, filterOwned, sortField, sortDirection]);
+  }, [marketItems, marketSearch, filterOwned, sortField, sortDirection]);
 
   /* ── Derived: filtered blueprints ───────────────────────────────────────── */
   const filteredBps = useMemo(() => {
@@ -211,19 +223,58 @@ const MainContent: FC<MainContentProps> = ({
             </span>
           </div>
 
-          <div className="filter-row" style={{ padding: '8px 20px' }}>
-            <label className="filter-label" htmlFor="owned-filter">Blueprint owned:</label>
-            <select
-              id="owned-filter"
-              className="filter-select"
-              value={filterOwned}
-              onChange={(e) => setFilterOwned(e.target.value)}
-            >
-              <option value="all">All</option>
-              <option value="BPO">BPO only</option>
-              <option value="BPC">BPC only</option>
-              <option value="—">Not owned</option>
-            </select>
+          {/* ── Search + pill filters + stats bar ──────────────────────── */}
+          <div className="filter-row" style={{ padding: '8px 20px', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+            {/* Name search */}
+            <input
+              type="text"
+              value={marketSearch}
+              onChange={(e) => setMarketSearch(e.target.value)}
+              placeholder="Search items…"
+              className="filter-input"
+              style={{ width: 160 }}
+              aria-label="Search market items"
+            />
+
+            {/* Ownership pill filters */}
+            <div style={{ display: 'flex', gap: 4 }}>
+              {(['all', 'can-build', 'BPO', 'BPC'] as const).map((v) => {
+                const labels: Record<string, string> = {
+                  'all': 'All', 'can-build': '✓ Can Build', 'BPO': 'BPO', 'BPC': 'BPC',
+                };
+                return (
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() => setFilterOwned(v)}
+                    className={`pill-filter${filterOwned === v ? ' active' : ''}`}
+                    aria-pressed={filterOwned === v}
+                  >
+                    {labels[v]}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Mini stats bar */}
+            {marketItems.length > 0 && (() => {
+              const buildable  = marketItems.filter((i) => i.canBuild).length;
+              const topProfit  = Math.max(...marketItems.map((i) => i.profitPerRun));
+              const avgMargin  = marketItems.reduce((s, i) => s + i.margin, 0) / marketItems.length;
+              const fmt = (n: number) =>
+                n >= 1e9 ? (n / 1e9).toFixed(1) + 'B' :
+                n >= 1e6 ? (n / 1e6).toFixed(0) + 'M' :
+                n >= 1e3 ? (n / 1e3).toFixed(0) + 'K' : String(Math.round(n));
+              return (
+                <div className="market-stats-bar">
+                  <span><span className="stat-hi">{buildable}</span> buildable now</span>
+                  <span className="stat-sep">·</span>
+                  <span>Top: <span className="stat-hi">{fmt(topProfit)} ISK</span></span>
+                  <span className="stat-sep">·</span>
+                  <span>Avg margin: <span className="stat-hi">{avgMargin.toFixed(1)}%</span></span>
+                </div>
+              );
+            })()}
           </div>
 
           {marketLoading && (
