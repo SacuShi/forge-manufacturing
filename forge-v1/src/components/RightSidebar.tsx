@@ -40,6 +40,8 @@ interface RightSidebarProps {
   /** Item name map (typeId → name) — used for product icon lookup + chain detection */
   itemNames:       Map<number, string>;
   onClose:         () => void;
+  /** Called when a material row or chain item is clicked — drills into that item */
+  onSelectItem:    (typeId: number, name: string) => void;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -75,6 +77,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
   blueprints,
   itemNames,
   onClose,
+  onSelectItem,
 }) => {
   const sidebarClass = `sidebar-right${detailOpen ? ' detail-open' : ''}`;
 
@@ -165,20 +168,43 @@ const RightSidebar: FC<RightSidebarProps> = ({
             {fallbackDetail && (
               <div className="detail-item-cat">{fallbackDetail.category || 'Manufacturing'}</div>
             )}
-            {/* Owned status badge (market-click fallback OR blueprint-click) */}
-            {(fallbackDetail || isBlueprintClick) && (() => {
-              const owned = isBlueprintClick
-                ? (isBpo ? 'BPO' : 'BPC')
-                : fallbackDetail?.owned;
-              return owned ? (
-                <span className={
-                  owned === 'BPO' ? 'badge badge-bpo' :
-                  owned === 'BPC' ? 'badge badge-bpc' :
-                  'badge badge-none'
-                }>
-                  {owned}
-                </span>
-              ) : null;
+            {/* ── Owned / Not Owned indicator ──────────────────────────── */}
+            {(() => {
+              const isOwned = selectedTypeId ? ownedProductTypeIds.has(selectedTypeId) : false;
+              if (isBlueprintClick && blueprint) {
+                // Clicked directly from blueprints tab — show exact type + ME/TE
+                return (
+                  <div style={{ display: 'flex', gap: 4, marginTop: 4, flexWrap: 'wrap' }}>
+                    <span className={isBpo ? 'badge badge-bpo' : 'badge badge-bpc'}>
+                      {isBpo ? '✓ BPO Owned' : '✓ BPC Owned'}
+                    </span>
+                  </div>
+                );
+              }
+              if (isOwned) {
+                // Clicked from market/material — they own a blueprint for this
+                const bp = selectedTypeId ? productToBlueprintMap.get(selectedTypeId) : undefined;
+                const type = bp ? (bp.quantity === -1 ? 'BPO' : 'BPC') : 'BP';
+                return (
+                  <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
+                    <span className={type === 'BPO' ? 'badge badge-bpo' : 'badge badge-bpc'}>
+                      ✓ {type} Owned
+                    </span>
+                  </div>
+                );
+              }
+              // No blueprint owned
+              return (
+                <div style={{ marginTop: 4 }}>
+                  <span className="badge badge-none" style={{
+                    background: 'rgba(244, 67, 54, 0.12)',
+                    color: 'var(--color-danger)',
+                    border: '0.5px solid rgba(244, 67, 54, 0.3)',
+                  }}>
+                    ✗ No Blueprint
+                  </span>
+                </div>
+              );
             })()}
           </div>
           <button
@@ -346,13 +372,24 @@ const RightSidebar: FC<RightSidebarProps> = ({
                   </div>
                 </div>
 
-                {/* Materials list */}
+                {/* Materials list — every row is clickable → drills into that item */}
                 <div className="mat-list">
                   {apiDetail.buildInfo.materials.map((mat, i) => {
-                    const ok       = mat.shortage <= 0;
-                    const isChain  = ownedProductTypeIds.has(mat.materialId);
+                    const ok      = mat.shortage <= 0;
+                    const isChain = ownedProductTypeIds.has(mat.materialId);
                     return (
-                      <div key={i} className={`mat-row${ok ? ' mat-ok' : ' mat-bad'}`}>
+                      <div
+                        key={i}
+                        className={`mat-row mat-row-clickable${ok ? ' mat-ok' : ' mat-bad'}`}
+                        role="button"
+                        tabIndex={0}
+                        title={isChain
+                          ? `Click to view production chain for ${mat.name}`
+                          : `Click to view market data for ${mat.name}`}
+                        onClick={() => onSelectItem(mat.materialId, mat.name)}
+                        onKeyDown={(e) => e.key === 'Enter' && onSelectItem(mat.materialId, mat.name)}
+                      >
+                        {/* Material icon */}
                         <span className="mat-icon">
                           <img
                             src={`${ICON_BASE}/${mat.materialId}/icon?size=32`}
@@ -365,19 +402,24 @@ const RightSidebar: FC<RightSidebarProps> = ({
                             }}
                           />
                         </span>
+
+                        {/* Have/need tick */}
+                        <span style={{
+                          color: ok ? 'var(--color-success)' : 'var(--color-danger)',
+                          fontWeight: 700,
+                          fontSize: 12,
+                          flexShrink: 0,
+                          width: 14,
+                        }}>
+                          {ok ? '✓' : '✗'}
+                        </span>
+
+                        {/* Name + chain badge */}
                         <span className="mat-name" style={{ flex: 1 }}>
-                          <span style={{
-                            color: ok ? 'var(--color-success)' : 'var(--color-danger)',
-                            fontWeight: 700,
-                            marginRight: 4,
-                          }}>
-                            {ok ? '✓' : '✗'}
-                          </span>
                           {mat.name}
-                          {/* Chain item badge — user has a BP to manufacture this */}
                           {isChain && (
                             <span style={{
-                              marginLeft: 4,
+                              marginLeft: 5,
                               fontSize: 9,
                               background: 'rgba(192, 132, 252, 0.2)',
                               color: '#c084fc',
@@ -385,21 +427,34 @@ const RightSidebar: FC<RightSidebarProps> = ({
                               borderRadius: 2,
                               padding: '1px 4px',
                               verticalAlign: 'middle',
+                              cursor: 'pointer',
                             }}>
                               ⛓ chain
                             </span>
                           )}
                         </span>
+
+                        {/* Have / needed counts */}
                         <span className="mat-qty">
                           {fmtN(mat.have)}/{fmtN(mat.needed)}
                         </span>
-                        {/* Per-material cost if available */}
+
+                        {/* Per-material cost */}
                         {mat.totalCost != null && mat.totalCost > 0 && (
                           <span style={{ fontSize: 9, color: 'var(--color-text-tertiary)',
                             marginLeft: 4, flexShrink: 0 }}>
                             {formatISK(mat.totalCost)}
                           </span>
                         )}
+
+                        {/* Drill-in arrow hint */}
+                        <span style={{
+                          fontSize: 9,
+                          color: 'var(--color-text-tertiary)',
+                          marginLeft: 3,
+                          flexShrink: 0,
+                          opacity: 0.6,
+                        }}>▶</span>
                       </div>
                     );
                   })}

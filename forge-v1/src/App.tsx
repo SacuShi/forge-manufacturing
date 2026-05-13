@@ -421,6 +421,7 @@ const App: FC = () => {
           blueprints={auth.blueprints}
           itemNames={itemNames}
           onClose={handleCloseDetail}
+          onSelectItem={handleSelectItem}
         />
 
         <ChatPanel
