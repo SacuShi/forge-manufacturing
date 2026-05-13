@@ -113,6 +113,8 @@ const App: FC = () => {
   const [selectedName,   setSelectedName]   = useState('');
   const [thinking,       setThinking]       = useState(false);
   const [historyLoaded,  setHistoryLoaded]  = useState(false);
+  /** Navigation stack for the info panel — allows ← Back through chain drill-downs */
+  const [panelHistory,   setPanelHistory]   = useState<Array<{ typeId: number; name: string }>>([]);
 
   // ── Market data ────────────────────────────────────────────────────────────
   const [chatMessages,  setChatMessages]  = useState<ChatMessage[]>([]);
@@ -221,15 +223,37 @@ const App: FC = () => {
   }, []);
 
   const handleSelectItem = useCallback((typeId: number, name: string) => {
-    setSelectedTypeId(typeId);
-    setSelectedName(name);
+    // Push the currently displayed item onto the back-stack before navigating
+    setSelectedTypeId((prev) => {
+      if (prev !== null) {
+        setSelectedName((prevName) => {
+          setPanelHistory((h) => [...h, { typeId: prev, name: prevName }]);
+          return name;
+        });
+      } else {
+        setSelectedName(name);
+      }
+      return typeId;
+    });
     setDetailOpen(true);
+  }, []);
+
+  /** Navigate back one step in the info-panel drill-down history. */
+  const handlePanelBack = useCallback(() => {
+    setPanelHistory((h) => {
+      if (h.length === 0) return h;
+      const prev = h[h.length - 1];
+      setSelectedTypeId(prev.typeId);
+      setSelectedName(prev.name);
+      return h.slice(0, -1);
+    });
   }, []);
 
   const handleCloseDetail = useCallback(() => {
     setSelectedTypeId(null);
     setSelectedName('');
     setDetailOpen(false);
+    setPanelHistory([]);   // clear back-stack on explicit close
   }, []);
 
   /** Send a message to the AI backend, persist both sides to the server. */
@@ -422,6 +446,8 @@ const App: FC = () => {
           itemNames={itemNames}
           onClose={handleCloseDetail}
           onSelectItem={handleSelectItem}
+          onBack={handlePanelBack}
+          canGoBack={panelHistory.length > 0}
         />
 
         <ChatPanel

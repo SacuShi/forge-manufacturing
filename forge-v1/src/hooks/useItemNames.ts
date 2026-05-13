@@ -10,7 +10,7 @@
 
 import { useState, useEffect } from 'react';
 
-const STORAGE_KEY  = 'forge_item_names';
+const STORAGE_KEY  = 'forge_item_names_v2';   // v2 — includes unpublished types
 const MIN_ENTRIES  = 10_000;
 
 interface ItemNamesApiResponse {

@@ -42,6 +42,10 @@ interface RightSidebarProps {
   onClose:         () => void;
   /** Called when a material row or chain item is clicked — drills into that item */
   onSelectItem:    (typeId: number, name: string) => void;
+  /** Navigate back one step in the drill-down history */
+  onBack?:         () => void;
+  /** True when there is at least one entry in the back-stack */
+  canGoBack?:      boolean;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -78,6 +82,8 @@ const RightSidebar: FC<RightSidebarProps> = ({
   itemNames,
   onClose,
   onSelectItem,
+  onBack,
+  canGoBack = false,
 }) => {
   const sidebarClass = `sidebar-right${detailOpen ? ' detail-open' : ''}`;
 
@@ -148,6 +154,20 @@ const RightSidebar: FC<RightSidebarProps> = ({
   return (
     <aside className={sidebarClass} aria-label={`${displayName} detail analysis`}>
       <div className="detail-panel">
+
+        {/* ── Back button (shown when drill-down history exists) ───────────── */}
+        {canGoBack && (
+          <div style={{ padding: '8px 12px 0' }}>
+            <button
+              type="button"
+              className="btn"
+              onClick={onBack}
+              aria-label="Go back to previous item"
+            >
+              ← Back
+            </button>
+          </div>
+        )}
 
         {/* ── Header ──────────────────────────────────────────────────────── */}
         <div className="detail-hero">

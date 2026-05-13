@@ -66,9 +66,9 @@
 
   /* Layout */
   --header-height:       48px;
-  --sidebar-left-width:  240px;
-  --sidebar-right-width: 280px;
-  --chat-panel-width:    340px;
+  --sidebar-left-width:  200px;   /* narrowed from 240px */
+  --sidebar-right-width: 360px;   /* widened from 280px; also used as tablet overlay width */
+  --chat-panel-width:    510px;   /* 150% of original 340px */
 }
 
 /* ── Light mode — [data-theme='light'] toggle ───────────────────────────────── */

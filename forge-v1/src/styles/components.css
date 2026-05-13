@@ -382,7 +382,7 @@
 
 .main-content {
   flex: 1;
-  min-width: 0;
+  min-width: 280px;   /* prevents collapse when chat panel is wide open */
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -674,8 +674,11 @@ tbody td.align-center { text-align: center; }
    ══════════════════════════════════════════════════════════════════════════ */
 
 .sidebar-right {
-  width: var(--sidebar-right-width);
+  /* On desktop: flex:1 so it equals main-content width and both resize together.
+     min-width keeps it usable; max-width prevents it growing too large on wide screens. */
+  flex: 1;
   min-width: var(--sidebar-right-width);
+  max-width: calc(var(--sidebar-right-width) * 1.6);
   background: var(--color-bg-secondary);
   border-left: 0.5px solid var(--color-border-light);
   padding: 0;
@@ -1199,14 +1202,17 @@ tbody td.align-center { text-align: center; }
 
 @media (max-width: 1199px) {
   .sidebar-right {
+    /* On tablet: fixed overlay — reset flex sizing, use explicit width */
     position: fixed;
     right: 0;
     top: var(--header-height);
     height: calc(100vh - var(--header-height));
     z-index: 20;
     transform: translateX(100%);
+    flex: none;
+    width: var(--sidebar-right-width);
     min-width: var(--sidebar-right-width);
-    /* Shadow to separate from content */
+    max-width: var(--sidebar-right-width);
     box-shadow: -4px 0 20px rgba(0, 0, 0, 0.4);
   }
 
