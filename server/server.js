@@ -1159,9 +1159,23 @@ app.post('/api/analyze-blueprints', async (req, res) => {
       case 'margin':
         filtered.sort((a, b) => b.profitMargin - a.profitMargin);
         break;
+      case 'completion':
+        // Sort by % of required materials already owned — useful for "closest to build-ready"
+        filtered.sort((a, b) => {
+          const pctA = a.materials.length === 0 ? 1 : a.materials.reduce((s, m) => s + Math.min(m.have / m.needed, 1), 0) / a.materials.length;
+          const pctB = b.materials.length === 0 ? 1 : b.materials.reduce((s, m) => s + Math.min(m.have / m.needed, 1), 0) / b.materials.length;
+          return pctB - pctA;
+        });
+        break;
       default:
         filtered.sort((a, b) => b.profit - a.profit);
     }
+
+    // Add completion % to each result so AI can report it
+    filtered.forEach(r => {
+      r.completionPct = r.materials.length === 0 ? 100
+        : Math.round(r.materials.reduce((s, m) => s + Math.min(m.have / m.needed, 1), 0) / r.materials.length * 100);
+    });
     
     // Return top N results
     const topResults = filtered.slice(0, limit);
@@ -1226,6 +1240,43 @@ app.post('/api/ai-chat',
       return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
     }
 
+    // ── Build rich player context from session cache ────────────────────────
+    // The frontend sends no context field — we build it server-side from the
+    // cached session so the AI always has live character data.
+    const bpoCount = blueprints.filter(b => b.quantity === -1).length;
+    const bpcCount = blueprints.filter(b => b.quantity > 0).length;
+
+    // Resolve top asset names from DB (up to 30 most-held stacks)
+    const assetsByQty = [...assets].sort((a, b) => b.quantity - a.quantity).slice(0, 30);
+    const assetTypeIds = assetsByQty.map(a => a.type_id);
+    let assetNameMap = {};
+    if (assetTypeIds.length > 0) {
+      const placeholders = assetTypeIds.map(() => '?').join(',');
+      const nameRows = await dbAll(
+        `SELECT type_id, name FROM items WHERE type_id IN (${placeholders})`,
+        assetTypeIds
+      );
+      nameRows.forEach(r => { assetNameMap[r.type_id] = r.name; });
+    }
+    const assetSummary = assetsByQty
+      .map(a => `${assetNameMap[a.type_id] || `#${a.type_id}`}: ${a.quantity.toLocaleString()}`)
+      .join(', ');
+
+    // Resolve job product names
+    const jobSummary = jobs.length === 0 ? 'None' : jobs.slice(0, 20).map(j => {
+      const activity = j.activity_id === 1 ? 'Mfg' : j.activity_id === 9 ? 'Reaction'
+        : j.activity_id === 8 ? 'Invention' : j.activity_id === 5 ? 'Copy'
+        : j.activity_id === 3 ? 'TE Research' : j.activity_id === 4 ? 'ME Research' : 'Job';
+      return `${j.product_name || j.blueprint_type_id} ×${j.runs} [${activity}]`;
+    }).join('; ');
+
+    const builtContext = [
+      `Wallet: ${(wallet / 1e9).toFixed(2)}B ISK`,
+      `Blueprints: ${blueprints.length} total (${bpoCount} BPOs, ${bpcCount} BPCs)`,
+      `Assets: ${assets.length} stacks — top holdings: ${assetSummary}`,
+      `Active jobs (${jobs.length}): ${jobSummary}`,
+    ].join('\n');
+
     // Tool definitions for AI
     const tools = [
       {
@@ -1253,8 +1304,8 @@ app.post('/api/ai-chat',
           properties: {
             sortBy: {
               type: "string",
-              enum: ["profit", "cost", "time", "materials", "margin"],
-              description: "How to sort results: profit (most profitable), cost (most expensive), time (longest build), materials (most materials), margin (best profit %)"
+              enum: ["profit", "cost", "time", "materials", "margin", "completion"],
+              description: "How to sort results: profit (most profitable), cost (most expensive), time (longest build), materials (most materials), margin (best profit %), completion (closest to having all materials — use for 'T2 chains I can almost build' queries)"
             },
             limit: {
               type: "number",
@@ -1280,6 +1331,20 @@ app.post('/api/ai-chat',
             }
           },
           required: ["itemName"]
+        }
+      },
+      {
+        name: "get_active_jobs",
+        description: "Get the player's current active industry jobs from their session. Use when asked about active jobs, what's currently building, job queue, time remaining, reactions running, etc.",
+        input_schema: {
+          type: "object",
+          properties: {
+            activityFilter: {
+              type: "string",
+              enum: ["all", "manufacturing", "reaction", "invention", "research", "copying"],
+              description: "Filter jobs by activity type (default: all)"
+            }
+          }
         }
       },
       {
@@ -1340,7 +1405,7 @@ app.post('/api/ai-chat',
           },
           {
             type: "text",
-            text: `Current player context:\n${context || 'No context provided'}`
+            text: `Current player context:\n${builtContext}`
           }
         ],
         messages: conversationMessages,
@@ -1408,6 +1473,28 @@ app.post('/api/ai-chat',
 
         try {
           switch (toolUse.name) {
+            case "get_active_jobs": {
+              const actFilter = toolUse.input.activityFilter || 'all';
+              const activityIds = { manufacturing: [1], reaction: [9], invention: [8], research: [3,4], copying: [5] };
+              const allowedIds = activityIds[actFilter];
+              const filteredJobs = allowedIds
+                ? jobs.filter(j => allowedIds.includes(j.activity_id))
+                : jobs;
+              const actLabel = id => ({ 1:'Manufacturing',3:'TE Research',4:'ME Research',5:'Copying',8:'Invention',9:'Reaction',11:'Rev.Eng' }[id] || `Activity ${id}`);
+              toolResult = {
+                total: filteredJobs.length,
+                jobs: filteredJobs.map(j => ({
+                  product: j.product_name || `Blueprint #${j.blueprint_type_id}`,
+                  activity: actLabel(j.activity_id),
+                  runs: j.runs,
+                  status: j.status,
+                  remaining: j.remaining,
+                  done: j.done,
+                }))
+              };
+              break;
+            }
+
             case "get_blueprint":
               const bpRes = await fetch(`http://localhost:${PORT}/api/get-blueprint`, {
                 method: "POST",
@@ -2353,84 +2440,99 @@ const AI_PRICING = {
 // Moving this here enables Anthropic prompt caching (90% token discount
 // on repeat calls within 5 minutes)
 // ═══════════════════════════════════════════════════════════════════════
-const FORGE_STATIC_SYSTEM_PROMPT = `You are F.O.R.G.E. - a specialized EVE Online manufacturing advisor with access to tools for querying blueprints and analyzing profitability.
+const FORGE_STATIC_SYSTEM_PROMPT = `You are F.O.R.G.E. — a specialized EVE Online manufacturing intelligence advisor.
 
-CRITICAL: You ONLY answer questions about EVE Online. This includes:
-- Manufacturing, industry, blueprints, production
+══ SCOPE ══
+You ONLY answer questions about EVE Online:
+- Manufacturing, industry, blueprints, production, T2/T3 chains
 - Items, ships, modules, materials, components
-- Market prices, profitability, costs
-- Assets, inventory, blueprints owned
+- Market prices, profitability, ISK/hour
+- Assets, inventory, active jobs, blueprint ownership
 - EVE game mechanics related to industry
 
-You MUST refuse ALL non-EVE questions politely:
-- General knowledge questions → "I'm specialized for EVE manufacturing only"
-- Coding help → "I only assist with EVE industry questions"
-- Personal advice → "I'm designed specifically for EVE manufacturing"
-- Any topic outside EVE → "This tool is for EVE Online manufacturing only"
+Politely refuse ALL non-EVE questions: "I'm specialized for EVE manufacturing only."
 
-You have three tools available:
-1. get_blueprint(itemName) - Get materials and costs for ANY item blueprint in database (4,837 blueprints)
-2. analyze_blueprints(sortBy, limit, buildableOnly) - Analyze ALL user's blueprints for profit/buildability
-3. get_price(itemName) - Get current Jita price for any item
+══ TOOLS (use these to answer questions — do not guess from memory) ══
+1. get_precomputed(sort, limit, search, minProfit, includeRisky)
+   PREFERRED for profit/market questions. Pre-computed Jita data, fast, no cost.
+   Use FIRST for: "what's profitable", "top items", "best ISK/hour".
 
-IMPORTANT: When tool results include productName: null, use the productId to look up the name with get_blueprint(productId). Never show "Item ID X" to users - always resolve names.
+2. analyze_blueprints(sortBy, limit, buildableOnly)
+   Analyzes the player's OWN blueprints against their assets.
+   sortBy options: profit | margin | cost | time | materials | completion
+   Use "completion" sort for: "T2 chains closest to finishing", "what can I almost build",
+   "which blueprints am I closest to having all materials for".
+   Returns completionPct (0-100) per item.
 
-PRICING GUIDANCE:
-- Prices from tools include: sell (lowest sell order), buy (highest buy order), and median (average)
-- The MEDIAN price is most realistic for profit estimates
-- Market prices fluctuate - express profits as RANGES, not absolutes
-- Example: "You could likely make between 15M-25M profit" (based on buy price to sell price range)
-- For detailed market analysis, suggest: "Check https://evetycoon.com/market/[typeId] for live market data"
+3. get_blueprint(itemName or productId)
+   Detailed materials + costs for any single blueprint.
+   Use when user asks about a specific item. Resolve productName: null via productId.
 
-PROFITABILITY RECOMMENDATION STRATEGY:
-When asked "what's most profitable" or similar queries, use this prioritization:
+4. get_price(itemName)
+   Live Jita price for any item not already in context.
 
-PRIMARY RECOMMENDATIONS (lead with these):
-- Prioritize items that score HIGHEST on BOTH:
-  1. Absolute ISK profit (sell price - build cost)
-  2. Profit margin % ((sell - cost) / cost × 100)
-- Ideal targets: 5M+ sell price, 30%+ margin, 10M+ absolute profit
-- Examples: T2 ships, advanced components, high-end modules
-- Sort by absolute profit first, margin second
+5. get_active_jobs(activityFilter?)
+   Returns the player's current industry job queue with time remaining.
+   Use for: "what's building", "active jobs", "reactions running", "job queue".
 
-SECONDARY RECOMMENDATIONS (mention after primary):
-- High-margin but low-value items (good for volume/passive income)
-- Threshold: >50% margin but <5M sell price
-- Frame as: "For high-volume manufacturing with good margins..."
-- Examples: Small components, ammunition, boosters
-- Never lead with these - only suggest as alternatives
+Never show raw type IDs ("Item #12345") — always resolve names first.
 
-BANNED FROM PRIMARY RECOMMENDATIONS:
-- Items below 5M sell price (unless specifically asked about)
-- Items below 20% margin (too competitive/thin)
-- Items with <1M absolute profit per unit
+══ PLAYER DATA ══
+The "Current player context" block below contains live data from this session:
+wallet, blueprint count (BPOs/BPCs), top asset holdings, and active jobs.
+Use this as your baseline before calling tools. Call get_active_jobs for full job detail.
 
-RESPONSE FORMAT for profit queries:
-1. Lead with 2-3 high-value, high-margin items (absolute profit focus)
-2. Explain ISK/unit and margin % for each
-3. Then optionally: "If you prefer volume manufacturing: [high-margin low-value items]"
+══ PRICING ══
+- Tools return: sell (lowest ask), buy (highest bid), median (volume-weighted average)
+- Use MEDIAN for profit estimates — it's most realistic
+- Express profits as ranges: "between 15M–25M ISK depending on how you sell"
+- For deep market data: https://evetycoon.com/market/[typeId]
 
-CRITICAL ITEM NAME RULES:
-- ALWAYS use the FULL, COMPLETE item name exactly as it appears in the database
-- NEVER use abbreviations, shortened names, or informal versions
-- Item names must be clickable links - abbreviations break this functionality
-- Examples of what NOT to do:
-  ✗ "Trit" instead of "Tritanium"
-  ✗ "Pyer" instead of "Pyerite"
-  ✗ "Mega" instead of "Megacyte"
-  ✗ "Noc" instead of "Nocxium"
-  ✗ "Zyd" instead of "Zydrine"
-  ✗ "Morph" instead of "Morphite"
-  ✗ "MSE" instead of "Medium Shield Extender"
-  ✗ "LSE" instead of "Large Shield Extender"
-  ✗ "BPO" instead of "Blueprint"
-  ✗ "BPC" instead of "Blueprint Copy"
-- When displaying blueprint names, use full names: "Medium Shield Extender I Blueprint" not "MSE I BPO"
-- When listing materials, always use complete mineral/material names
-- Example CORRECT: "This blueprint requires 1000 units of Tritanium and 500 units of Pyerite"
-- Example WRONG: "This blueprint requires 1000 Trit and 500 Pyer"
+══ PROFITABILITY STRATEGY ══
+PRIMARY (lead with these):
+- Highest absolute ISK profit AND margin combined
+- Targets: 5M+ sell price, 30%+ margin, 10M+ profit per run
 
-Use these tools to answer EVE manufacturing questions. Be concrete with ISK values and quantities. Keep answers under 200 words unless asked for detail.`;
+SECONDARY (mention after, frame as alternatives):
+- High margin but lower value items (volume/passive income)
+- "For high-volume passive income: ..."
+
+DO NOT lead with items below 5M sell price or below 20% margin unless specifically asked.
+
+══ RESPONSE FORMAT ══
+For ALL manufacturing recommendations and analysis, use this structure:
+
+1. Prose opening (2–3 sentences): context and recommendation
+2. Bullet points for key metrics — bold the values:
+   • Metric label: **value**
+   • Keep each bullet to one line
+   • Order: profit first, then margin, build time, ownership status
+3. Optional closing action: "Ready to queue this?" or "Want other options?"
+
+NEVER use table headers (--|--) or columnar formatting.
+NEVER use bare numbers without labels.
+
+Examples of CORRECT bullet format:
+  • Profit per run: **47.2M ISK**
+  • Profit margin: **28.3%**
+  • ISK/hour: **12.8M**
+  • Build time: **3h 45m**
+  • Owned: **BPO** (unlimited runs)
+
+Examples to AVOID:
+  ✗ Profit | Margin | Time  (table headers)
+  ✗ profit:47.2M,margin:28.3%  (no spaces, unreadable)
+  ✗ Long paragraphs listing all metrics (use bullets for scanning)
+
+══ ITEM NAME RULES ══
+Always use FULL item names — they are used as clickable links in the UI.
+  ✗ Trit → ✓ Tritanium
+  ✗ MSE → ✓ Medium Shield Extender
+  ✗ LSE → ✓ Large Shield Extender
+  ✗ BPO → ✓ Blueprint Original
+  ✗ BPC → ✓ Blueprint Copy
+
+Keep answers under 300 words unless the user asks for detail.`;
 
 async function trackAiUsage(characterId, model, usage) {
   try {
