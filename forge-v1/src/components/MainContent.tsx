@@ -217,7 +217,7 @@ const MainContent: FC<MainContentProps> = ({
         <>
           {/* Content header + filter row */}
           <div className="content-header" style={{ padding: '12px 20px 0' }}>
-            <h1 className="content-title">Market Opportunities</h1>
+            <h1 className="content-title">Market Opportunities - Top 50</h1>
             <span className="content-meta" aria-live="polite">
               {displayItems.length} item{displayItems.length !== 1 ? 's' : ''} · Jita 4-4
             </span>
