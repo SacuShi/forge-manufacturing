@@ -1189,10 +1189,11 @@ app.post('/api/analyze-blueprints', async (req, res) => {
     });
     
   } catch (err) {
-    console.error('Blueprint analysis error:', err.message);
-    console.error('Stack:', err.stack); // More detailed error logging
-    res.json({ 
-      error: err.message,
+    console.error('❌ Blueprint analysis error:', err.message);
+    console.error('Stack:', err.stack);
+    // Return proper error response with 500 status
+    return res.status(500).json({
+      error: `Analysis failed: ${err.message}`,
       total: 0,
       buildable: 0,
       results: []
@@ -1233,7 +1234,7 @@ app.post('/api/ai-chat',
 
     console.log(`✓ Session data loaded: ${sessionData.assets?.length || 0} assets, ${sessionData.blueprints?.length || 0} blueprints`);
 
-    const { assets, blueprints, prices, wallet, jobs } = sessionData;
+    const { assets, blueprints, prices, wallet, jobs, skills } = sessionData;
 
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
@@ -1270,11 +1271,16 @@ app.post('/api/ai-chat',
       return `${j.product_name || j.blueprint_type_id} ×${j.runs} [${activity}]`;
     }).join('; ');
 
+    // Note: skills are now available and passed to the server.
+    // Future use: for filtering blueprints by skill requirements in Market Opportunities
+    const skillCount = (skills && skills.length) || 0;
+
     const builtContext = [
       `Wallet: ${(wallet / 1e9).toFixed(2)}B ISK`,
       `Blueprints: ${blueprints.length} total (${bpoCount} BPOs, ${bpcCount} BPCs)`,
       `Assets: ${assets.length} stacks — top holdings: ${assetSummary}`,
       `Active jobs (${jobs.length}): ${jobSummary}`,
+      `Skills trained: ${skillCount}`,
     ].join('\n');
 
     // Tool definitions for AI
@@ -1664,7 +1670,7 @@ app.post('/api/session-data',
   async (req, res) => {
     try {
       const characterId = req.characterId;
-      const { assets, blueprints, prices, wallet, jobs } = req.body;
+      const { assets, blueprints, prices, wallet, jobs, skills } = req.body;
 
       // Validate data exists
       if (!assets || !blueprints) {
@@ -1706,6 +1712,7 @@ app.post('/api/session-data',
         prices: prices || {},
         wallet: wallet || 0,
         jobs: jobs || [],
+        skills: skills || [],
         accessibleStructures: Array.from(structureIds),
         cachedAt: new Date().toISOString()
       }, 7200000); // 2 hours
