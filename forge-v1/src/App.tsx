@@ -141,7 +141,8 @@ const App: FC = () => {
     if (auth.status !== 'authed') return;
 
     setMarketLoading(true);
-    apiGet<TopProfitableResponse>('/api/top-profitable?limit=50')
+    // Use skills-filtered endpoint: shows only blueprints user can build based on trained skills
+    apiGet<TopProfitableResponse>('/api/top-profitable-by-skills?limit=50', auth.token ?? '')
       .then((data) => {
         setRawResults(data.results);
         setMarketItems(mapToMarketItems(data.results, auth.blueprints));
