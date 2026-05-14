@@ -361,6 +361,47 @@ Object.defineProperty(global, 'jitaPricesCache', {
   configurable: true
 });
 
+// ═══════════════════════════════════════════════════════════════════════
+// SKILL CHECKING HELPER
+// ═══════════════════════════════════════════════════════════════════════
+/**
+ * Check if a character can build a blueprint given their trained skills.
+ * Returns true only if the character meets ALL skill requirements.
+ * characterSkills: Array<{ skill_id, active_skill_level }>
+ * blueprintId: blueprint_id from the blueprints table
+ */
+async function canBuildBlueprint(characterSkills, blueprintId) {
+  try {
+    // Get skill requirements for this blueprint
+    const requirements = await dbAll(
+      'SELECT skill_id, skill_level FROM blueprint_skills WHERE blueprint_id = ?',
+      [blueprintId]
+    );
+
+    // If no requirements, can build
+    if (!requirements || requirements.length === 0) return true;
+
+    // Build a map of character's skill levels for quick lookup
+    const skillMap = {};
+    characterSkills.forEach(s => {
+      skillMap[s.skill_id] = s.active_skill_level || 0;
+    });
+
+    // Check if character meets ALL requirements
+    for (const req of requirements) {
+      const charLevel = skillMap[req.skill_id] || 0;
+      if (charLevel < req.skill_level) {
+        return false; // Character doesn't have this skill at required level
+      }
+    }
+
+    return true; // Character meets all requirements
+  } catch (err) {
+    console.error('Skill check error:', err.message);
+    return false; // Fail safely
+  }
+}
+
 app.get('/api/jita-prices', security.apiLimiter, async (req, res) => {
   try {
     if (jitaPricesCache && Date.now() < jitaPricesCacheExpiry) {
@@ -2294,6 +2335,116 @@ app.get('/api/top-profitable', security.apiLimiter, async (req, res) => {
 
   } catch (err) {
     console.error('Top profitable error:', err.message);
+    res.status(500).json({ error: err.message, results: [] });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// TOP PROFITABLE by Skills — filters top 50 by user's trained skills
+// For Market Opportunities tab — shows only blueprints user can build
+// ═══════════════════════════════════════════════════════════════════════
+app.get('/api/top-profitable-by-skills', security.apiLimiter, security.verifyEveToken, async (req, res) => {
+  try {
+    const characterId = req.characterId;
+    const sort = req.query.sort || 'profit';
+    const limit = Math.min(parseInt(req.query.limit) || 50, 100);
+    const minProfit = parseFloat(req.query.minProfit) || 0;
+    const minVolume = parseFloat(req.query.minVolume) !== undefined ? parseFloat(req.query.minVolume) : 5;
+    const includeRisky = req.query.includeRisky === 'true';
+
+    // Get user's skills from session cache
+    const sessionKey = `session:${characterId}`;
+    const sessionData = getCached(sessionKey);
+
+    if (!sessionData || !sessionData.skills) {
+      console.warn(`⚠ Skills not in session for character ${characterId} — falling back to all items`);
+      // Fall back to regular top-profitable if skills unavailable
+      return res.json({
+        results: [],
+        meta: { count: 0, sort, filter: 'skills_unavailable', message: 'Skills data not available' }
+      });
+    }
+
+    const characterSkills = sessionData.skills || [];
+
+    // Validate sort column
+    const allowedSorts = {
+      profit: 'profit DESC',
+      margin: 'profit_margin DESC',
+      isk_per_hour: 'isk_per_hour DESC',
+      cost: 'material_cost ASC',
+      sell_price: 'sell_price DESC'
+    };
+
+    const orderClause = allowedSorts[sort] || allowedSorts.profit;
+
+    // Build WHERE clause
+    let whereConditions = ['profit > ?', 'sell_price > 0'];
+    const params = [minProfit];
+
+    if (minVolume > 0) {
+      whereConditions.push('(avg_daily_volume >= ? OR avg_daily_volume IS NULL)');
+      params.push(minVolume);
+    }
+
+    if (!includeRisky) {
+      whereConditions.push(`(
+        liquidity_risk IS NULL
+        OR liquidity_risk = ""
+        OR liquidity_risk = "low_volume"
+      )`);
+    }
+
+    const whereClause = whereConditions.join(' AND ');
+
+    // Get candidate items (more than limit, to account for skill filtering)
+    const candidates = await dbAll(`
+      SELECT blueprint_id, product_id, product_name, material_cost,
+             sell_price, buy_price, profit, profit_margin, isk_per_hour,
+             build_time, material_count, computed_at,
+             avg_daily_volume, market_group_id, liquidity_risk
+      FROM precomputed_profits
+      WHERE ${whereClause}
+      ORDER BY ${orderClause}
+      LIMIT ?
+    `, [...params, limit * 3]); // Get 3x to account for skill filtering
+
+    // Filter by skill requirements
+    const results = [];
+    for (const item of candidates) {
+      const canBuild = await canBuildBlueprint(characterSkills, item.blueprint_id);
+      if (canBuild) {
+        results.push(item);
+        if (results.length >= limit) break;
+      }
+    }
+
+    console.log(`✓ Top ${results.length} profitable items (filtered by skills for character ${characterId})`);
+
+    // Get last run info
+    const lastRun = await dbGet(`
+      SELECT completed_at, blueprints_processed, duration_seconds, status
+      FROM precompute_runs
+      ORDER BY id DESC LIMIT 1
+    `);
+
+    res.json({
+      results,
+      meta: {
+        count: results.length,
+        sort,
+        minProfit,
+        minVolume,
+        includeRisky,
+        filter: 'by_skills',
+        skillsLoaded: characterSkills.length,
+        lastComputed: lastRun?.completed_at || null,
+        lastRunStatus: lastRun?.status || 'never'
+      }
+    });
+
+  } catch (err) {
+    console.error('Top profitable by skills error:', err.message);
     res.status(500).json({ error: err.message, results: [] });
   }
 });
