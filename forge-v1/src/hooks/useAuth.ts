@@ -46,6 +46,7 @@ const EVE_CLIENT_ID = '5be8a3b3444a4413b7f82b45c2c54a26';
 const SCOPES =
   'esi-assets.read_assets.v1 esi-characters.read_blueprints.v1 ' +
   'esi-wallet.read_character_wallet.v1 esi-industry.read_character_jobs.v1 ' +
+  'esi-skills.read_skills.v1 ' +
   'esi-markets.structure_markets.v1';
 
 const SESSION_TOKEN_KEY = 'forge_token';
@@ -69,6 +70,8 @@ export interface AuthState {
   blueprints: EsiBlueprint[];
   /** Raw ESI asset list — needed for AI chat */
   assets: EsiAsset[];
+  /** Character trained skills (skill_id + active_skill_level) — for blueprint filtering */
+  skills: Array<{ skill_id: number; active_skill_level: number }>;
   error: string | null;
   /** Current loading step label (shown on LoadingScreen) */
   loadStep: string;
@@ -128,6 +131,7 @@ export function useAuth(): AuthState & {
   const [character,  setCharacter]  = useState<CharacterInfo | null>(null);
   const [blueprints, setBlueprints] = useState<EsiBlueprint[]>([]);
   const [assets,     setAssets]     = useState<EsiAsset[]>([]);
+  const [skills,     setSkills]     = useState<Array<{ skill_id: number; active_skill_level: number }>>([]);
   const [error,      setError]      = useState<string | null>(null);
   const [loadStep,   setLoadStep]   = useState('');
   const [dataLog,    setDataLog]    = useState<LoadStep[]>([]);
@@ -230,10 +234,25 @@ export function useAuth(): AuthState & {
         addLog('Industry Jobs', 'err', (e as Error).message);
       }
 
-      // ── 7. Count BPOs vs BPCs ──────────────────────────────────────────────
+      // ── 7. Character skills ────────────────────────────────────────────────
+      setLoadStep('Scanning skills…');
+      let skillData: Array<{ skill_id: number; active_skill_level: number }> = [];
+      try {
+        const skillsResponse = await esiGet<{ skills: Array<{ skill_id: number; active_skill_level: number }> }>(
+          `/characters/${cid}/skills/`,
+          acc
+        );
+        skillData = skillsResponse.skills || [];
+        setSkills(skillData);
+        addLog('Skills', 'ok', `${skillData.length} trained`);
+      } catch (e) {
+        addLog('Skills', 'err', (e as Error).message);
+      }
+
+      // ── 8. Count BPOs vs BPCs ──────────────────────────────────────────────
       const bpoCount = bData.filter((bp) => bp.quantity === -1).length;
 
-      // ── 8. Build CharacterInfo ─────────────────────────────────────────────
+      // ── 9. Build CharacterInfo ─────────────────────────────────────────────
       const charInfoResult: CharacterInfo = {
         characterId:    cid,
         name:           charInfo.name,
@@ -245,7 +264,7 @@ export function useAuth(): AuthState & {
       };
       setCharacter(charInfoResult);
 
-      // ── 9. Cache session on FORGE server (required for AI chat) ────────────
+      // ── 10. Cache session on FORGE server (required for AI chat) ────────────
       setLoadStep('Caching session data…');
       try {
         await apiPost('/api/session-data', {
@@ -254,6 +273,7 @@ export function useAuth(): AuthState & {
           prices:    {},
           wallet,
           jobs:      activeJobs,
+          skills:    skillData,
         }, acc);
         addLog('Session', 'ok', 'Cached on server (2hr expiry)');
       } catch (e) {
@@ -262,7 +282,7 @@ export function useAuth(): AuthState & {
         console.warn('Session cache failed:', e);
       }
 
-      // ── Done ──────────────────────────────────────────────────────────────
+      // ── 11. Done ──────────────────────────────────────────────────────────
       sessionStorage.setItem(SESSION_TOKEN_KEY, acc);
       setStatus('authed');
 
@@ -354,6 +374,7 @@ export function useAuth(): AuthState & {
     setCharacter(null);
     setBlueprints([]);
     setAssets([]);
+    setSkills([]);
     setError(null);
     setDataLog([]);
     setStatus('idle');
@@ -365,6 +386,7 @@ export function useAuth(): AuthState & {
     character,
     blueprints,
     assets,
+    skills,
     error,
     loadStep,
     dataLog,
