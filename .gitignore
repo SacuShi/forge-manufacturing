@@ -42,3 +42,4 @@ ecosystem.config.js
 *.pem
 *.key
 *.crt
+.claude/skills/wizard/

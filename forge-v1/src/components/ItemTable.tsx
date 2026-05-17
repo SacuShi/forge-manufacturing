@@ -141,6 +141,7 @@ const ItemTable: FC<ItemTableProps> = ({
                       alt=""
                       width={24}
                       height={24}
+                      crossOrigin="anonymous"
                       onError={(e) => {
                         (e.currentTarget as HTMLImageElement).style.visibility = 'hidden';
                       }}

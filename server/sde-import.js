@@ -1,111 +1,136 @@
 /**
- * FORGE SDE Import Script
+ * FORGE SDE Import Script v2
  *
- * Downloads missing SDE tables from Hoboleaks and patches the existing forge.db:
- *   1. Adds meta_level column to items table
- *   2. Creates and populates blueprint_skills table
+ * Downloads reference-data-latest.tar.xz from data.everef.net and patches forge.db:
+ *   1. Adds/populates meta_level on items         (meta_group_id 2=T2, 14=T3)
+ *   2. Creates/populates blueprint_skills table   (all activities)
+ *   3. Imports reaction formulas into blueprints  (activity_id=9)
  *
- * Usage:
- *   node sde-import.js
- *
- * Requires: sqlite3 (already installed via server dependencies)
- * Data source: https://hoboleaks.space/ (official EVE SDE mirror)
+ * Usage:  node sde-import.js
+ * IMPORTANT: Stop the server first — pm2 stop forge
  */
 
-const sqlite3 = require('sqlite3').verbose();
-const path    = require('path');
-const https   = require('https');
-const fs      = require('fs');
+const sqlite3        = require('sqlite3').verbose();
+const path           = require('path');
+const https          = require('https');
+const http           = require('http');
+const fs             = require('fs');
+const os             = require('os');
+const { execSync }   = require('child_process');
 require('dotenv').config();
 
-const DB_PATH = path.join(__dirname, '../forge-db/forge.db');
+const DB_PATH  = path.join(__dirname, '../forge-db/forge.db');
+const DATA_URL = 'https://data.everef.net/reference-data/reference-data-latest.tar.xz';
 
-// ── Helpers ─────────────────────────────────────────────────────────────────
+const ACTIVITY_IDS = {
+  manufacturing:     1,
+  research_time:     3,
+  research_material: 4,
+  copying:           5,
+  invention:         8,
+  reaction:          9,
+};
+
+// ── DB helpers ────────────────────────────────────────────────────────────────
 
 const db = new sqlite3.Database(DB_PATH, (err) => {
   if (err) { console.error('❌ Cannot open database:', err.message); process.exit(1); }
   console.log('✓ Connected to', DB_PATH);
 });
 
-const dbRun  = (sql, p = []) => new Promise((res, rej) => db.run(sql, p, function(e) { e ? rej(e) : res(this); }));
-const dbAll  = (sql, p = []) => new Promise((res, rej) => db.all(sql, p, (e, r) => e ? rej(e) : res(r)));
-const dbGet  = (sql, p = []) => new Promise((res, rej) => db.get(sql, p, (e, r) => e ? rej(e) : res(r)));
+const dbRun = (sql, p = []) => new Promise((res, rej) => db.run(sql, p, function(e) { e ? rej(e) : res(this); }));
+const dbGet = (sql, p = []) => new Promise((res, rej) => db.get(sql, p, (e, r) => e ? rej(e) : res(r)));
 
-function fetchJson(url) {
+// ── Download ──────────────────────────────────────────────────────────────────
+
+function download(url, dest) {
   return new Promise((resolve, reject) => {
-    console.log(`  ↓ Fetching ${url}`);
-    https.get(url, { headers: { 'User-Agent': 'FORGE-SDE-Import/1.0' } }, (res) => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => {
-        try { resolve(JSON.parse(data)); }
-        catch (e) { reject(new Error(`JSON parse failed for ${url}: ${e.message}`)); }
-      });
-    }).on('error', reject);
+    console.log(`  ↓ Downloading: ${url}`);
+    const file = fs.createWriteStream(dest);
+
+    const get = (u) => {
+      const client = u.startsWith('https') ? https : http;
+      client.get(u, { headers: { 'User-Agent': 'FORGE-SDE-Import/2.0' } }, (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          console.log(`  ↪ Redirect → ${res.headers.location}`);
+          return get(res.headers.location);
+        }
+        if (res.statusCode !== 200) {
+          file.destroy();
+          return reject(new Error(`HTTP ${res.statusCode}`));
+        }
+        let bytes = 0;
+        res.on('data', c => { bytes += c.length; });
+        res.pipe(file);
+        file.on('finish', () => {
+          file.close();
+          console.log(`  ✓ Downloaded ${(bytes / 1048576).toFixed(1)} MB`);
+          resolve();
+        });
+      }).on('error', reject);
+    };
+
+    file.on('error', reject);
+    get(url);
   });
 }
 
-// ── Step 1: Add meta_level to items table ───────────────────────────────────
+// ── Locate a file within a directory tree ─────────────────────────────────────
 
-async function addMetaLevel() {
-  console.log('\n═══ Step 1: Adding meta_level column to items table ═══');
+function findFile(dir, name) {
+  try {
+    const out = execSync(`find "${dir}" -name "${name}" -type f 2>/dev/null`).toString().trim();
+    return out.split('\n').find(Boolean) || null;
+  } catch { return null; }
+}
 
-  // Add column if not exists
+// ── Step 1: meta_level ────────────────────────────────────────────────────────
+
+async function addMetaLevel(typesData) {
+  console.log('\n═══ Step 1: meta_level on items table ═══');
+
   try {
     await dbRun('ALTER TABLE items ADD COLUMN meta_level INTEGER DEFAULT 0');
     console.log('  ✓ Column added');
   } catch (e) {
-    if (e.message.includes('duplicate column')) {
-      console.log('  ✓ Column already exists — skipping ALTER');
-    } else {
-      throw e;
-    }
+    if (e.message.includes('duplicate') || e.message.includes('already exists')) {
+      console.log('  ✓ Column already exists');
+    } else throw e;
   }
 
-  // Check how many items we have
-  const { total } = await dbGet('SELECT COUNT(*) as total FROM items');
-  console.log(`  Items in DB: ${total}`);
+  await dbRun('UPDATE items SET meta_level = 0');
 
-  // Hoboleaks provides typeIDs.json with metaGroupID
-  // metaGroupID: 1=T1, 2=T2, 3=Storyline, 4=Faction, 5=Officer, 6=Deadspace, 14=T3
-  console.log('  Downloading typeIDs from Hoboleaks...');
-  const typeData = await fetchJson('https://sde.hoboleaks.space/tranquility/typeids.json');
-
-  const typeIds = Object.keys(typeData);
-  console.log(`  Types downloaded: ${typeIds.length}`);
-
-  // Map metaGroupID → meta_level (T2 = metaGroupID 2, T3 = metaGroupID 14)
-  const META_GROUP_TO_LEVEL = { 1: 0, 2: 1, 3: 0, 4: 0, 5: 0, 6: 0, 14: 2 };
-
-  await dbRun('BEGIN TRANSACTION');
-  let updated = 0;
-
-  for (const typeId of typeIds) {
-    const typeInfo = typeData[typeId];
-    const metaGroupId = typeInfo.metaGroupID || 1;
-    const metaLevel = META_GROUP_TO_LEVEL[metaGroupId] ?? 0;
-
-    if (metaLevel > 0) {
-      await dbRun('UPDATE items SET meta_level = ? WHERE type_id = ?', [metaLevel, parseInt(typeId)]);
-      updated++;
-    }
+  const t2Ids = [], t3Ids = [];
+  for (const type of Object.values(typesData)) {
+    if (type.meta_group_id === 2)  t2Ids.push(type.type_id);
+    if (type.meta_group_id === 14) t3Ids.push(type.type_id);
   }
+  console.log(`  Found ${t2Ids.length} T2 types, ${t3Ids.length} T3 types`);
 
-  await dbRun('COMMIT');
-  console.log(`  ✓ Updated meta_level for ${updated} T2/T3 items`);
+  const chunkUpdate = async (ids, level) => {
+    if (ids.length === 0) return 0;
+    let updated = 0;
+    for (let i = 0; i < ids.length; i += 500) {
+      const chunk = ids.slice(i, i + 500);
+      const r = await dbRun(
+        `UPDATE items SET meta_level = ${level} WHERE type_id IN (${chunk.map(() => '?').join(',')})`,
+        chunk
+      );
+      updated += r.changes;
+    }
+    return updated;
+  };
 
-  // Verify
-  const t2Count = await dbGet('SELECT COUNT(*) as c FROM items WHERE meta_level = 1');
-  const t3Count = await dbGet('SELECT COUNT(*) as c FROM items WHERE meta_level = 2');
-  console.log(`  ✓ T2 items: ${t2Count.c}, T3 items: ${t3Count.c}`);
+  const t2n = await chunkUpdate(t2Ids, 1);
+  const t3n = await chunkUpdate(t3Ids, 2);
+  console.log(`  ✓ Marked: ${t2n} T2 items, ${t3n} T3 items`);
 }
 
-// ── Step 2: Create + populate blueprint_skills table ───────────────────────
+// ── Step 2: blueprint_skills ──────────────────────────────────────────────────
 
-async function importBlueprintSkills() {
-  console.log('\n═══ Step 2: Importing blueprint_skills table ═══');
+async function importBlueprintSkills(bpData) {
+  console.log('\n═══ Step 2: blueprint_skills table ═══');
 
-  // Create table
   await dbRun(`
     CREATE TABLE IF NOT EXISTS blueprint_skills (
       blueprint_id  INTEGER NOT NULL,
@@ -115,124 +140,327 @@ async function importBlueprintSkills() {
       PRIMARY KEY (blueprint_id, skill_id, activity_id)
     )
   `);
-
-  await dbRun(`
-    CREATE INDEX IF NOT EXISTS idx_bp_skills_blueprint
-    ON blueprint_skills (blueprint_id)
-  `);
-
-  console.log('  ✓ Table created');
-
-  // Check how many blueprints are in our DB
-  const { total: bpTotal } = await dbGet('SELECT COUNT(*) as total FROM blueprints');
-  console.log(`  Blueprints in DB: ${bpTotal}`);
-
-  // Download blueprint skills from Hoboleaks
-  // blueprints.json has: { blueprintTypeID: { activities: { manufacturing: { skills: [...] } } } }
-  console.log('  Downloading blueprints from Hoboleaks (this may take a minute)...');
-  const bpData = await fetchJson('https://sde.hoboleaks.space/tranquility/blueprints.json');
-
-  const blueprintIds = Object.keys(bpData);
-  console.log(`  Blueprints downloaded: ${blueprintIds.length}`);
-
-  // Clear existing skill data
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_bp_skills ON blueprint_skills (blueprint_id)`);
   await dbRun('DELETE FROM blueprint_skills');
 
   await dbRun('BEGIN TRANSACTION');
   let inserted = 0;
-  let skipped  = 0;
 
-  // Activity IDs:
-  // 1=Manufacturing, 3=TE Research, 4=ME Research, 5=Copying, 8=Invention, 9=Reactions
-  const ACTIVITY_IDS = {
-    manufacturing: 1,
-    research_time: 3,
-    research_material: 4,
-    copying: 5,
-    invention: 8,
-    reaction: 9,
-  };
-
-  for (const bpId of blueprintIds) {
-    const bp = bpData[bpId];
-    if (!bp.activities) { skipped++; continue; }
-
+  for (const [bpId, bp] of Object.entries(bpData)) {
+    if (!bp.activities) continue;
     for (const [actName, actId] of Object.entries(ACTIVITY_IDS)) {
-      const activity = bp.activities[actName];
-      if (!activity || !activity.skills) continue;
-
-      for (const skill of activity.skills) {
+      const act = bp.activities[actName];
+      if (!act?.required_skills) continue;
+      for (const [skillId, skillLevel] of Object.entries(act.required_skills)) {
         try {
           await dbRun(
-            'INSERT OR REPLACE INTO blueprint_skills (blueprint_id, skill_id, skill_level, activity_id) VALUES (?, ?, ?, ?)',
-            [parseInt(bpId), skill.typeID, skill.level, actId]
+            'INSERT OR REPLACE INTO blueprint_skills (blueprint_id, skill_id, skill_level, activity_id) VALUES (?,?,?,?)',
+            [parseInt(bpId), parseInt(skillId), skillLevel, actId]
           );
           inserted++;
-        } catch (e) {
-          // Skip duplicates
-        }
+        } catch (_) {}
       }
     }
   }
 
   await dbRun('COMMIT');
-  console.log(`  ✓ Inserted ${inserted} skill requirements (${skipped} blueprints skipped)`);
-
-  // Verify
-  const { c: skillCount } = await dbGet('SELECT COUNT(*) as c FROM blueprint_skills');
-  const { c: mfgSkillCount } = await dbGet('SELECT COUNT(*) as c FROM blueprint_skills WHERE activity_id = 1');
-  console.log(`  ✓ Total skill entries: ${skillCount} (${mfgSkillCount} manufacturing)`);
+  console.log(`  ✓ Inserted ${inserted} skill requirements`);
 }
 
-// ── Step 3: Verify T2 blueprints now resolve ────────────────────────────────
+// ── Step 3: Reaction formulas → blueprints + blueprint_materials ──────────────
 
-async function verifyT2Coverage() {
-  console.log('\n═══ Step 3: Verifying T2 coverage ═══');
+async function importReactionFormulas(bpData) {
+  console.log('\n═══ Step 3: reaction formulas ═══');
 
-  const t2Blueprints = await dbAll(`
-    SELECT b.blueprint_id, i_bp.name as bp_name, i_prod.name as product_name,
-           i_prod.meta_level
-    FROM blueprints b
-    LEFT JOIN items i_bp   ON i_bp.type_id   = b.blueprint_id
-    LEFT JOIN items i_prod ON i_prod.type_id  = b.product_id
-    WHERE i_prod.meta_level = 1
-    LIMIT 10
-  `);
-
-  if (t2Blueprints.length === 0) {
-    console.log('  ⚠ No T2 blueprints found — meta_level may not have populated correctly');
-  } else {
-    console.log(`  ✓ Sample T2 blueprints now in DB:`);
-    t2Blueprints.forEach(bp => {
-      console.log(`    • ${bp.product_name} (ID: ${bp.blueprint_id})`);
-    });
+  // Add activity_id column to blueprints (default 1 = manufacturing)
+  try {
+    await dbRun('ALTER TABLE blueprints ADD COLUMN activity_id INTEGER DEFAULT 1');
+    console.log('  ✓ activity_id column added to blueprints');
+  } catch (e) {
+    if (e.message.includes('duplicate') || e.message.includes('already exists')) {
+      console.log('  ✓ activity_id column already exists');
+    } else throw e;
   }
 
-  const { skillTotal } = await dbGet('SELECT COUNT(*) as skillTotal FROM blueprint_skills') || {};
-  console.log(`  ✓ blueprint_skills entries: ${skillTotal || 0}`);
+  // Ensure all existing rows have activity_id=1
+  await dbRun('UPDATE blueprints SET activity_id = 1 WHERE activity_id IS NULL');
+
+  let inserted = 0, materialsInserted = 0, skipped = 0;
+
+  await dbRun('BEGIN TRANSACTION');
+
+  for (const [bpId, bp] of Object.entries(bpData)) {
+    const act = bp.activities?.reaction;
+    if (!act) continue;
+
+    // Reaction products is a keyed object: { "typeId": { type_id, quantity } }
+    const productEntries = Object.values(act.products || {});
+    if (productEntries.length === 0) continue;
+
+    const product   = productEntries[0]; // reactions have exactly one product
+    const bpIdInt   = parseInt(bpId);
+    const buildTime = act.time || 3600;  // seconds (reactions are 1h by default)
+
+    // INSERT OR IGNORE — don't overwrite if already seeded as manufacturing
+    const result = await dbRun(
+      `INSERT OR IGNORE INTO blueprints (blueprint_id, product_id, product_quantity, build_time, activity_id)
+       VALUES (?, ?, ?, ?, 9)`,
+      [bpIdInt, product.type_id, product.quantity || 1, buildTime]
+    );
+
+    if (result.changes === 0) {
+      // Exists — ensure activity_id is correct (9 for reactions)
+      await dbRun(
+        `UPDATE blueprints SET activity_id = 9 WHERE blueprint_id = ? AND activity_id != 9`,
+        [bpIdInt]
+      );
+      skipped++;
+      continue;
+    }
+
+    // Insert materials for this reaction formula
+    const materials = Object.values(act.materials || {});
+    for (const mat of materials) {
+      try {
+        await dbRun(
+          `INSERT OR IGNORE INTO blueprint_materials (blueprint_id, material_id, quantity) VALUES (?, ?, ?)`,
+          [bpIdInt, mat.type_id, mat.quantity]
+        );
+        materialsInserted++;
+      } catch (_) {}
+    }
+
+    inserted++;
+  }
+
+  await dbRun('COMMIT');
+  console.log(`  ✓ Inserted ${inserted} reaction formulas (${materialsInserted} materials), ${skipped} already existed`);
 }
 
-// ── Main ─────────────────────────────────────────────────────────────────────
+// ── Step 4: Ensure reaction component items exist in items table ───────────────
+
+async function ensureReactionItems(bpData, typesData) {
+  console.log('\n═══ Step 4: ensure reaction component items in items table ═══');
+
+  // Collect all type_ids referenced in reactions (products + materials)
+  const referencedIds = new Set();
+  for (const bp of Object.values(bpData)) {
+    const act = bp.activities?.reaction;
+    if (!act) continue;
+    for (const p of Object.values(act.products || {})) referencedIds.add(p.type_id);
+    for (const m of Object.values(act.materials || {})) referencedIds.add(m.type_id);
+  }
+
+  const ids = [...referencedIds];
+  if (ids.length === 0) return;
+  console.log(`  Reaction references ${ids.length} unique type_ids`);
+
+  // Find which are already in items table
+  const missingIds = [];
+  for (let i = 0; i < ids.length; i += 500) {
+    const chunk = ids.slice(i, i + 500);
+    const ph = chunk.map(() => '?').join(',');
+    const existing = await new Promise((rs, rj) =>
+      db.all(`SELECT type_id FROM items WHERE type_id IN (${ph})`, chunk, (e, r) => e ? rj(e) : rs(r))
+    );
+    const existingSet = new Set(existing.map(r => r.type_id));
+    chunk.filter(id => !existingSet.has(id)).forEach(id => missingIds.push(id));
+  }
+
+  if (missingIds.length === 0) {
+    console.log('  ✓ All reaction type_ids present in items table');
+    return;
+  }
+
+  console.log(`  Inserting ${missingIds.length} missing items from types.json...`);
+
+  // Build meta_level map from typesData for the inserts
+  const metaMap = {};
+  for (const type of Object.values(typesData)) {
+    if (type.meta_group_id === 2)  metaMap[type.type_id] = 1; // T2
+    if (type.meta_group_id === 14) metaMap[type.type_id] = 2; // T3
+  }
+
+  await dbRun('BEGIN TRANSACTION');
+  let inserted = 0;
+  for (const typeId of missingIds) {
+    const type = typesData[typeId] || typesData[String(typeId)];
+    if (!type) continue; // not in types.json at all — skip
+    const name      = typeof type.name === 'string' ? type.name : (type.name?.en ?? null);
+    const metaLevel = metaMap[typeId] ?? 0;
+    try {
+      await dbRun(
+        `INSERT OR IGNORE INTO items (type_id, name, meta_level) VALUES (?, ?, ?)`,
+        [typeId, name, metaLevel]
+      );
+      inserted++;
+    } catch (_) {}
+  }
+  await dbRun('COMMIT');
+
+  const stillMissing = missingIds.length - inserted;
+  console.log(`  ✓ Inserted ${inserted} items (moon goo, reaction components, gases)`);
+  if (stillMissing > 0) {
+    console.log(`  ⚠ ${stillMissing} type_ids not found in types.json — may be legacy/removed items`);
+  }
+}
+
+// ── Step 5: Ensure all blueprint-referenced type_ids are in items ─────────────
+// Covers blueprint type_ids, product_ids, and materials for all activities.
+// This ensures names + icons resolve in the UI for every item in the DB.
+
+async function ensureAllBlueprintItems(typesData) {
+  console.log('\n═══ Step 5: ensure all blueprint items in items table ═══');
+
+  // Collect every type_id the blueprints table references
+  const rows = await new Promise((rs, rj) =>
+    db.all(
+      `SELECT blueprint_id as id FROM blueprints
+       UNION SELECT product_id FROM blueprints
+       UNION SELECT material_id FROM blueprint_materials`,
+      [],
+      (e, r) => e ? rj(e) : rs(r)
+    )
+  );
+
+  const allIds = [...new Set(rows.map(r => r.id).filter(Boolean))];
+  console.log(`  ${allIds.length} unique type_ids referenced across blueprints + materials`);
+
+  // Find missing ones in chunks of 500
+  const missingIds = [];
+  for (let i = 0; i < allIds.length; i += 500) {
+    const chunk = allIds.slice(i, i + 500);
+    const ph = chunk.map(() => '?').join(',');
+    const existing = await new Promise((rs, rj) =>
+      db.all(`SELECT type_id FROM items WHERE type_id IN (${ph})`, chunk, (e, r) => e ? rj(e) : rs(r))
+    );
+    const existingSet = new Set(existing.map(r => r.type_id));
+    chunk.filter(id => !existingSet.has(id)).forEach(id => missingIds.push(id));
+  }
+
+  if (missingIds.length === 0) {
+    console.log('  ✓ All blueprint type_ids already in items table');
+    return;
+  }
+
+  console.log(`  Inserting ${missingIds.length} missing items from types.json...`);
+
+  const metaMap = {};
+  for (const type of Object.values(typesData)) {
+    if (type.meta_group_id === 2)  metaMap[type.type_id] = 1;
+    if (type.meta_group_id === 14) metaMap[type.type_id] = 2;
+  }
+
+  await dbRun('BEGIN TRANSACTION');
+  let inserted = 0;
+  for (const typeId of missingIds) {
+    const type = typesData[typeId] || typesData[String(typeId)];
+    if (!type) continue;
+    const name      = typeof type.name === 'string' ? type.name : (type.name?.en ?? null);
+    const metaLevel = metaMap[typeId] ?? 0;
+    try {
+      await dbRun(
+        `INSERT OR IGNORE INTO items (type_id, name, meta_level) VALUES (?, ?, ?)`,
+        [typeId, name, metaLevel]
+      );
+      inserted++;
+    } catch (_) {}
+  }
+  await dbRun('COMMIT');
+
+  const notInSde = missingIds.length - inserted;
+  console.log(`  ✓ Inserted ${inserted} items`);
+  if (notInSde > 0) console.log(`  ⚠ ${notInSde} type_ids not in types.json (legacy/removed items)`);
+}
+
+// ── Step 6: Verify ────────────────────────────────────────────────────────────
+
+async function verify() {
+  console.log('\n═══ Step 6: Verification ═══');
+
+  const t2       = await dbGet(`SELECT COUNT(*) as c FROM items WHERE meta_level = 1`);
+  const sk       = await dbGet(`SELECT COUNT(*) as c FROM blueprint_skills`);
+  const rxCount  = await dbGet(`SELECT COUNT(*) as c FROM blueprints WHERE activity_id = 9`);
+  const mfgCount = await dbGet(`SELECT COUNT(*) as c FROM blueprints WHERE activity_id = 1 OR activity_id IS NULL`);
+
+  const sample = await dbGet(`
+    SELECT GROUP_CONCAT(i.name, ', ') as names FROM (
+      SELECT i.name FROM blueprints b
+      JOIN items i ON i.type_id = b.product_id
+      WHERE b.activity_id = 9 LIMIT 5
+    ) i
+  `);
+
+  // Check how many blueprint_ids have no name in items
+  const unnamed = await dbGet(`
+    SELECT COUNT(*) as c FROM blueprints b
+    LEFT JOIN items i ON i.type_id = b.blueprint_id
+    WHERE i.type_id IS NULL OR i.name IS NULL
+  `);
+
+  console.log(`  items with meta_level=1 (T2):  ${t2.c}`);
+  console.log(`  blueprint_skills rows:          ${sk.c}`);
+  console.log(`  blueprints — manufacturing:     ${mfgCount.c}`);
+  console.log(`  blueprints — reactions:         ${rxCount.c}`);
+  console.log(`  blueprints without a name:      ${unnamed.c}${unnamed.c > 0 ? ' ⚠' : ' ✓'}`);
+  if (sample?.names) console.log(`  Sample reaction products: ${sample.names}`);
+  else console.log('  ⚠ No reaction products found — check blueprints.json reaction data');
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log('╔════════════════════════════════════════╗');
-  console.log('║   FORGE SDE Import — Missing Tables    ║');
-  console.log('╚════════════════════════════════════════╝');
+  console.log('╔══════════════════════════════════════════════╗');
+  console.log('║   FORGE SDE Import v2 — data.everef.net      ║');
+  console.log('╚══════════════════════════════════════════════╝');
   console.log(`Database: ${DB_PATH}\n`);
 
-  try {
-    await addMetaLevel();
-    await importBlueprintSkills();
-    await verifyT2Coverage();
+  const tmpDir  = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-sde-'));
+  const tmpFile = path.join(tmpDir, 'reference-data.tar.xz');
 
-    console.log('\n✅ SDE import complete. Restart the server:');
-    console.log('   pm2 restart forge\n');
+  try {
+    await download(DATA_URL, tmpFile);
+
+    console.log('\n  Extracting archive...');
+    execSync(`tar -xJf "${tmpFile}" -C "${tmpDir}"`, { stdio: 'pipe' });
+    console.log('  ✓ Extracted');
+
+    const typesPath      = findFile(tmpDir, 'types.json');
+    const blueprintsPath = findFile(tmpDir, 'blueprints.json');
+
+    if (!typesPath)      throw new Error('types.json not found in archive');
+    if (!blueprintsPath) throw new Error('blueprints.json not found in archive');
+
+    console.log(`  types.json:      ${typesPath}`);
+    console.log(`  blueprints.json: ${blueprintsPath}`);
+
+    // Parse both files once — shared across all steps
+    console.log('\n  Parsing types.json...');
+    const typesData = JSON.parse(fs.readFileSync(typesPath, 'utf8'));
+    console.log(`  ✓ ${Object.keys(typesData).length} types loaded`);
+
+    console.log('  Parsing blueprints.json...');
+    const bpData = JSON.parse(fs.readFileSync(blueprintsPath, 'utf8'));
+    console.log(`  ✓ ${Object.keys(bpData).length} blueprints loaded`);
+
+    await addMetaLevel(typesData);
+    await importBlueprintSkills(bpData);
+    await importReactionFormulas(bpData);
+    await ensureReactionItems(bpData, typesData);
+    await ensureAllBlueprintItems(typesData);
+    await verify();
+
+    console.log('\n✅ Done. Next steps:');
+    console.log('   1. pm2 start forge');
+    console.log('   2. Trigger a recompute: POST /api/trigger-precompute\n');
+
   } catch (err) {
     console.error('\n❌ Import failed:', err.message);
-    console.error(err.stack);
     process.exit(1);
   } finally {
     db.close();
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+    console.log('  Temp files cleaned up.');
   }
 }
 

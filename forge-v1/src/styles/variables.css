@@ -1,68 +1,112 @@
 /**
  * FORGE v1.0 — Design tokens
  *
- * All colour, spacing, typography, and border-radius values are defined here
- * as CSS custom properties. Components MUST reference these variables —
- * never hardcode hex values. Dark mode is the default; light mode overrides
- * apply automatically via prefers-color-scheme.
+ * Dark mode is the default. Light mode applies via [data-theme='light']
+ * (set by the theme toggle in App.tsx) and also via prefers-color-scheme
+ * as a fallback for first load.
  *
- * Matches FORGE-v1.0-DESIGN-SYSTEM.md Section 2 & 13.
+ * Both --color-* and shorthand --bg-*, --text-*, --accent-* naming
+ * conventions are supported for backward compatibility.
  */
 
 /* ── Dark mode (default) ───────────────────────────────────────────────────── */
 :root {
-  /* Backgrounds — darkest to lightest */
-  --color-bg-primary:    #0a0e1a;   /* Main canvas background */
-  --color-bg-secondary:  #0f1420;   /* Sidebar and panel backgrounds */
-  --color-bg-tertiary:   #151b2b;   /* Card surfaces, hover states */
+  /* Backgrounds */
+  --bg-primary:   #0a0e1a;
+  --bg-secondary: #0f1420;
+  --bg-tertiary:  #151b2b;
 
-  /* Text — highest to lowest contrast */
-  --color-text-primary:   #e0e6ed;  /* Body text, item names */
-  --color-text-secondary: #b5bcc7;  /* Secondary labels, table cells */
-  --color-text-tertiary:  #8895a6;  /* Hints, column headers, disabled */
+  /* Text */
+  --text-primary:   #e0e6ed;
+  --text-secondary: #b5bcc7;
+  --text-tertiary:  #8895a6;
 
-  /* Accent — interactive elements */
-  --color-accent-primary: #4fc3f7;  /* Links, active borders, hover text */
-  --color-accent-hover:   #7ae7ff;  /* Brighter accent on hover */
-
-  /* Semantic — carry meaning, used on profit/margin values */
-  --color-success: #4caf50;  /* Good margin (≥25%), positive profit */
-  --color-warning: #ff9800;  /* Marginal margin (10–25%) */
-  --color-danger:  #f44336;  /* Loss or poor margin (<10%) */
-  --color-info:    #2196f3;  /* Neutral informational */
+  /* Accents */
+  --accent-cyan:   #4fc3f7;
+  --accent-green:  #4caf50;
+  --accent-orange: #ff9800;
+  --accent-purple: #c084fc;
+  --accent-red:    #f44336;
 
   /* Borders */
-  --color-border-light:  rgba(139, 149, 166, 0.1);  /* Subtle separators */
-  --color-border-medium: rgba(139, 149, 166, 0.2);  /* Visible borders */
-  --color-border-strong: rgba(79,  195, 247, 0.3);  /* Interactive / active */
+  --border-color:        rgba(139, 149, 166, 0.1);
+  --border-color-medium: rgba(139, 149, 166, 0.2);
+  --border-color-strong: rgba(79, 195, 247, 0.3);
+
+  /* Scrollbar */
+  --scrollbar-track:       #0a0e1a;
+  --scrollbar-thumb:       #1e3a5f;
+  --scrollbar-thumb-hover: #2a5a8a;
+
+  /* ── Aliases for backward-compatible components ── */
+  --color-bg-primary:    var(--bg-primary);
+  --color-bg-secondary:  var(--bg-secondary);
+  --color-bg-tertiary:   var(--bg-tertiary);
+  --color-text-primary:  var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-tertiary: var(--text-tertiary);
+  --color-accent-primary: var(--accent-cyan);
+  --color-accent-hover:   #7ae7ff;
+  --color-success: var(--accent-green);
+  --color-warning: var(--accent-orange);
+  --color-danger:  var(--accent-red);
+  --color-info:    #2196f3;
+  --color-border-light:  var(--border-color);
+  --color-border-medium: var(--border-color-medium);
+  --color-border-strong: var(--border-color-strong);
 
   /* Typography */
-  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: 'Monaco', 'Menlo', 'Courier New', monospace;
+  --font-sans: 'Courier New', 'Lucida Console', monospace;
+  --font-mono: 'Courier New', 'Lucida Console', monospace;
 
   /* Border radii */
   --radius-sm: 4px;
   --radius-md: 8px;
   --radius-lg: 12px;
 
-  /* Layout dimensions */
-  --header-height:      48px;
-  --sidebar-left-width: 240px;
-  --sidebar-right-width: 280px;
-  --chat-panel-width:   340px;
+  /* Layout */
+  --header-height:       48px;
+  --sidebar-left-width:  270px;   /* 75% of right sidebar (360px) */
+  --sidebar-right-width: 360px;   /* widened from 280px; also used as tablet overlay width */
+  --chat-panel-width:    510px;   /* 150% of original 340px */
 }
 
-/* ── Light mode overrides ──────────────────────────────────────────────────── */
+/* ── Light mode — [data-theme='light'] toggle ───────────────────────────────── */
+[data-theme='light'] {
+  --bg-primary:   #f0f2f5;
+  --bg-secondary: #ffffff;
+  --bg-tertiary:  #e8edf2;
+  --text-primary:   #1a2030;
+  --text-secondary: #3d4a5c;
+  --text-tertiary:  #7a8899;
+  --accent-cyan:   #0891b2;
+  --accent-green:  #059669;
+  --accent-orange: #ea580c;
+  --accent-purple: #9333ea;
+  --border-color:        rgba(60, 80, 110, 0.12);
+  --border-color-medium: rgba(60, 80, 110, 0.22);
+  --scrollbar-track:       #e2e8f0;
+  --scrollbar-thumb:       #94a3b8;
+  --scrollbar-thumb-hover: #64748b;
+}
+
+/* ── Light mode — system preference fallback ────────────────────────────────── */
 @media (prefers-color-scheme: light) {
-  :root {
-    --color-bg-primary:    #f0f2f5;
-    --color-bg-secondary:  #ffffff;
-    --color-bg-tertiary:   #e8edf2;
-    --color-text-primary:   #1a2030;
-    --color-text-secondary: #3d4a5c;
-    --color-text-tertiary:  #7a8899;
-    --color-border-light:  rgba(60, 80, 110, 0.1);
-    --color-border-medium: rgba(60, 80, 110, 0.2);
-    /* Accent and semantic colours remain the same in light mode */
+  :root:not([data-theme='dark']) {
+    --bg-primary:   #f0f2f5;
+    --bg-secondary: #ffffff;
+    --bg-tertiary:  #e8edf2;
+    --text-primary:   #1a2030;
+    --text-secondary: #3d4a5c;
+    --text-tertiary:  #7a8899;
+    --accent-cyan:   #0891b2;
+    --accent-green:  #059669;
+    --accent-orange: #ea580c;
+    --accent-purple: #9333ea;
+    --border-color:        rgba(60, 80, 110, 0.12);
+    --border-color-medium: rgba(60, 80, 110, 0.22);
+    --scrollbar-track:       #e2e8f0;
+    --scrollbar-thumb:       #94a3b8;
+    --scrollbar-thumb-hover: #64748b;
   }
 }

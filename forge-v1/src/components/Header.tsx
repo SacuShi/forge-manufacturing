@@ -4,17 +4,10 @@
  * Top 48px application bar. Layout (left → right):
  *
  *   LEFT:
- *     [◈ FORGE logo]  [Dashboard btn]  [F.O.R.G.E. AI toggle btn]
+ *     [☰ menu btn (mobile only)]  [◈ FORGE logo]  [F.O.R.G.E. AI toggle]
  *
  *   RIGHT:
- *     [◎ Jita 4-4 ▾ (teaser)]  [Character pill]  [Logout btn ← extra gap]
- *
- * The F.O.R.G.E. AI button uses .btn-chat and gains the .open modifier
- * class when the chat panel is open, visually receding (inset shadow)
- * to signal the active/depressed state.
- *
- * The Logout button gets .btn-logout which adds margin-left: 16px via CSS,
- * providing double the gap versus other header buttons.
+ *     [◎ Jita 4-4 teaser]  [☀/🌙 theme]  [Character pill]  [Logout]
  *
  * Security:
  *   - Portrait URL uses numeric characterId only.
@@ -28,10 +21,12 @@ import type { CharacterInfo } from '../types';
 
 interface HeaderProps {
   character: CharacterInfo;
-  /** Whether the chat panel is currently open */
   chatOpen: boolean;
-  /** Called when the F.O.R.G.E. AI toggle button is clicked */
+  theme: string;
   onToggleChat: () => void;
+  onMenuToggle: () => void;
+  onThemeToggle: () => void;
+  onLogout: () => void;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -40,7 +35,15 @@ const PORTRAIT_BASE = 'https://images.evetech.net/characters';
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-const Header: FC<HeaderProps> = ({ character, chatOpen, onToggleChat }) => {
+const Header: FC<HeaderProps> = ({
+  character,
+  chatOpen,
+  theme,
+  onToggleChat,
+  onMenuToggle,
+  onThemeToggle,
+  onLogout,
+}) => {
   const portraitUrl = `${PORTRAIT_BASE}/${character.characterId}/portrait?size=32`;
 
   return (
@@ -49,20 +52,45 @@ const Header: FC<HeaderProps> = ({ character, chatOpen, onToggleChat }) => {
       {/* ── Left group ──────────────────────────────────────────────────────── */}
       <div className="header-left">
 
-        {/* Logo mark */}
-        <span className="logo" aria-label="FORGE Manufacturing Intelligence">
-          <span className="logo-icon" aria-hidden="true" />
-          FORGE
-        </span>
-
-        {/* Dashboard nav button — active by default in v1.0 */}
+        {/* Mobile menu toggle — hidden on desktop via CSS */}
         <button
           type="button"
-          className="btn active"
-          aria-current="page"
+          className="menu-btn"
+          aria-label="Toggle navigation menu"
+          onClick={onMenuToggle}
         >
-          Dashboard
+          ☰
         </button>
+
+        {/* Logo mark with backronym */}
+        <div className="forge-logo-container" aria-label="FORGE Manufacturing Intelligence">
+          <div className="forge-logo">
+            {/* Pale blue hexagon SVG */}
+            <svg
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+              className="forge-icon"
+            >
+              <path
+                d="M12 2L20.66 7V17L12 22L3.34 17V7L12 2Z"
+                stroke="#8bb5d1"
+                strokeWidth="2"
+                fill="rgba(139, 181, 209, 0.15)"
+              />
+            </svg>
+            <span className="forge-text">FORGE</span>
+          </div>
+          <div className="forge-backronym">
+            <span style={{ color: '#4fc3f7', fontWeight: 600 }}>F</span>abrication,{' '}
+            <span style={{ color: '#4fc3f7', fontWeight: 600 }}>O</span>perations,{' '}
+            <span style={{ color: '#4fc3f7', fontWeight: 600 }}>R</span>esource &{' '}
+            <span style={{ color: '#4fc3f7', fontWeight: 600 }}>G</span>uidance{' '}
+            <span style={{ color: '#4fc3f7', fontWeight: 600 }}>E</span>ngine
+          </div>
+        </div>
 
         {/* F.O.R.G.E. AI panel toggle */}
         <button
@@ -80,14 +108,21 @@ const Header: FC<HeaderProps> = ({ character, chatOpen, onToggleChat }) => {
       {/* ── Right group ─────────────────────────────────────────────────────── */}
       <div className="header-right">
 
-        {/* Market region selector — teaser for v1.1, not interactive */}
-        <span
-          className="market-teaser"
-          role="note"
-          aria-label="Market region: Jita 4-4 (region selector coming in v1.1)"
-        >
+        {/* Market region teaser */}
+        <span className="market-teaser" role="note" aria-label="Market: Jita 4-4">
           ◎ Jita 4-4 ▾
         </span>
+
+        {/* Theme toggle */}
+        <button
+          type="button"
+          className="btn"
+          aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+          onClick={onThemeToggle}
+          style={{ fontSize: 14, padding: '4px 8px' }}
+        >
+          {theme === 'dark' ? '☀️' : '🌙'}
+        </button>
 
         {/* Character pill */}
         <div className="char-pill" role="status" aria-label={`Logged in as ${character.name}`}>
@@ -97,6 +132,7 @@ const Header: FC<HeaderProps> = ({ character, chatOpen, onToggleChat }) => {
               alt=""
               width={22}
               height={22}
+              crossOrigin="anonymous"
               onError={(e) => {
                 (e.currentTarget as HTMLImageElement).style.visibility = 'hidden';
               }}
@@ -105,8 +141,13 @@ const Header: FC<HeaderProps> = ({ character, chatOpen, onToggleChat }) => {
           <span className="char-pill-name">{character.name}</span>
         </div>
 
-        {/* Logout — .btn-logout CSS adds the extra left margin gap */}
-        <button type="button" className="btn btn-logout" aria-label="Log out of FORGE">
+        {/* Logout */}
+        <button
+          type="button"
+          className="btn btn-logout"
+          aria-label="Log out of FORGE"
+          onClick={onLogout}
+        >
           Logout
         </button>
 

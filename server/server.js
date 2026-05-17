@@ -1,4 +1,4 @@
-// F.O.R.G.E. Server v2.3.2.1 (v0.9.2.1) - 4-Tier Filtering (Severity Fix)
+// F.O.R.G.E. Server v1.0.0.0
 // All blueprint/item data from SQLite, not APIs
 // Pre-computed profitability + 4-tier filtering with severity levels (CRITICAL vs WARNING)
 // + Comprehensive security: auth, rate limiting, input validation
@@ -90,9 +90,7 @@ const dbRun = (sql, params = []) => {
   });
 };
 
-// ═══════════════════════════════════════════════════════════════════════
 // DATABASE MIGRATION (v0.9.0)
-// ═══════════════════════════════════════════════════════════════════════
 async function runMigrations() {
   console.log('⟳ Running database migrations...');
 
@@ -166,6 +164,15 @@ async function runMigrations() {
     )
   `);
 
+  // meta_level on items (populated by sde-import.js)
+  try { await dbRun(`ALTER TABLE items ADD COLUMN meta_level INTEGER DEFAULT 0`); } catch (_) {}
+
+  // activity_id on blueprints (1=manufacturing, 9=reaction — populated by sde-import.js)
+  try { await dbRun(`ALTER TABLE blueprints ADD COLUMN activity_id INTEGER DEFAULT 1`); } catch (_) {}
+
+  // activity_id on precomputed_profits
+  try { await dbRun(`ALTER TABLE precomputed_profits ADD COLUMN activity_id INTEGER DEFAULT 1`); } catch (_) {}
+
   // v0.9.1 migration: Add volume/market columns to existing tables
   try {
     await dbRun(`ALTER TABLE precomputed_profits ADD COLUMN avg_daily_volume REAL DEFAULT NULL`);
@@ -198,10 +205,8 @@ const setCached = (key, data, ttl = 3600000) => {
   cache.set(key, { data, expiry: Date.now() + ttl });
 };
 
-// ═══════════════════════════════════════════════════════════════════════
 // PAGINATED REGION PRICE FETCHER
 // Fetches complete order book from ESI for any region (handles pagination)
-// ═══════════════════════════════════════════════════════════════════════
 async function fetchRegionPrices(regionId) {
   console.log(`⟳ Fetching prices for region ${regionId}...`);
   const startTime = Date.now();
@@ -292,9 +297,7 @@ async function fetchRegionPrices(regionId) {
   return prices;
 }
 
-// ═══════════════════════════════════════════════════════════════════════
 // EVE OAUTH
-// ═══════════════════════════════════════════════════════════════════════
 app.post('/api/eve-token', security.authLimiter, async (req, res) => {
   try {
     const { code, redirect_uri } = req.body;
@@ -331,9 +334,7 @@ app.post('/api/eve-token', security.authLimiter, async (req, res) => {
   }
 });
 
-// ═══════════════════════════════════════════════════════════════════════
 // JITA PRICES (Buy/Sell/Median) - Hourly Cache
-// ═══════════════════════════════════════════════════════════════════════
 // Per-region price cache (Map: regionId -> { prices, expiry })
 // v0.9.4: Only Jita (10000002) is populated. v1.1 will populate multiple regions.
 const regionPriceCache = new Map();
@@ -361,9 +362,7 @@ Object.defineProperty(global, 'jitaPricesCache', {
   configurable: true
 });
 
-// ═══════════════════════════════════════════════════════════════════════
 // SKILL CHECKING HELPER
-// ═══════════════════════════════════════════════════════════════════════
 /**
  * Check if a character can build a blueprint given their trained skills.
  * Returns true only if the character meets ALL skill requirements.
@@ -372,33 +371,35 @@ Object.defineProperty(global, 'jitaPricesCache', {
  */
 async function canBuildBlueprint(characterSkills, blueprintId) {
   try {
-    // Get skill requirements for this blueprint
-    const requirements = await dbAll(
-      'SELECT skill_id, skill_level FROM blueprint_skills WHERE blueprint_id = ?',
-      [blueprintId]
-    );
+      let requirements = [];
+    try {
+      requirements = await dbAll(
+        'SELECT skill_id, skill_level FROM blueprint_skills WHERE blueprint_id = ?',
+        [blueprintId]
+      );
+    } catch (skillErr) {
+      // Table missing — treat as no requirements (allow all blueprints through)
+      return true;
+    }
 
-    // If no requirements, can build
     if (!requirements || requirements.length === 0) return true;
 
-    // Build a map of character's skill levels for quick lookup
     const skillMap = {};
     characterSkills.forEach(s => {
       skillMap[s.skill_id] = s.active_skill_level || 0;
     });
 
-    // Check if character meets ALL requirements
     for (const req of requirements) {
       const charLevel = skillMap[req.skill_id] || 0;
       if (charLevel < req.skill_level) {
-        return false; // Character doesn't have this skill at required level
+        return false;
       }
     }
 
-    return true; // Character meets all requirements
+    return true;
   } catch (err) {
     console.error('Skill check error:', err.message);
-    return false; // Fail safely
+    return false;
   }
 }
 
@@ -423,9 +424,7 @@ app.get('/api/jita-prices', security.apiLimiter, async (req, res) => {
   }
 });
 
-// ═══════════════════════════════════════════════════════════════════════
 // ITEM NAMES DATABASE - From SQLite
-// ═══════════════════════════════════════════════════════════════════════
 app.get('/api/item-names', security.apiLimiter, async (req, res) => {
   try {
     const cached = getCached('item_names');
@@ -454,9 +453,7 @@ app.get('/api/item-names', security.apiLimiter, async (req, res) => {
   }
 });
 
-// ═══════════════════════════════════════════════════════════════════════
 // BLUEPRINT DATABASE - From SQLite with Materials
-// ═══════════════════════════════════════════════════════════════════════
 app.get('/api/blueprint-database', security.apiLimiter, async (req, res) => {
   try {
     const cached = getCached('blueprint_db');
@@ -504,10 +501,8 @@ app.get('/api/blueprint-database', security.apiLimiter, async (req, res) => {
   }
 });
 
-// ═══════════════════════════════════════════════════════════════════════
 // CALCULATE PROFITABILITY - Server-side pre-calculation
 // Returns only top N profitable items
-// ═══════════════════════════════════════════════════════════════════════
 app.post('/api/calculate-profitability', async (req, res) => {
   try {
     const { ownedBlueprints, topN = 20 } = req.body;
@@ -608,9 +603,7 @@ async function calculateMaterialCost(materialId, quantity, prices) {
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
 // PRODUCTION CHAIN - Full recursive build tree
-// ═══════════════════════════════════════════════════════════════════════
 app.post('/api/production-chain', async (req, res) => {
   try {
     const { itemName, ownedBlueprints } = req.body;
@@ -727,10 +720,8 @@ async function buildMaterialChain(material, prices, ownedBpIds) {
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
 // GET JITA PRICE - Single item price lookup from cache
 // Used by AI tool to query prices on-demand
-// ═══════════════════════════════════════════════════════════════════════
 app.post('/api/get-price', async (req, res) => {
   try {
     const { itemName, typeId } = req.body;
@@ -784,10 +775,8 @@ app.post('/api/get-price', async (req, res) => {
   }
 });
 
-// ═══════════════════════════════════════════════════════════════════════
 // GET BLUEPRINT - Query any blueprint from database
 // Used by AI to get materials for any item
-// ═══════════════════════════════════════════════════════════════════════
 app.post('/api/get-blueprint', async (req, res) => {
   // Ensure JSON response even on catastrophic failure
   try {
@@ -905,9 +894,7 @@ app.post('/api/get-blueprint', async (req, res) => {
   }
 });
 
-// ═══════════════════════════════════════════════════════════════════════
 // ITEM DETAILS - For right panel with build analysis
-// ═══════════════════════════════════════════════════════════════════════
 app.post('/api/item-details', async (req, res) => {
   try {
     const { typeId, assets, ownedBlueprints } = req.body;
@@ -990,53 +977,66 @@ app.post('/api/item-details', async (req, res) => {
         let totalCost = 0;
         let canBuild = true;
 
+        // Single bulk query: which materials are themselves manufacturable?
+        const matIds = materials.map(m => m.material_id);
+        const manufSet = new Set();
+        if (matIds.length > 0) {
+          const ph = matIds.map(() => '?').join(',');
+          const manufRows = await dbAll(
+            `SELECT DISTINCT product_id FROM blueprints WHERE product_id IN (${ph})`,
+            matIds
+          );
+          manufRows.forEach(r => manufSet.add(r.product_id));
+        }
+
+        // Single bulk query: material names
+        const nameMap = {};
+        if (matIds.length > 0) {
+          const ph = matIds.map(() => '?').join(',');
+          const nameRows = await dbAll(
+            `SELECT type_id, name FROM items WHERE type_id IN (${ph})`,
+            matIds
+          );
+          nameRows.forEach(r => { nameMap[r.type_id] = r.name; });
+        }
+
         for (const mat of materials) {
           const userHas = assetQuantities[mat.material_id] || 0;
-          const needed = mat.quantity;
+          const needed  = mat.quantity;
           const shortage = Math.max(0, needed - userHas);
-          
-          // Get material name
-          const matItem = await dbGet('SELECT name FROM items WHERE type_id = ?', [mat.material_id]);
-          let matName;
-          
-          if (!matItem) {
-            // Try to fetch from ESI
+
+          let matName = nameMap[mat.material_id];
+          if (!matName) {
+            // Fallback: ESI lookup and cache
             try {
               const esiRes = await fetch(`https://esi.evetech.net/latest/universe/types/${mat.material_id}/?datasource=tranquility`);
               if (esiRes.ok) {
                 const esiData = await esiRes.json();
                 matName = esiData.name || `Unknown Material ${mat.material_id}`;
-                
-                // Cache it in database for next time
-                await dbRun(
-                  'INSERT OR IGNORE INTO items (type_id, name) VALUES (?, ?)',
-                  [mat.material_id, matName]
-                );
+                await dbRun('INSERT OR IGNORE INTO items (type_id, name) VALUES (?, ?)', [mat.material_id, matName]);
               } else {
                 matName = `Unknown Material ${mat.material_id}`;
               }
-            } catch (err) {
-              matName = `ID:${mat.material_id}`;
+            } catch (_) {
+              matName = `Item #${mat.material_id}`;
             }
-          } else {
-            matName = matItem.name;
           }
 
-          // Get material price
           const matPrice = prices[mat.material_id];
           const unitCost = matPrice ? matPrice.buy : 0;
           const itemCost = unitCost * needed;
           totalCost += itemCost;
 
           materialAnalysis.push({
-            materialId: mat.material_id,
-            name: matName,
-            needed: needed,
-            have: userHas,
-            shortage: shortage,
-            unitCost: unitCost,
-            totalCost: itemCost,
-            shortfallCost: unitCost * shortage
+            materialId:     mat.material_id,
+            name:           matName,
+            needed,
+            have:           userHas,
+            shortage,
+            unitCost,
+            totalCost:      itemCost,
+            shortfallCost:  unitCost * shortage,
+            canManufacture: manufSet.has(mat.material_id),
           });
 
           if (shortage > 0) canBuild = false;
@@ -1073,10 +1073,8 @@ app.post('/api/item-details', async (req, res) => {
   }
 });
 
-// ═══════════════════════════════════════════════════════════════════════
 // ANALYZE BLUEPRINTS - Calculate profitability/buildability for all user BPs
 // Used by AI to get top profitable/buildable items
-// ═══════════════════════════════════════════════════════════════════════
 app.post('/api/analyze-blueprints', async (req, res) => {
   try {
     const { ownedBlueprints, assets, sortBy = 'profit', limit = 20, buildableOnly = false } = req.body;
@@ -1112,19 +1110,45 @@ app.post('/api/analyze-blueprints', async (req, res) => {
     
     // Analyze each blueprint
     const results = [];
-    
+    const skipped = [];
+
     for (const bp of ownedBlueprints) {
-      // Get blueprint data from database
-      const blueprint = await dbGet(
+      // Strategy 1: look up by blueprint_id = ESI type_id (works for T1 + T2 if SDE has them)
+      let blueprint = await dbGet(
         'SELECT blueprint_id, product_id, product_quantity, build_time FROM blueprints WHERE blueprint_id = ?',
         [bp.type_id]
       );
-      
-      if (!blueprint) continue; // Skip if not in database
-      
-      // Get product name (skip ESI for bulk operations - too slow)
-      let product = await dbGet('SELECT name FROM items WHERE type_id = ?', [blueprint.product_id]);
-      let productName = product ? product.name : null; // Return null if not found, don't fetch from ESI
+
+      // Strategy 2: for T2 BPCs the DB may index by product_id instead — try reverse lookup
+      if (!blueprint) {
+        // Look up what this type_id produces via the items table
+        const bpItem = await dbGet('SELECT name FROM items WHERE type_id = ?', [bp.type_id]);
+        const bpName = bpItem?.name || '';
+        // Strip " Blueprint" suffix to get product name, then look up product type_id
+        if (bpName.toLowerCase().includes('blueprint')) {
+          const productName = bpName.replace(/ Blueprint$/i, '').trim();
+          const productItem = await dbGet('SELECT type_id FROM items WHERE name = ? COLLATE NOCASE', [productName]);
+          if (productItem) {
+            blueprint = await dbGet(
+              'SELECT blueprint_id, product_id, product_quantity, build_time FROM blueprints WHERE product_id = ?',
+              [productItem.type_id]
+            );
+          }
+        }
+      }
+
+      if (!blueprint) {
+        // Log skipped blueprints for diagnosis
+        const bpItem = await dbGet('SELECT name FROM items WHERE type_id = ?', [bp.type_id]);
+        skipped.push({ type_id: bp.type_id, name: bpItem?.name || `Unknown #${bp.type_id}` });
+        continue;
+      }
+
+      // Get product name and tech tier from meta_level (populated by sde-import.js)
+      const product = await dbGet('SELECT name, meta_level FROM items WHERE type_id = ?', [blueprint.product_id]);
+      const productName = product?.name ?? null;
+      const metaLevel   = product?.meta_level ?? 0;
+      const techTier    = metaLevel === 2 ? 'T3' : metaLevel === 1 ? 'T2' : 'T1';
       
       // Get materials
       const materials = await dbAll(
@@ -1176,7 +1200,9 @@ app.post('/api/analyze-blueprints', async (req, res) => {
         profitMargin: profitMargin,
         canBuild: canBuild,
         materialCount: materials.length,
-        materials: materialDetails
+        materials: materialDetails,
+        metaLevel,
+        techTier,
       });
     }
     
@@ -1220,12 +1246,17 @@ app.post('/api/analyze-blueprints', async (req, res) => {
     
     // Return top N results
     const topResults = filtered.slice(0, limit);
-    
-    console.log(`✓ Blueprint analysis complete — Top ${topResults.length} results (sorted by ${sortBy})`);
-    
+
+    console.log(`✓ Blueprint analysis complete — ${results.length} found, ${skipped.length} skipped, Top ${topResults.length} results (sorted by ${sortBy})`);
+    if (skipped.length > 0) {
+      console.log(`  ⚠ Skipped (not in blueprints DB): ${skipped.map(s => s.name).join(', ')}`);
+    }
+
     res.json({
       total: results.length,
       buildable: results.filter(r => r.canBuild).length,
+      skipped: skipped.length,
+      skippedNames: skipped.map(s => s.name),
       results: topResults
     });
     
@@ -1242,10 +1273,91 @@ app.post('/api/analyze-blueprints', async (req, res) => {
   }
 });
 
+// DIAGNOSE T2 BLUEPRINTS — checks session BPCs against the database
+app.get('/api/diagnose-t2/:characterId', security.apiLimiter, async (req, res) => {
+  try {
+    const { characterId } = req.params;
+    const sessionKey = `session:${characterId}`;
+    const sessionData = getCached(sessionKey);
 
-// ═══════════════════════════════════════════════════════════════════════
+    if (!sessionData) {
+      return res.status(400).json({ error: 'No session found — refresh the page first' });
+    }
+
+    const { blueprints } = sessionData;
+    const report = { total: blueprints.length, bpc: 0, bpo: 0, inDb: [], notInDb: [], t2InDb: [], t2NotInDb: [] };
+
+    for (const bp of blueprints) {
+      const isBpc = bp.quantity > 0;
+      if (isBpc) report.bpc++; else report.bpo++;
+
+      // Look up blueprint item name; resolve product via name strip
+      const bpItem = await dbGet('SELECT name FROM items WHERE type_id = ?', [bp.type_id]);
+      const bpName = bpItem?.name || `#${bp.type_id}`;
+      const productName = bpName.replace(/ Blueprint$/i, '').trim();
+
+      // Single product lookup — gives us meta_level (T2 check) AND type_id (fallback DB lookup)
+      const productItem = bpName.toLowerCase().includes('blueprint')
+        ? await dbGet('SELECT type_id, meta_level FROM items WHERE name = ? COLLATE NOCASE', [productName])
+        : null;
+      const bpIsT2 = (productItem?.meta_level ?? 0) === 1;
+
+      // Check if it's in blueprints table (by blueprint_id, then by product_id)
+      const inDb = await dbGet('SELECT blueprint_id FROM blueprints WHERE blueprint_id = ?', [bp.type_id]);
+      let inDbFallback = null;
+      if (!inDb && productItem?.type_id) {
+        inDbFallback = await dbGet('SELECT blueprint_id FROM blueprints WHERE product_id = ?', [productItem.type_id]);
+      }
+
+      const found = !!(inDb || inDbFallback);
+      const entry = { type_id: bp.type_id, name: bpName, is_t2: bpIsT2, is_bpc: isBpc, found_via: inDb ? 'blueprint_id' : inDbFallback ? 'product_id' : null };
+
+      if (found) {
+        report.inDb.push(entry);
+        if (bpIsT2) report.t2InDb.push(entry);
+      } else {
+        report.notInDb.push(entry);
+        if (bpIsT2) report.t2NotInDb.push(entry);
+      }
+    }
+
+    report.summary = `${report.inDb.length}/${report.total} blueprints found in DB. T2: ${report.t2InDb.length} found, ${report.t2NotInDb.length} missing.`;
+    console.log(`🔍 T2 Diagnose for ${characterId}: ${report.summary}`);
+    res.json(report);
+  } catch (err) {
+    console.error('❌ T2 diagnose error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET BLUEPRINT METADATA (meta_level per blueprint type_id)
+app.post('/api/blueprint-metadata', security.apiLimiter, async (req, res) => {
+  try {
+    const { blueprintTypeIds } = req.body;
+    if (!Array.isArray(blueprintTypeIds) || blueprintTypeIds.length === 0) {
+      return res.json({});
+    }
+
+    // Single bulk query — items.meta_level populated by sde-import.js
+    const limited = blueprintTypeIds.slice(0, 500);
+    const placeholders = limited.map(() => '?').join(',');
+    const rows = await new Promise((res, rej) =>
+      db.all(`SELECT type_id, meta_level FROM items WHERE type_id IN (${placeholders})`, limited, (e, r) => e ? rej(e) : res(r))
+    );
+
+    const metadata = {};
+    limited.forEach(id => { metadata[id] = 0; });
+    rows.forEach(r => { metadata[r.type_id] = r.meta_level ?? 0; });
+
+    res.json(metadata);
+  } catch (err) {
+    console.error('❌ Blueprint metadata error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
 // AI CHAT - Anthropic proxy with function calling
-// ═══════════════════════════════════════════════════════════════════════
 app.post('/api/ai-chat',
   security.aiLimiter,
   security.verifyEveToken,
@@ -1328,39 +1440,39 @@ app.post('/api/ai-chat',
     const tools = [
       {
         name: "get_blueprint",
-        description: "Get blueprint materials and costs for any EVE item. Use when user asks about building a specific item or wants to know materials/costs. Can also resolve item names from IDs.",
+        description: "Get blueprint materials + costs for any item. Resolves names from IDs.",
         input_schema: {
           type: "object",
           properties: {
             itemName: {
               type: "string",
-              description: "Name of the item to get blueprint for (e.g., 'Drake', 'Vulture')"
+              description: "Item name (e.g. Drake, Vulture)"
             },
             productId: {
               type: "number",
-              description: "Type ID of the item (use when productName is null in analyze_blueprints results)"
+              description: "Type ID (use when productName is null)"
             }
           }
         }
       },
       {
         name: "analyze_blueprints",
-        description: "Analyze ALL user's blueprints for profitability, buildability, costs. Use when user asks 'what's most profitable', 'what can I build', 'best items to make', etc.",
+        description: "Analyze user's blueprints for profitability/buildability. Each result includes techTier and completionPct. Use for: what can I build, most profitable, T2 chains closest to completing. Report skippedNames to user if non-zero.",
         input_schema: {
           type: "object",
           properties: {
             sortBy: {
               type: "string",
               enum: ["profit", "cost", "time", "materials", "margin", "completion"],
-              description: "How to sort results: profit (most profitable), cost (most expensive), time (longest build), materials (most materials), margin (best profit %), completion (closest to having all materials — use for 'T2 chains I can almost build' queries)"
+              description: "Sort by: profit, cost, time, materials, margin, completion (use completion for 'T2 chains I can almost build')"
             },
             limit: {
               type: "number",
-              description: "How many results to return (default 20, max 50)"
+              description: "Number of results (default 20, max 50)"
             },
             buildableOnly: {
               type: "boolean",
-              description: "Only show items user can build right now with current assets"
+              description: "Only show buildable items"
             }
           },
           required: ["sortBy"]
@@ -1368,13 +1480,13 @@ app.post('/api/ai-chat',
       },
       {
         name: "get_price",
-        description: "Get current Jita market price for any item. Use when you need price for an item not in your context.",
+        description: "Get current Jita price for any item not already in context.",
         input_schema: {
           type: "object",
           properties: {
             itemName: {
               type: "string",
-              description: "Name of the item to get price for"
+              description: "Item name"
             }
           },
           required: ["itemName"]
@@ -1382,53 +1494,77 @@ app.post('/api/ai-chat',
       },
       {
         name: "get_active_jobs",
-        description: "Get the player's current active industry jobs from their session. Use when asked about active jobs, what's currently building, job queue, time remaining, reactions running, etc.",
+        description: "Get player's active industry jobs. Use for: active jobs, job queue, reactions running, time remaining.",
         input_schema: {
           type: "object",
           properties: {
             activityFilter: {
               type: "string",
               enum: ["all", "manufacturing", "reaction", "invention", "research", "copying"],
-              description: "Filter jobs by activity type (default: all)"
+              description: "Filter by activity (default: all)"
             }
           }
         }
       },
       {
         name: "get_precomputed",
-        description: "PREFERRED: Get pre-computed profitability data from the database with volume filtering. Use this FIRST for questions about 'what is profitable', 'top items to build', 'best ISK/hour', 'most profitable blueprints'. Automatically excludes low-volume items, Titans, and other contract-only items by default. Much faster than analyze_blueprints and costs zero AI tokens. Only fall back to analyze_blueprints if user needs buildability checks against their specific assets.",
+        description: "PREFERRED. Pre-computed profitability for mfg + reactions. Use FIRST for profit/market/ISK-hour questions. activity_id: 1=mfg, 9=reaction. Fall back to analyze_blueprints only for asset-specific buildability.",
         input_schema: {
           type: "object",
           properties: {
             sort: {
               type: "string",
               enum: ["profit", "margin", "isk_per_hour"],
-              description: "How to sort: profit (highest ISK profit), margin (best % margin), isk_per_hour (best time efficiency)"
+              description: "Sort: profit | margin | isk_per_hour"
             },
             limit: {
               type: "number",
-              description: "How many results (default 20, max 100)"
+              description: "Result count (default 20, max 100)"
             },
             search: {
               type: "string",
-              description: "Optional: search for a specific item by name (e.g., 'Drake', 'Raven')"
+              description: "Search by item name"
             },
             minProfit: {
               type: "number",
-              description: "Minimum profit threshold in ISK (default 0)"
+              description: "Min profit in ISK"
             },
             includeRisky: {
               type: "boolean",
-              description: "Include low-volume/contract-only items (default false)"
+              description: "Include risky/low-volume items"
+            },
+            activityType: {
+              type: "string",
+              enum: ["all", "manufacturing", "reaction"],
+              description: "all | manufacturing | reaction"
             }
           },
           required: ["sort"]
+        }
+      },
+      {
+        name: "diagnose_blueprints",
+        description: "Diagnose which blueprints exist in DB vs missing. Use when T2 results absent or user reports missing BPCs.",
+        input_schema: { type: "object", properties: {} }
+      },
+      {
+        name: "get_t2_blueprints",
+        description: "List all player T2 blueprints (meta_level=1). Use for: list my T2 BPCs/BPOs. Use analyze_blueprints for buildability filtering.",
+        input_schema: {
+          type: "object",
+          properties: {
+            sort: {
+              type: "string",
+              enum: ["name", "quantity"],
+              description: "name | quantity"
+            }
+          }
         }
       }
     ];
 
     // Trim history to last 30 messages
-    let conversationMessages = messages.slice(-30);
+    let conversationMessages = messages.slice(-10);
 
     // Max 5 tool-use iterations to prevent infinite loops
     const maxIterations = 5;
@@ -1577,11 +1713,12 @@ app.post('/api/ai-chat',
 
             case "get_precomputed":
               try {
-                const pcSort = toolUse.input.sort || 'profit';
-                const pcLimit = Math.min(toolUse.input.limit || 20, 100);
-                const pcMinProfit = toolUse.input.minProfit || 0;
-                const pcSearch = toolUse.input.search;
+                const pcSort         = toolUse.input.sort || 'profit';
+                const pcLimit        = Math.min(toolUse.input.limit || 20, 100);
+                const pcMinProfit    = toolUse.input.minProfit || 0;
+                const pcSearch       = toolUse.input.search;
                 const pcIncludeRisky = toolUse.input.includeRisky || false;
+                const pcActivity     = toolUse.input.activityType || 'all';
 
                 const allowedSorts = {
                   profit: 'profit DESC',
@@ -1590,34 +1727,20 @@ app.post('/api/ai-chat',
                 };
                 const pcOrder = allowedSorts[pcSort] || allowedSorts.profit;
 
+                // Activity filter
+                const activityFilter = pcActivity === 'reaction'
+                  ? 'COALESCE(activity_id,1) = 9'
+                  : pcActivity === 'manufacturing'
+                  ? 'COALESCE(activity_id,1) = 1'
+                  : null;
+
                 let pcResults;
                 if (pcSearch) {
                   const sanitised = pcSearch.replace(/[^a-zA-Z0-9 '\-]/g, '').substring(0, 50);
-                  
+
                   let whereConditions = ['product_name LIKE ?', 'profit > ?'];
                   const params = [`%${sanitised}%`, pcMinProfit];
-                  
-                  // Exclude CRITICAL risks only (not low_volume)
-                  if (!pcIncludeRisky) {
-                    whereConditions.push(`(
-                      liquidity_risk IS NULL 
-                      OR liquidity_risk = ""
-                      OR liquidity_risk = "low_volume"
-                    )`);
-                  }
-                  
-                  const whereClause = whereConditions.join(' AND ');
-                  
-                  pcResults = await dbAll(`
-                    SELECT product_name, material_cost, sell_price, profit,
-                           profit_margin, isk_per_hour, avg_daily_volume, liquidity_risk
-                    FROM precomputed_profits
-                    WHERE ${whereClause}
-                    ORDER BY ${pcOrder} LIMIT ?
-                  `, [...params, pcLimit]);
-                } else {
-                  let whereConditions = ['profit > ?', 'sell_price > 0'];
-                  const params = [pcMinProfit];
+                  if (activityFilter) whereConditions.push(activityFilter);
 
                   // Exclude CRITICAL risks only (not low_volume)
                   if (!pcIncludeRisky) {
@@ -1632,7 +1755,33 @@ app.post('/api/ai-chat',
 
                   pcResults = await dbAll(`
                     SELECT product_name, material_cost, sell_price, profit,
-                           profit_margin, isk_per_hour, avg_daily_volume, liquidity_risk
+                           profit_margin, isk_per_hour, avg_daily_volume, liquidity_risk,
+                           COALESCE(activity_id,1) as activity_id
+                    FROM precomputed_profits
+                    WHERE ${whereClause}
+                    ORDER BY ${pcOrder} LIMIT ?
+                  `, [...params, pcLimit]);
+                } else {
+                  let whereConditions = ['profit > ?', 'sell_price > 0'];
+                  const params = [pcMinProfit];
+
+                  if (activityFilter) whereConditions.push(activityFilter);
+
+                  // Exclude CRITICAL risks only (not low_volume)
+                  if (!pcIncludeRisky) {
+                    whereConditions.push(`(
+                      liquidity_risk IS NULL
+                      OR liquidity_risk = ""
+                      OR liquidity_risk = "low_volume"
+                    )`);
+                  }
+
+                  const whereClause = whereConditions.join(' AND ');
+
+                  pcResults = await dbAll(`
+                    SELECT product_name, material_cost, sell_price, profit,
+                           profit_margin, isk_per_hour, avg_daily_volume, liquidity_risk,
+                           COALESCE(activity_id,1) as activity_id
                     FROM precomputed_profits
                     WHERE ${whereClause}
                     ORDER BY ${pcOrder} LIMIT ?
@@ -1649,6 +1798,77 @@ app.post('/api/ai-chat',
                 toolResult = { error: pcErr.message, results: [] };
               }
               break;
+
+            case "diagnose_blueprints": {
+              try {
+                const diagRes = await fetch(`http://localhost:${PORT}/api/diagnose-t2/${characterId}`);
+                const diagData = await diagRes.json();
+                toolResult = {
+                  summary: diagData.summary,
+                  total_blueprints: diagData.total,
+                  found_in_db: diagData.inDb?.length || 0,
+                  missing_from_db: diagData.notInDb?.length || 0,
+                  t2_found: diagData.t2InDb?.length || 0,
+                  t2_missing: diagData.t2NotInDb?.length || 0,
+                  missing_names: (diagData.notInDb || []).map(b => b.name),
+                  t2_missing_names: (diagData.t2NotInDb || []).map(b => b.name),
+                  note: diagData.t2NotInDb?.length > 0
+                    ? `${diagData.t2NotInDb.length} T2 blueprint(s) not in the SDE database — their chain data cannot be analysed until the database is updated.`
+                    : 'All T2 blueprints found in database.'
+                };
+              } catch (diagErr) {
+                toolResult = { error: diagErr.message };
+              }
+              break;
+            }
+
+            case "get_t2_blueprints": {
+              try {
+                const t2Sort = toolUse.input.sort || 'name';
+                const bpList = blueprints || [];
+
+                // Single bulk query — items.meta_level=1 means T2
+                const typeIds = bpList.map(b => b.type_id);
+                let t2TypeIds = new Set();
+                let nameMap   = {};
+
+                if (typeIds.length > 0) {
+                  const ph = typeIds.map(() => '?').join(',');
+                  const rows = await new Promise((rs, rj) =>
+                    db.all(`SELECT type_id, name, meta_level FROM items WHERE type_id IN (${ph})`, typeIds, (e, r) => e ? rj(e) : rs(r))
+                  );
+                  rows.forEach(r => {
+                    nameMap[r.type_id] = r.name;
+                    if ((r.meta_level ?? 0) === 1) t2TypeIds.add(r.type_id);
+                  });
+                }
+
+                let t2Blueprints = bpList
+                  .filter(bp => t2TypeIds.has(bp.type_id))
+                  .map(bp => ({ type_id: bp.type_id, name: nameMap[bp.type_id] || `Blueprint #${bp.type_id}`, quantity: bp.quantity }));
+
+                if (t2Sort === 'quantity') {
+                  t2Blueprints.sort((a, b) => b.quantity - a.quantity);
+                } else {
+                  t2Blueprints.sort((a, b) => a.name.localeCompare(b.name));
+                }
+
+                toolResult = {
+                  total: t2Blueprints.length,
+                  total_blueprints: bpList.length,
+                  blueprints: t2Blueprints.map(bp => ({
+                    name: bp.name,
+                    type_id: bp.type_id,
+                    owned: bp.quantity === -1 ? 'BPO' : 'BPC',
+                    quantity: bp.quantity === -1 ? 'Infinite (BPO)' : `${bp.quantity} copy${bp.quantity !== 1 ? 's' : ''}`
+                  })),
+                  summary: `Found ${t2Blueprints.length} T2 blueprints out of ${bpList.length} total`
+                };
+              } catch (t2Err) {
+                toolResult = { error: t2Err.message, blueprints: [] };
+              }
+              break;
+            }
 
             default:
               toolResult = { error: `Unknown tool: ${toolUse.name}` };
@@ -1699,9 +1919,7 @@ app.post('/api/ai-chat',
   }
 });
 
-// ═══════════════════════════════════════════════════════════════════════
 // SESSION DATA CACHING
-// ═══════════════════════════════════════════════════════════════════════
 
 // Store character session data (assets, blueprints, prices, etc.)
 // This avoids sending 2-3MB with every AI request
@@ -1804,9 +2022,7 @@ app.get('/api/session-data/:characterId',
   }
 );
 
-// ═══════════════════════════════════════════════════════════════════════
 // CHAT HISTORY (Authenticated)
-// ═══════════════════════════════════════════════════════════════════════
 
 // Save chat message (authenticated)
 app.post('/api/save-message',
@@ -1903,11 +2119,9 @@ app.post('/api/invalidate-session',
   }
 );
 
-// ═══════════════════════════════════════════════════════════════════════
 // PRE-COMPUTATION ENGINE (v0.9.0)
 // Calculates profitability for ALL blueprints, stores in DB
 // Replaces real-time AI calculations for common queries
-// ═══════════════════════════════════════════════════════════════════════
 
 let preComputeRunning = false;
 
@@ -1950,7 +2164,8 @@ async function runPreCompute() {
 
     // Step 2: Load all blueprints and materials into memory (batch, not per-item)
     const allBlueprints = await dbAll(`
-      SELECT b.blueprint_id, b.product_id, b.product_quantity, b.build_time, i.name AS product_name
+      SELECT b.blueprint_id, b.product_id, b.product_quantity, b.build_time,
+             COALESCE(b.activity_id, 1) AS activity_id, i.name AS product_name
       FROM blueprints b
       LEFT JOIN items i ON i.type_id = b.product_id
     `);
@@ -2010,12 +2225,13 @@ async function runPreCompute() {
         INSERT INTO precomputed_profits
           (blueprint_id, product_id, product_name, material_cost, sell_price,
            buy_price, profit, profit_margin, isk_per_hour, build_time,
-           material_count, computed_at, price_source)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'jita')
+           material_count, computed_at, price_source, activity_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'jita', ?)
       `, [
         bp.blueprint_id, bp.product_id, bp.product_name || null,
         totalMatCost, sellPrice, buyPrice, profit, profitMargin,
-        iskPerHour, bp.build_time || 0, materials.length, computedAt
+        iskPerHour, bp.build_time || 0, materials.length, computedAt,
+        bp.activity_id || 1
       ]);
 
       processed++;
@@ -2086,11 +2302,9 @@ function calculateMaterialCostSync(materialId, quantity, prices, materialsByBp, 
   return (prices[materialId]?.buy || 0) * quantity;
 }
 
-// ═══════════════════════════════════════════════════════════════════════
 // VOLUME ENRICHMENT JOB (v0.9.1)
 // Fetches market history + market_group_id for top profitable items
 // Runs incrementally to respect ESI rate limits
-// ═══════════════════════════════════════════════════════════════════════
 
 let volumeEnrichmentRunning = false;
 
@@ -2244,10 +2458,8 @@ async function runVolumeEnrichment() {
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
 // PRE-COMPUTED PROFITABILITY API (v0.9.0)
 // Serves data from DB — zero AI tokens
-// ═══════════════════════════════════════════════════════════════════════
 app.get('/api/top-profitable', security.apiLimiter, async (req, res) => {
   try {
     const sort = req.query.sort || 'profit';
@@ -2339,10 +2551,8 @@ app.get('/api/top-profitable', security.apiLimiter, async (req, res) => {
   }
 });
 
-// ═══════════════════════════════════════════════════════════════════════
 // TOP PROFITABLE by Skills — filters top 50 by user's trained skills
 // For Market Opportunities tab — shows only blueprints user can build
-// ═══════════════════════════════════════════════════════════════════════
 app.get('/api/top-profitable-by-skills', security.apiLimiter, security.verifyEveToken, async (req, res) => {
   try {
     const characterId = req.characterId;
@@ -2356,12 +2566,22 @@ app.get('/api/top-profitable-by-skills', security.apiLimiter, security.verifyEve
     const sessionKey = `session:${characterId}`;
     const sessionData = getCached(sessionKey);
 
-    if (!sessionData || !sessionData.skills) {
-      console.warn(`⚠ Skills not in session for character ${characterId} — falling back to all items`);
-      // Fall back to regular top-profitable if skills unavailable
+    if (!sessionData || !sessionData.skills || sessionData.skills.length === 0) {
+      console.warn(`⚠ Skills not in session for character ${characterId} — returning unfiltered top-profitable`);
+
+      // Build same query as /api/top-profitable so the tab isn't blank
+      const fbAllowedSorts = { profit: 'profit DESC', margin: 'profit_margin DESC', isk_per_hour: 'isk_per_hour DESC' };
+      const fbOrder = fbAllowedSorts[sort] || fbAllowedSorts.profit;
+      const fbWhere = ['profit > ?', 'sell_price > 0', `(liquidity_risk IS NULL OR liquidity_risk = "" OR liquidity_risk = "low_volume")`];
+      const fbParams = [minProfit];
+      const fbResults = await dbAll(
+        `SELECT blueprint_id, product_id, product_name, material_cost, sell_price, buy_price, profit, profit_margin, isk_per_hour, build_time, material_count, computed_at, avg_daily_volume, liquidity_risk, COALESCE(activity_id,1) as activity_id FROM precomputed_profits WHERE ${fbWhere.join(' AND ')} ORDER BY ${fbOrder} LIMIT ?`,
+        [...fbParams, limit]
+      );
+      const fbLastRun = await dbGet(`SELECT completed_at FROM precompute_runs ORDER BY id DESC LIMIT 1`);
       return res.json({
-        results: [],
-        meta: { count: 0, sort, filter: 'skills_unavailable', message: 'Skills data not available' }
+        results: fbResults,
+        meta: { count: fbResults.length, sort, filter: 'unfiltered_skills_unavailable', lastComputed: fbLastRun?.completed_at || null }
       });
     }
 
@@ -2402,7 +2622,8 @@ app.get('/api/top-profitable-by-skills', security.apiLimiter, security.verifyEve
       SELECT blueprint_id, product_id, product_name, material_cost,
              sell_price, buy_price, profit, profit_margin, isk_per_hour,
              build_time, material_count, computed_at,
-             avg_daily_volume, market_group_id, liquidity_risk
+             avg_daily_volume, market_group_id, liquidity_risk,
+             COALESCE(activity_id, 1) as activity_id
       FROM precomputed_profits
       WHERE ${whereClause}
       ORDER BY ${orderClause}
@@ -2583,9 +2804,7 @@ app.post('/api/admin/volume-enrichment', async (req, res) => {
   }
 });
 
-// ═══════════════════════════════════════════════════════════════════════
 // AI COST TRACKING (v0.9.0)
-// ═══════════════════════════════════════════════════════════════════════
 
 // Sonnet 4.6 pricing (per million tokens, as of 2026)
 const AI_PRICING = {
@@ -2593,11 +2812,9 @@ const AI_PRICING = {
   'claude-sonnet-4-20250514': { input: 3.00, output: 15.00 }
 };
 
-// ═══════════════════════════════════════════════════════════════════════
 // FORGE AI SYSTEM PROMPT (static — cached server-side)
 // Moving this here enables Anthropic prompt caching (90% token discount
 // on repeat calls within 5 minutes)
-// ═══════════════════════════════════════════════════════════════════════
 const FORGE_STATIC_SYSTEM_PROMPT = `You are F.O.R.G.E. — a specialized EVE Online manufacturing intelligence advisor.
 
 ══ SCOPE ══
@@ -2611,16 +2828,20 @@ You ONLY answer questions about EVE Online:
 Politely refuse ALL non-EVE questions: "I'm specialized for EVE manufacturing only."
 
 ══ TOOLS (use these to answer questions — do not guess from memory) ══
-1. get_precomputed(sort, limit, search, minProfit, includeRisky)
+1. get_precomputed(sort, limit, search, minProfit, includeRisky, activityType)
    PREFERRED for profit/market questions. Pre-computed Jita data, fast, no cost.
-   Use FIRST for: "what's profitable", "top items", "best ISK/hour".
+   Use FIRST for: "what's profitable", "top items", "best ISK/hour", "best reactions", "top reactions to run".
+   activityType: "all" (default) | "manufacturing" | "reaction"
+   Results include activity_id: 1=manufacturing, 9=reaction.
 
 2. analyze_blueprints(sortBy, limit, buildableOnly)
    Analyzes the player's OWN blueprints against their assets.
    sortBy options: profit | margin | cost | time | materials | completion
    Use "completion" sort for: "T2 chains closest to finishing", "what can I almost build",
    "which blueprints am I closest to having all materials for".
-   Returns completionPct (0-100) per item.
+   Returns completionPct (0-100) and techTier (T1/T2/T3) per item.
+   Also returns skipped/skippedNames — blueprints not found in the SDE database.
+   If skippedNames is non-empty, inform user: "Note: X blueprints weren't found in the database: [names]"
 
 3. get_blueprint(itemName or productId)
    Detailed materials + costs for any single blueprint.
@@ -2632,6 +2853,17 @@ Politely refuse ALL non-EVE questions: "I'm specialized for EVE manufacturing on
 5. get_active_jobs(activityFilter?)
    Returns the player's current industry job queue with time remaining.
    Use for: "what's building", "active jobs", "reactions running", "job queue".
+
+6. get_t2_blueprints(sort?)
+   Returns ALL T2 blueprints owned by the player (BPOs and BPCs, meta_level=1).
+   Use for: "list my T2 blueprints", "show all T2 copies", "what T2 do I own".
+   Returns total count, owned type (BPO/BPC), and quantity.
+
+7. diagnose_blueprints()
+   Checks which of the player's blueprints exist in the SDE database.
+   Use when analyze_blueprints returns no T2 results, or user reports missing T2 data.
+   Returns exact counts and names of T2 blueprints found vs missing from DB.
+   If t2_missing > 0: explain the database gap clearly to the user and list the missing blueprint names.
 
 Never show raw type IDs ("Item #12345") — always resolve names first.
 
@@ -2772,9 +3004,7 @@ app.get('/api/admin/ai-costs', async (req, res) => {
   }
 });
 
-// ═══════════════════════════════════════════════════════════════════════
 // HEALTH CHECK
-// ═══════════════════════════════════════════════════════════════════════
 app.get('/health', async (req, res) => {
   let lastPrecompute = null;
   try {
@@ -2797,7 +3027,7 @@ app.get('/health', async (req, res) => {
 
   res.json({ 
     status: "ok",
-    version: "0.9.2.1",
+    version: "1.0.0.0",
     uptime: process.uptime(),
     database: db ? "connected" : "disconnected",
     precompute: {
@@ -2819,9 +3049,7 @@ app.get('/health', async (req, res) => {
   });
 });
 
-// ═══════════════════════════════════════════════════════════════════════
 // START SERVER
-// ═══════════════════════════════════════════════════════════════════════
 initDatabase().then(async () => {
   // Run v0.9.0 migrations
   await runMigrations();
@@ -2829,7 +3057,7 @@ initDatabase().then(async () => {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`
 ╔════════════════════════════════════════════╗
-║F.O.R.G.E. Server v2.3.2.1 (v0.9.2.1) Running║
+║      F.O.R.G.E. Server v1.0.0.0 Running      ║
 ║     http://localhost:${PORT}               ║
 ║     Database: SQLite                        ║
 ║     Security: ENABLED ✓                     ║
