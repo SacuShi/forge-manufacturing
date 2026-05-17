@@ -2,9 +2,13 @@
  * FORGE SDE Import Script v2
  *
  * Downloads reference-data-latest.tar.xz from data.everef.net and patches forge.db:
- *   1. Adds/populates meta_level on items         (meta_group_id 2=T2, 14=T3)
- *   2. Creates/populates blueprint_skills table   (all activities)
- *   3. Imports reaction formulas into blueprints  (activity_id=9)
+ *   1. Adds/populates meta_level on items              (meta_group_id 2=T2, 14=T3)
+ *   2. Creates/populates blueprint_skills table        (all activities)
+ *   3. Imports reaction formulas into blueprints       (activity_id=9)
+ *   4. Ensures reaction component items exist          (moon goo, gases, etc.)
+ *   5. Ensures all blueprint-referenced items exist    (products, materials)
+ *   6. Bulk-imports ALL types from types.json          (faction, clothing, SKINs, etc.)
+ *   7. Verification report
  *
  * Usage:  node sde-import.js
  * IMPORTANT: Stop the server first — pm2 stop forge
@@ -306,13 +310,10 @@ async function ensureReactionItems(bpData, typesData) {
 }
 
 // ── Step 5: Ensure all blueprint-referenced type_ids are in items ─────────────
-// Covers blueprint type_ids, product_ids, and materials for all activities.
-// This ensures names + icons resolve in the UI for every item in the DB.
 
 async function ensureAllBlueprintItems(typesData) {
   console.log('\n═══ Step 5: ensure all blueprint items in items table ═══');
 
-  // Collect every type_id the blueprints table references
   const rows = await new Promise((rs, rj) =>
     db.all(
       `SELECT blueprint_id as id FROM blueprints
@@ -326,7 +327,6 @@ async function ensureAllBlueprintItems(typesData) {
   const allIds = [...new Set(rows.map(r => r.id).filter(Boolean))];
   console.log(`  ${allIds.length} unique type_ids referenced across blueprints + materials`);
 
-  // Find missing ones in chunks of 500
   const missingIds = [];
   for (let i = 0; i < allIds.length; i += 500) {
     const chunk = allIds.slice(i, i + 500);
@@ -359,10 +359,7 @@ async function ensureAllBlueprintItems(typesData) {
     const name      = typeof type.name === 'string' ? type.name : (type.name?.en ?? null);
     const metaLevel = metaMap[typeId] ?? 0;
     try {
-      await dbRun(
-        `INSERT OR IGNORE INTO items (type_id, name, meta_level) VALUES (?, ?, ?)`,
-        [typeId, name, metaLevel]
-      );
+      await dbRun(`INSERT OR IGNORE INTO items (type_id, name, meta_level) VALUES (?, ?, ?)`, [typeId, name, metaLevel]);
       inserted++;
     } catch (_) {}
   }
@@ -373,10 +370,62 @@ async function ensureAllBlueprintItems(typesData) {
   if (notInSde > 0) console.log(`  ⚠ ${notInSde} type_ids not in types.json (legacy/removed items)`);
 }
 
-// ── Step 6: Verify ────────────────────────────────────────────────────────────
+// ── Step 6: Bulk-import ALL types from types.json ─────────────────────────────
+// Covers everything types.json knows about — faction items, navy/pirate modules,
+// clothing, SKINs, SKINR components, implants, boosters, LP store items, etc.
+// Uses INSERT OR IGNORE so existing entries (with correct names) are never clobbered.
+
+async function importAllTypes(typesData) {
+  console.log('\n═══ Step 6: bulk import all types from types.json ═══');
+
+  const metaMap = {};
+  for (const type of Object.values(typesData)) {
+    if (type.meta_group_id === 2)  metaMap[type.type_id] = 1;
+    if (type.meta_group_id === 14) metaMap[type.type_id] = 2;
+  }
+
+  const allTypes = Object.values(typesData);
+  console.log(`  ${allTypes.length} total types in types.json`);
+
+  // Check how many are already present
+  const existingCount = await dbGet('SELECT COUNT(*) as c FROM items');
+  console.log(`  ${existingCount.c} items currently in DB`);
+
+  let inserted = 0, updated = 0;
+  const CHUNK = 500;
+
+  for (let i = 0; i < allTypes.length; i += CHUNK) {
+    const chunk = allTypes.slice(i, i + CHUNK);
+    await dbRun('BEGIN TRANSACTION');
+    for (const type of chunk) {
+      if (!type.type_id) continue;
+      const name      = typeof type.name === 'string' ? type.name : (type.name?.en ?? null);
+      if (!name) continue; // skip types with no English name (unpublished/internal)
+      const metaLevel = metaMap[type.type_id] ?? 0;
+      try {
+        const r = await dbRun(
+          `INSERT INTO items (type_id, name, meta_level) VALUES (?, ?, ?)
+           ON CONFLICT(type_id) DO UPDATE SET
+             name = CASE WHEN excluded.name IS NOT NULL THEN excluded.name ELSE name END,
+             meta_level = excluded.meta_level`,
+          [type.type_id, name, metaLevel]
+        );
+        if (r.changes === 1) inserted++;
+        else updated++;
+      } catch (_) {}
+    }
+    await dbRun('COMMIT');
+
+    if (i % 10000 === 0 && i > 0) console.log(`  ... ${i}/${allTypes.length}`);
+  }
+
+  console.log(`  ✓ Inserted ${inserted} new items, updated ${updated} existing`);
+}
+
+// ── Step 7: Verify ────────────────────────────────────────────────────────────
 
 async function verify() {
-  console.log('\n═══ Step 6: Verification ═══');
+  console.log('\n═══ Step 7: Verification ═══');
 
   const t2       = await dbGet(`SELECT COUNT(*) as c FROM items WHERE meta_level = 1`);
   const sk       = await dbGet(`SELECT COUNT(*) as c FROM blueprint_skills`);
@@ -391,13 +440,15 @@ async function verify() {
     ) i
   `);
 
-  // Check how many blueprint_ids have no name in items
   const unnamed = await dbGet(`
     SELECT COUNT(*) as c FROM blueprints b
     LEFT JOIN items i ON i.type_id = b.blueprint_id
     WHERE i.type_id IS NULL OR i.name IS NULL
   `);
 
+  const totalItems = await dbGet('SELECT COUNT(*) as c FROM items');
+
+  console.log(`  total items in DB:              ${totalItems.c}`);
   console.log(`  items with meta_level=1 (T2):  ${t2.c}`);
   console.log(`  blueprint_skills rows:          ${sk.c}`);
   console.log(`  blueprints — manufacturing:     ${mfgCount.c}`);
@@ -448,6 +499,7 @@ async function main() {
     await importReactionFormulas(bpData);
     await ensureReactionItems(bpData, typesData);
     await ensureAllBlueprintItems(typesData);
+    await importAllTypes(typesData);
     await verify();
 
     console.log('\n✅ Done. Next steps:');
