@@ -239,7 +239,7 @@ const ChatPanel: FC<ChatPanelProps> = ({
                 className="quick-prompt-btn"
                 onClick={() => handleQuickPrompt(prompt)}
               >
-                {prompt.length > 40 ? prompt.slice(0, 40) + '…' : prompt}
+                {prompt}
               </button>
             ))}
           </div>
