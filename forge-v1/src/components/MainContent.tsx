@@ -24,6 +24,9 @@ interface MainContentProps {
   selectedTypeId: number | null;
   /** Called when a market table row is clicked — only passes typeId */
   onMarketSelect: (typeId: number) => void;
+  onLoadMoreMarket?: () => void;
+  marketLoadingMore?: boolean;
+  marketHasMore?: boolean;
 
   // Blueprints/Assets/Jobs tabs
   blueprints: EsiBlueprint[];
@@ -54,6 +57,9 @@ const MainContent: FC<MainContentProps> = ({
   marketError,
   selectedTypeId,
   onMarketSelect,
+  onLoadMoreMarket,
+  marketLoadingMore,
+  marketHasMore,
   blueprints,
   assets,
   activeJobs,
@@ -218,7 +224,7 @@ const MainContent: FC<MainContentProps> = ({
         <>
           {/* Content header + filter row */}
           <div className="content-header" style={{ padding: '12px 20px 0' }}>
-            <h1 className="content-title">Market Opportunities - Top 50</h1>
+            <h1 className="content-title">Market Opportunities</h1>
             <span className="content-meta" aria-live="polite">
               {displayItems.length} item{displayItems.length !== 1 ? 's' : ''} · Jita 4-4
             </span>
@@ -300,6 +306,33 @@ const MainContent: FC<MainContentProps> = ({
                 onSort={handleSort}
                 onSelect={onMarketSelect}
               />
+              {(marketHasMore || marketLoadingMore) && (
+                <div style={{
+                  flexShrink: 0,
+                  padding: '10px 20px',
+                  borderTop: '0.5px solid var(--color-border-light)',
+                  background: 'var(--color-bg-secondary)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 10,
+                }}>
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={onLoadMoreMarket}
+                    disabled={marketLoadingMore}
+                    style={{ letterSpacing: '1px', minWidth: 160 }}
+                  >
+                    {marketLoadingMore
+                      ? <><span className="spin" style={{ display: 'inline-block', marginRight: 6 }}>◈</span>Loading…</>
+                      : `Load next 50  ↓`}
+                  </button>
+                  <span style={{ fontSize: 10, color: 'var(--color-text-tertiary)' }}>
+                    {marketItems.length} loaded
+                  </span>
+                </div>
+              )}
             </div>
           )}
         </>

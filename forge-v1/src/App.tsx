@@ -25,7 +25,8 @@ import LoadingScreen from './components/LoadingScreen';
 
 function mapToMarketItems(
   results: TopProfitableResponse['results'],
-  esiBlueprints: Array<{ type_id: number; quantity: number; runs: number }>
+  esiBlueprints: Array<{ type_id: number; quantity: number; runs: number }>,
+  rankOffset = 0
 ): MarketItem[] {
   // Map type_id → owned status.
   // ESI: BPO = runs === -1; BPC singleton = quantity === -1 but runs > 0; BPC stack = quantity > 0
@@ -42,7 +43,7 @@ function mapToMarketItems(
     const owned = bpMap.get(item.blueprint_id) ?? '—';
 
     return {
-      rank:             index + 1,
+      rank:             rankOffset + index + 1,
       typeId:           item.product_id,
       name:             item.product_name,
       category:         '',
@@ -99,6 +100,8 @@ const App: FC = () => {
   const [marketItems, setMarketItems] = useState<MarketItem[]>([]);
   const [rawResults, setRawResults] = useState<TopProfitableResponse['results']>([]);
   const [marketLoading, setMarketLoading] = useState(false);
+  const [marketLoadingMore, setMarketLoadingMore] = useState(false);
+  const [marketHasMore, setMarketHasMore] = useState(true);
   const [marketError, setMarketError] = useState<string | null>(null);
 
   const {
@@ -121,6 +124,7 @@ const App: FC = () => {
       .then((data) => {
         setRawResults(data.results);
         setMarketItems(mapToMarketItems(data.results, auth.blueprints));
+        setMarketHasMore(data.meta.hasMore ?? data.results.length >= 50);
 
         const lastComputed = data.meta.lastComputed
           ? new Date(data.meta.lastComputed).toLocaleTimeString()
@@ -185,6 +189,28 @@ const App: FC = () => {
     const mi = marketItems.find((m) => m.typeId === selectedTypeId);
     return toItemDetail(raw, mi?.owned ?? '—');
   })();
+
+  const handleLoadMoreMarket = useCallback(async () => {
+    if (marketLoadingMore || !marketHasMore || !auth.token) return;
+    setMarketLoadingMore(true);
+    try {
+      const nextOffset = rawResults.length;
+      const data = await apiGet<TopProfitableResponse>(
+        `/api/top-profitable-by-skills?limit=50&offset=${nextOffset}`,
+        auth.token
+      );
+      setRawResults((prev) => [...prev, ...data.results]);
+      setMarketItems((prev) => [
+        ...prev,
+        ...mapToMarketItems(data.results, auth.blueprints, prev.length),
+      ]);
+      setMarketHasMore(data.meta.hasMore ?? data.results.length >= 50);
+    } catch (e) {
+      console.error('Load more market items failed:', e);
+    } finally {
+      setMarketLoadingMore(false);
+    }
+  }, [marketLoadingMore, marketHasMore, auth.token, auth.blueprints, rawResults.length]);
 
   const handleToggleChat = () => {
     setChatOpen((p) => !p);
@@ -407,6 +433,9 @@ const App: FC = () => {
           selectedTypeId={selectedTypeId}
           onSelectItem={handleSelectItem}
           onMarketSelect={handleItemSelect}
+          onLoadMoreMarket={handleLoadMoreMarket}
+          marketLoadingMore={marketLoadingMore}
+          marketHasMore={marketHasMore}
         />
 
         {/* Tablet overlay (dims background when detail panel is open) */}

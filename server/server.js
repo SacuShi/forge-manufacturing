@@ -2557,7 +2557,8 @@ app.get('/api/top-profitable-by-skills', security.apiLimiter, security.verifyEve
   try {
     const characterId = req.characterId;
     const sort = req.query.sort || 'profit';
-    const limit = Math.min(parseInt(req.query.limit) || 50, 100);
+    const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+    const offset = Math.max(parseInt(req.query.offset) || 0, 0);
     const minProfit = parseFloat(req.query.minProfit) || 0;
     const minVolume = parseFloat(req.query.minVolume) !== undefined ? parseFloat(req.query.minVolume) : 5;
     const includeRisky = req.query.includeRisky === 'true';
@@ -2617,7 +2618,7 @@ app.get('/api/top-profitable-by-skills', security.apiLimiter, security.verifyEve
 
     const whereClause = whereConditions.join(' AND ');
 
-    // Get candidate items (more than limit, to account for skill filtering)
+    // Get candidate items — 3× (offset + limit) to survive skill filtering
     const candidates = await dbAll(`
       SELECT blueprint_id, product_id, product_name, material_cost,
              sell_price, buy_price, profit, profit_margin, isk_per_hour,
@@ -2628,13 +2629,15 @@ app.get('/api/top-profitable-by-skills', security.apiLimiter, security.verifyEve
       WHERE ${whereClause}
       ORDER BY ${orderClause}
       LIMIT ?
-    `, [...params, limit * 3]); // Get 3x to account for skill filtering
+    `, [...params, (offset + limit) * 3]);
 
-    // Filter by skill requirements
+    // Filter by skill requirements, skipping the first `offset` qualified items
     const results = [];
+    let skipped = 0;
     for (const item of candidates) {
       const canBuild = await canBuildBlueprint(characterSkills, item.blueprint_id);
       if (canBuild) {
+        if (skipped < offset) { skipped++; continue; }
         results.push(item);
         if (results.length >= limit) break;
       }
@@ -2660,7 +2663,9 @@ app.get('/api/top-profitable-by-skills', security.apiLimiter, security.verifyEve
         filter: 'by_skills',
         skillsLoaded: characterSkills.length,
         lastComputed: lastRun?.completed_at || null,
-        lastRunStatus: lastRun?.status || 'never'
+        lastRunStatus: lastRun?.status || 'never',
+        offset,
+        hasMore: results.length >= limit,
       }
     });
 

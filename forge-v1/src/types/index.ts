@@ -174,6 +174,8 @@ export interface TopProfitableResponse {
     lastComputed: string | null;
     lastRunStatus: string;
     riskBreakdown: Record<string, number>;
+    hasMore?: boolean;
+    offset?: number;
   };
 }
 
