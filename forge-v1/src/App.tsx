@@ -85,6 +85,7 @@ const App: FC = () => {
   );
   const [activeTab, setActiveTab] = useState('market');
   const [chatOpen, setChatOpen] = useState(false);
+  const [chatAutoOpened, setChatAutoOpened] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedTypeId, setSelectedTypeId] = useState<number | null>(null);
@@ -128,15 +129,21 @@ const App: FC = () => {
         // Only set welcome message if no history loaded yet
         setChatMessages((prev) => prev.length === 0 ? [{
           role:    'assistant',
-          content: `Welcome back, ${auth.character?.name}. ` +
-                   `Your wallet is at ${((auth.character?.walletISK ?? 0) / 1e9).toFixed(2)}B ISK ` +
-                   `with ${auth.character?.activeJobCount ?? 0} active jobs.\n\n` +
-                   `Market data last updated ${lastComputed}. ` +
-                   `${data.results.length} profitable opportunities found.`,
+          content: `${auth.character?.name}, your data is ready.\n\n` +
+                   `Wallet: **${((auth.character?.walletISK ?? 0) / 1e9).toFixed(2)}B ISK** · ` +
+                   `${auth.character?.activeJobCount ?? 0} active jobs · ` +
+                   `${data.results.length} profitable opportunities loaded ` +
+                   `(updated ${lastComputed}).\n\n` +
+                   `Ask me what's most profitable to build right now, or ask about any specific item or blueprint.`,
         }] : prev);
       })
       .catch((e: Error) => setMarketError(e.message))
-      .finally(() => setMarketLoading(false));
+      .finally(() => {
+        setMarketLoading(false);
+        // Auto-open the chat panel after every login once data is ready
+        setChatOpen(true);
+        setChatAutoOpened(true);
+      });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth.status]);
 
@@ -179,7 +186,10 @@ const App: FC = () => {
     return toItemDetail(raw, mi?.owned ?? '—');
   })();
 
-  const handleToggleChat = () => setChatOpen((p) => !p);
+  const handleToggleChat = () => {
+    setChatOpen((p) => !p);
+    setChatAutoOpened(false);
+  };
 
   const handleItemSelect = useCallback((typeId: number) => {
     setSelectedTypeId((prev) => {
@@ -353,7 +363,16 @@ const App: FC = () => {
         onLogout={auth.logout}
       />
 
-      <div className="app-body">
+      <div
+        className="app-body"
+        onClick={(e) => {
+          if (!chatAutoOpened) return;
+          if (!(e.target as HTMLElement).closest('.chat-panel')) {
+            setChatOpen(false);
+            setChatAutoOpened(false);
+          }
+        }}
+      >
         {/* Mobile drawer backdrop */}
         {drawerOpen && (
           <div

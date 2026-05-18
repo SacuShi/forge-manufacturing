@@ -100,7 +100,7 @@ const Header: FC<HeaderProps> = ({
           aria-label={chatOpen ? 'Close F.O.R.G.E. AI advisor' : 'Open F.O.R.G.E. AI advisor'}
           onClick={onToggleChat}
         >
-          ◈ F.O.R.G.E. AI
+          Ask F.O.R.G.E. AI
         </button>
 
       </div>
