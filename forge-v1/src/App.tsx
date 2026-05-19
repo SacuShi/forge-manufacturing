@@ -1,13 +1,15 @@
 // FORGE v1.0 — App root. Auth states: idle/exchanging/loading → authed | error
 
-import { useState, useEffect, useCallback, type FC } from 'react';
+import { useState, useEffect, useCallback, useMemo, type FC } from 'react';
 import type {
   ChatMessage,
   MarketItem,
   ItemDetail,
   TopProfitableResponse,
   AiChatResponse,
+  Market,
 } from './types';
+import { MARKETS } from './components/MarketSelector';
 import { useAuth }       from './hooks/useAuth';
 import { useItemDetail } from './hooks/useItemDetail';
 import { useItemNames }  from './hooks/useItemNames';
@@ -97,18 +99,25 @@ const App: FC = () => {
   const [panelHistory, setPanelHistory] = useState<Array<{ typeId: number; name: string }>>([]);
 
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-  const [marketItems, setMarketItems] = useState<MarketItem[]>([]);
   const [rawResults, setRawResults] = useState<TopProfitableResponse['results']>([]);
   const [marketLoading, setMarketLoading] = useState(false);
   const [marketLoadingMore, setMarketLoadingMore] = useState(false);
   const [marketHasMore, setMarketHasMore] = useState(true);
   const [marketError, setMarketError] = useState<string | null>(null);
+  const [selectedMarket, setSelectedMarket] = useState<Market>(MARKETS[0]);
+
+  // Derive marketItems from rawResults — all prices come from the precomputed table
+  // which is now run per-region, so no client-side overlay needed.
+  const marketItems = useMemo<MarketItem[]>(() => {
+    if (!rawResults.length) return [];
+    return mapToMarketItems(rawResults, auth.blueprints);
+  }, [rawResults, auth.blueprints]);
 
   const {
     detail: apiDetail,
     loading: detailLoading,
     error: detailError,
-  } = useItemDetail(selectedTypeId, auth.assets, auth.blueprints, auth.token);
+  } = useItemDetail(selectedTypeId, auth.assets, auth.blueprints, auth.token, selectedMarket.id);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -123,7 +132,6 @@ const App: FC = () => {
     apiGet<TopProfitableResponse>('/api/top-profitable-by-skills?limit=50', auth.token ?? '')
       .then((data) => {
         setRawResults(data.results);
-        setMarketItems(mapToMarketItems(data.results, auth.blueprints));
         setMarketHasMore(data.meta.hasMore ?? data.results.length >= 50);
 
         const lastComputed = data.meta.lastComputed
@@ -196,21 +204,17 @@ const App: FC = () => {
     try {
       const nextOffset = rawResults.length;
       const data = await apiGet<TopProfitableResponse>(
-        `/api/top-profitable-by-skills?limit=50&offset=${nextOffset}`,
+        `/api/top-profitable-by-skills?limit=50&offset=${nextOffset}&regionId=${selectedMarket.id}`,
         auth.token
       );
       setRawResults((prev) => [...prev, ...data.results]);
-      setMarketItems((prev) => [
-        ...prev,
-        ...mapToMarketItems(data.results, auth.blueprints, prev.length),
-      ]);
       setMarketHasMore(data.meta.hasMore ?? data.results.length >= 50);
     } catch (e) {
       console.error('Load more market items failed:', e);
     } finally {
       setMarketLoadingMore(false);
     }
-  }, [marketLoadingMore, marketHasMore, auth.token, auth.blueprints, rawResults.length]);
+  }, [marketLoadingMore, marketHasMore, auth.token, rawResults.length, selectedMarket.id]);
 
   const handleToggleChat = () => {
     setChatOpen((p) => !p);
@@ -261,6 +265,29 @@ const App: FC = () => {
     setDetailOpen(false);
     setPanelHistory([]);   // clear back-stack on explicit close
   }, []);
+
+  const handleMarketChange = useCallback(async (market: Market) => {
+    setSelectedMarket(market);
+    setRawResults([]);
+    setMarketHasMore(true);
+    setMarketError(null);
+    setMarketLoading(true);
+    try {
+      const data = await apiGet<TopProfitableResponse>(
+        `/api/top-profitable-by-skills?limit=50&regionId=${market.id}`,
+        auth.token ?? ''
+      );
+      setRawResults(data.results);
+      setMarketHasMore(data.meta.hasMore ?? data.results.length >= 50);
+    } catch (e) {
+      console.error('Failed to load market for region:', e);
+      setMarketError((e as Error).message);
+      // Fall back to Jita selector on error
+      setSelectedMarket(MARKETS[0]);
+    } finally {
+      setMarketLoading(false);
+    }
+  }, [auth.token]);
 
   const handleSendMessage = useCallback(async (text: string) => {
     const now    = Date.now();
@@ -383,10 +410,13 @@ const App: FC = () => {
         character={character}
         chatOpen={chatOpen}
         theme={theme}
+        selectedMarket={selectedMarket}
+        regionLoading={marketLoading}
         onToggleChat={handleToggleChat}
         onMenuToggle={() => setDrawerOpen((o) => !o)}
         onThemeToggle={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
         onLogout={auth.logout}
+        onMarketChange={handleMarketChange}
       />
 
       <div
@@ -454,6 +484,7 @@ const App: FC = () => {
           detailOpen={detailOpen}
           blueprints={auth.blueprints}
           itemNames={itemNames}
+          selectedMarket={selectedMarket}
           onClose={handleCloseDetail}
           onSelectItem={handleSelectItem}
           onBack={handlePanelBack}

@@ -22,7 +22,7 @@
  */
 
 import { useMemo, type FC } from 'react';
-import type { ItemDetail, ItemDetailApiResponse, EsiBlueprint } from '../types';
+import type { ItemDetail, ItemDetailApiResponse, EsiBlueprint, Market } from '../types';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -39,6 +39,8 @@ interface RightSidebarProps {
   blueprints:      EsiBlueprint[];
   /** Item name map (typeId → name) — used for product icon lookup + chain detection */
   itemNames:       Map<number, string>;
+  /** Currently selected market hub — drives price label and re-fetch */
+  selectedMarket:  Market;
   onClose:         () => void;
   /** Called when a material row or chain item is clicked — drills into that item */
   onSelectItem:    (typeId: number, name: string) => void;
@@ -80,11 +82,14 @@ const RightSidebar: FC<RightSidebarProps> = ({
   detailOpen,
   blueprints,
   itemNames,
+  selectedMarket,
   onClose,
   onSelectItem,
   onBack,
   canGoBack = false,
 }) => {
+  const isJita       = selectedMarket.id === 10000002;
+  const marketLabel  = `${selectedMarket.name}${selectedMarket.type === 'nullsec' ? ' [NULLSEC]' : ''}`;
   const sidebarClass = `sidebar-right${detailOpen ? ' detail-open' : ''}`;
 
   // ── ALL hooks must be called before any early return ─────────────────────
@@ -157,7 +162,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
 
         {/* ── Back button (shown when drill-down history exists) ───────────── */}
         {canGoBack && (
-          <div style={{ padding: '8px 12px 0' }}>
+          <div style={{ padding: '8px 0 10px' }}>
             <button
               type="button"
               className="btn"
@@ -317,7 +322,15 @@ const RightSidebar: FC<RightSidebarProps> = ({
               const latest = prices[prices.length - 1];
               return (
                 <div className="detail-section">
-                  <div className="detail-section-heading">Jita Price (90 Days)</div>
+                  <div className="detail-section-heading">
+                    Jita Price (90 Days)
+                    {!isJita && (
+                      <span style={{ float: 'right', fontSize: 10, fontWeight: 400,
+                        color: 'var(--color-text-tertiary)', letterSpacing: 0 }}>
+                        history always Jita
+                      </span>
+                    )}
+                  </div>
                   <div style={{ color: 'var(--color-success)', fontSize: 15, fontWeight: 500, marginBottom: 8 }}>
                     {formatISK(latest)}
                   </div>
@@ -340,7 +353,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
             {/* Current market prices */}
             {apiDetail.currentPrice && (
               <div className="detail-section">
-                <div className="detail-section-heading">Current Jita Market</div>
+                <div className="detail-section-heading">Current {marketLabel} Market</div>
                 <div className="price-grid">
                   <div>
                     <div className="price-cell-label">LOWEST SELL</div>

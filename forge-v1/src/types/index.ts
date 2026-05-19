@@ -15,6 +15,16 @@
 
 export type OwnedStatus = 'BPO' | 'BPC' | '—';
 
+export interface Market {
+  id: number;
+  name: string;
+  region: string;
+  type: 'hisec' | 'nullsec';
+}
+
+export type RegionalPriceEntry = { sell: number; buy: number; median: number };
+export type RegionalPrices = Record<number, RegionalPriceEntry>;
+
 export interface MarketItem {
   rank: number;
   typeId: number;

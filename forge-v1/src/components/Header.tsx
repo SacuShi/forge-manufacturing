@@ -15,7 +15,8 @@
  */
 
 import type { FC } from 'react';
-import type { CharacterInfo } from '../types';
+import type { CharacterInfo, Market } from '../types';
+import { MarketSelector } from './MarketSelector';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -23,10 +24,13 @@ interface HeaderProps {
   character: CharacterInfo;
   chatOpen: boolean;
   theme: string;
+  selectedMarket: Market;
+  regionLoading: boolean;
   onToggleChat: () => void;
   onMenuToggle: () => void;
   onThemeToggle: () => void;
   onLogout: () => void;
+  onMarketChange: (market: Market) => void;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -39,10 +43,13 @@ const Header: FC<HeaderProps> = ({
   character,
   chatOpen,
   theme,
+  selectedMarket,
+  regionLoading,
   onToggleChat,
   onMenuToggle,
   onThemeToggle,
   onLogout,
+  onMarketChange,
 }) => {
   const portraitUrl = `${PORTRAIT_BASE}/${character.characterId}/portrait?size=32`;
 
@@ -108,10 +115,12 @@ const Header: FC<HeaderProps> = ({
       {/* ── Right group ─────────────────────────────────────────────────────── */}
       <div className="header-right">
 
-        {/* Market region teaser */}
-        <span className="market-teaser" role="note" aria-label="Market: Jita 4-4">
-          ◎ Jita 4-4 ▾
-        </span>
+        {/* Market hub selector */}
+        <MarketSelector
+          selectedMarket={selectedMarket}
+          onMarketChange={onMarketChange}
+          loading={regionLoading}
+        />
 
         {/* Theme toggle */}
         <button

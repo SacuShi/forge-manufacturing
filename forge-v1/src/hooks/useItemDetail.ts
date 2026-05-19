@@ -23,7 +23,8 @@ export function useItemDetail(
   typeId: number | null,
   assets: EsiAsset[],
   blueprints: EsiBlueprint[],
-  token: string | null
+  token: string | null,
+  regionId = 10000002,
 ): UseItemDetailReturn {
   const [detail,  setDetail]  = useState<ItemDetailApiResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -52,6 +53,7 @@ export function useItemDetail(
         typeId,
         assets,
         ownedBlueprints: blueprints,
+        regionId,
       }),
     })
       .then(async (res) => {
@@ -76,7 +78,7 @@ export function useItemDetail(
 
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [typeId]);
+  }, [typeId, regionId]);
 
   return { detail, loading, error };
 }
