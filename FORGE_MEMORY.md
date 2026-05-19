@@ -22,7 +22,7 @@ An EVE Online manufacturing intelligence web application for the **UKC corporati
 
 **Live domain:** https://forge-ukc.com  
 **GitHub:** https://github.com/SacuShi/forge-manufacturing.git  
-**Current version:** v1.1 (branch: `feature/v1.1-multimarket`, commit `75190fc`)  
+**Current version:** v1.1.1 (branch: `feature/v1.1-multimarket`, commit `05a99f9`)  
 **Version scheme:** `major.feature.change.patch`
 
 ---
@@ -326,6 +326,7 @@ All endpoints require `Authorization: Bearer <eve_token>` unless noted. Rate lim
 | `get_active_jobs(activityFilter?)` | Job queue |
 | `get_t2_blueprints(sort?)` | All owned T2 blueprints |
 | `diagnose_blueprints()` | DB coverage check |
+| `get_price_comparison(item_name)` | **NEW v1.1.1** — Live buy/sell prices for **any item** across all 6 hubs. Returns `cheapest_to_buy_from`, `best_to_sell_into`, `arbitrage_opportunity`, full `all_hubs` list. Use for minerals, loot, commodities — anything not in the precomputed manufactured goods table |
 
 ---
 
@@ -542,7 +543,22 @@ wallet, blueprints, assets, active jobs, trained skills.
 | `1713c9e` | Quick prompt chips: remove 40-char truncation |
 | `7fb861a` | Load-more pagination: offset param; "Load next 50" button |
 
-### v1.1 (this session — commit `75190fc`)
+### v1.1.1 (commit `05a99f9`) — deployed ✓
+
+**Feature 1: `get_price_comparison` AI tool**
+- `getItemPricesAllRegions(typeId)` helper — fetches live ESI prices across all 6 hubs, uses `regionPriceCache` when fresh, fetches + caches when stale. Note: `fetchRegionPrices` doesn't self-cache; helper stores explicitly via `regionPriceCache.set`.
+- New AI tool #10 `get_price_comparison(item_name)`. Unlike `compare_markets` (manufactured goods only), works for **any tradeable item** — minerals, loot, moon goo, commodities. Returns `cheapest_to_buy_from`, `best_to_sell_into`, `arbitrage_opportunity`, `all_hubs` breakdown.
+- Item lookup: exact LOWER() match first, then LIKE partial match fallback.
+- System prompt updated with tool #10 docs and proactive trigger examples.
+
+**Feature 2: Graceful token expiry**
+- `api/client.ts`: `apiGet` + `apiPost` dispatch `forge:session-expired` CustomEvent on HTTP 401.
+- `useAuth.ts`: `useEffect` listens for `forge:session-expired` → calls existing `logout()`.
+- `App.tsx`: `sessionExpired` state; listens for event; resets on `auth.status === 'authed'`; passes to `LoginScreen`.
+- `LoginScreen.tsx`: `sessionExpired?` prop renders amber warning banner: *"Your session has expired. Please log in again."*
+- `components.css`: `.session-expired-message` — amber border/bg/text, consistent with `--color-warning`.
+
+### v1.1 (commit `75190fc`)
 
 **Decision: single market dropdown, not dual**
 User proposed two dropdowns (materials hub + sell hub). Decision was made to keep a single dropdown for simplicity, with the AI's `compare_markets` tool providing cross-hub strategy advice proactively. The AI will always surface the Jita-materials + regional-sell recommendation when relevant.
