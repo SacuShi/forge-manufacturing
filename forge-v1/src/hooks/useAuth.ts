@@ -380,6 +380,16 @@ export function useAuth(): AuthState & {
     setStatus('idle');
   }, []);
 
+  // ── session-expired event listener ────────────────────────────────────────
+  // Fired by apiGet/apiPost in client.ts when a 401 is received.
+  // Calls logout() so the app returns to the login screen immediately.
+
+  useEffect(() => {
+    const handleExpiry = () => logout();
+    window.addEventListener('forge:session-expired', handleExpiry);
+    return () => window.removeEventListener('forge:session-expired', handleExpiry);
+  }, [logout]);
+
   return {
     status,
     token,

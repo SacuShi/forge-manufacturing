@@ -14,9 +14,10 @@ import type { FC } from 'react';
 interface LoginScreenProps {
   onLogin: () => void;
   error?: string | null;
+  sessionExpired?: boolean;
 }
 
-const LoginScreen: FC<LoginScreenProps> = ({ onLogin, error }) => (
+const LoginScreen: FC<LoginScreenProps> = ({ onLogin, error, sessionExpired }) => (
   <div className="login-screen">
     {/* ── Branding ──────────────────────────────────────────────────────────── */}
     <div className="login-logo">
@@ -36,6 +37,13 @@ const LoginScreen: FC<LoginScreenProps> = ({ onLogin, error }) => (
       AI-powered EVE Online manufacturing intelligence.
       Connect your character to see live profit analysis.
     </p>
+
+    {/* ── Session expiry message ────────────────────────────────────────────── */}
+    {sessionExpired && (
+      <div className="session-expired-message" role="alert">
+        Your session has expired. Please log in again.
+      </div>
+    )}
 
     {/* ── Error state ───────────────────────────────────────────────────────── */}
     {error && (

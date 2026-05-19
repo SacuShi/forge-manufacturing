@@ -481,6 +481,41 @@ const REGION_HUB_NAMES = {
   10000041: 'Syndicate',
 };
 
+/**
+ * Returns live buy/sell prices for a single typeId across all 6 trade hubs.
+ * Uses regionPriceCache when fresh; fetches + caches if stale or missing.
+ * Used by the AI get_price_comparison tool.
+ */
+async function getItemPricesAllRegions(typeId) {
+  const results = [];
+
+  for (const regionId of VALID_REGIONS) {
+    let entry = regionPriceCache.get(regionId);
+    if (!entry || Date.now() >= entry.expiry) {
+      // fetchRegionPrices returns prices but doesn't cache — store explicitly
+      const prices = await fetchRegionPrices(regionId);
+      regionPriceCache.set(regionId, { prices, expiry: Date.now() + 3600000 });
+      entry = regionPriceCache.get(regionId);
+    }
+
+    if (!entry) continue;
+
+    const price = entry.prices[typeId];
+    if (price) {
+      results.push({
+        hub_name:          REGION_HUB_NAMES[regionId],
+        region_id:         regionId,
+        buy_price:         price.buy  || 0,
+        sell_price:        price.sell || 0,
+        median_price:      price.median || 0,
+        volume_available:  0,   // ESI order feed doesn't include volume per-hub
+      });
+    }
+  }
+
+  return results;
+}
+
 app.get('/api/prices/:regionId', security.apiLimiter, async (req, res) => {
   try {
     const regionId = parseInt(req.params.regionId);
@@ -1663,6 +1698,20 @@ app.post('/api/ai-chat',
           },
           required: ["query"]
         }
+      },
+      {
+        name: "get_price_comparison",
+        description: "Compare buy and sell prices for ANY item across all 6 trade hubs (Jita, Amarr, Dodixie, Hek, Rens, Syndicate). Returns prices sorted cheapest-to-buy and highest-to-sell, plus arbitrage opportunity. Use proactively whenever the user asks about item prices, where to buy or sell anything (especially raw materials, minerals, loot, commodities), price differences between hubs, or trade opportunities. Unlike compare_markets (which is for manufactured goods), this works for any tradeable item.",
+        input_schema: {
+          type: "object",
+          properties: {
+            item_name: {
+              type: "string",
+              description: "Name of the item to price-check (e.g. 'Veldspaar', 'Tritanium', 'Morphite', 'Megacyte', 'Rifter')"
+            }
+          },
+          required: ["item_name"]
+        }
       }
     ];
 
@@ -2087,6 +2136,73 @@ app.post('/api/ai-chat',
                 };
               } catch (t2Err) {
                 toolResult = { error: t2Err.message, blueprints: [] };
+              }
+              break;
+            }
+
+            case "get_price_comparison": {
+              try {
+                const itemName = (toolUse.input.item_name || '').trim();
+                if (!itemName) {
+                  toolResult = { error: 'item_name is required' };
+                  break;
+                }
+
+                // Case-insensitive exact lookup first, then partial match
+                let item = await dbGet(
+                  'SELECT type_id, name FROM items WHERE LOWER(name) = LOWER(?)',
+                  [itemName]
+                );
+                if (!item) {
+                  // Try partial match for common shorthand (e.g. "Trit" → "Tritanium")
+                  item = await dbGet(
+                    'SELECT type_id, name FROM items WHERE LOWER(name) LIKE LOWER(?) LIMIT 1',
+                    [`%${itemName}%`]
+                  );
+                }
+
+                if (!item) {
+                  toolResult = { error: `Item "${itemName}" not found. Check spelling or try a more specific name.` };
+                  break;
+                }
+
+                const priceData = await getItemPricesAllRegions(item.type_id);
+
+                if (priceData.length === 0) {
+                  toolResult = { error: `No live price data found for ${item.name} across any hub. It may not be actively traded.` };
+                  break;
+                }
+
+                // Sort: cheapest sell price first (best place to buy), highest buy price first (best place to sell)
+                const bySellPrice = [...priceData].sort((a, b) => a.sell_price - b.sell_price);
+                const byBuyPrice  = [...priceData].sort((a, b) => b.buy_price  - a.buy_price);
+
+                const bestToBuyAt  = bySellPrice[0];   // lowest ask = cheapest to buy from
+                const bestToSellAt = byBuyPrice[0];    // highest bid = best place to sell into
+
+                const arbitrage = bestToSellAt.buy_price - bestToBuyAt.sell_price;
+
+                toolResult = {
+                  item_name:   item.name,
+                  type_id:     item.type_id,
+                  note:        'buy_price = highest buy order (what you sell into). sell_price = lowest sell order (what you buy from).',
+                  all_hubs:    priceData,
+                  cheapest_to_buy_from: {
+                    hub:        bestToBuyAt.hub_name,
+                    sell_price: bestToBuyAt.sell_price,
+                    summary:    `Buy in ${bestToBuyAt.hub_name} at ${bestToBuyAt.sell_price.toLocaleString()} ISK`,
+                  },
+                  best_to_sell_into: {
+                    hub:       bestToSellAt.hub_name,
+                    buy_price: bestToSellAt.buy_price,
+                    summary:   `Sell in ${bestToSellAt.hub_name} at ${bestToSellAt.buy_price.toLocaleString()} ISK`,
+                  },
+                  arbitrage_opportunity: arbitrage > 0
+                    ? `Buy in ${bestToBuyAt.hub_name} (${bestToBuyAt.sell_price.toLocaleString()} ISK), sell in ${bestToSellAt.hub_name} (${bestToSellAt.buy_price.toLocaleString()} ISK) = +${arbitrage.toLocaleString()} ISK/unit margin`
+                    : 'No profitable arbitrage between hubs at current prices.',
+                };
+              } catch (pcErr) {
+                toolResult = { error: pcErr.message };
               }
               break;
             }
@@ -3152,6 +3268,23 @@ Politely refuse ALL non-EVE questions: "I'm specialized for EVE manufacturing on
    Use when analyze_blueprints returns no T2 results, or user reports missing T2 data.
    Returns exact counts and names of T2 blueprints found vs missing from DB.
    If t2_missing > 0: explain the database gap clearly to the user and list the missing blueprint names.
+
+9. get_price_comparison(item_name)
+   Live buy/sell prices for ANY item across all 6 trade hubs.
+   Use for: minerals, moon goo, raw materials, loot, commodities — anything the user wants to buy or sell.
+   Unlike compare_markets (manufactured goods only), this works for any tradeable item.
+   Returns: all_hubs prices, cheapest_to_buy_from, best_to_sell_into, arbitrage_opportunity.
+
+   Triggers — use proactively, don't wait to be asked:
+   - "Where should I sell my [item]?" → call tool, lead with best_to_sell_into
+   - "Where can I buy [item]?" → call tool, lead with cheapest_to_buy_from + note sell_price is what you pay
+   - "Compare [item] prices across hubs" → call tool, show all_hubs breakdown
+   - "Is there arbitrage on [item]?" → call tool, show arbitrage_opportunity
+   - "Best place to source minerals / moon goo" → call tool once per item mentioned
+   - "What's Tritanium worth in Amarr?" → call tool, find Amarr entry in all_hubs
+
+   When answering: lead with the direct recommendation, mention arbitrage if meaningful (> ~5% margin),
+   call tool once per distinct item if multiple items are asked about.
 
 Never show raw type IDs ("Item #12345") — always resolve names first.
 

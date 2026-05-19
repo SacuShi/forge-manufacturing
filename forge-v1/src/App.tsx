@@ -98,6 +98,7 @@ const App: FC = () => {
   // Navigation stack — allows ← Back through chain drill-downs
   const [panelHistory, setPanelHistory] = useState<Array<{ typeId: number; name: string }>>([]);
 
+  const [sessionExpired, setSessionExpired] = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [rawResults, setRawResults] = useState<TopProfitableResponse['results']>([]);
   const [marketLoading, setMarketLoading] = useState(false);
@@ -123,6 +124,18 @@ const App: FC = () => {
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('forge-theme', theme);
   }, [theme]);
+
+  // Listen for 401 events fired by apiGet/apiPost — show expiry message on login screen
+  useEffect(() => {
+    const handleExpiry = () => setSessionExpired(true);
+    window.addEventListener('forge:session-expired', handleExpiry);
+    return () => window.removeEventListener('forge:session-expired', handleExpiry);
+  }, []);
+
+  // Reset expiry flag once the user successfully logs in again
+  useEffect(() => {
+    if (auth.status === 'authed') setSessionExpired(false);
+  }, [auth.status]);
 
   useEffect(() => {
     if (auth.status !== 'authed') return;
@@ -389,7 +402,7 @@ const App: FC = () => {
   if (auth.status === 'idle' || auth.status === 'error') {
     return (
       <div className="app" data-theme={theme} style={{ alignItems: 'center', justifyContent: 'center' }}>
-        <LoginScreen onLogin={auth.login} error={auth.error} />
+        <LoginScreen onLogin={auth.login} error={auth.error} sessionExpired={sessionExpired} />
       </div>
     );
   }
