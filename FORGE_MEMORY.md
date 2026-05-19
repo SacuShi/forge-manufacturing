@@ -2,7 +2,7 @@
 
 > This file is the authoritative context document for Claude sessions working on this project.
 > Read this first. Update it whenever significant decisions, changes, or discoveries are made.
-> Last updated: v1.0.0.0 + load-more pagination
+> Last updated: v1.1 — multi-market support + cross-hub AI comparison
 
 ---
 
@@ -12,16 +12,18 @@
 
 An EVE Online manufacturing intelligence web application for the **UKC corporation**. It connects to the EVE ESI (EVE Swagger Interface) API via OAuth, loads a player's character data (blueprints, assets, skills, jobs, wallet), and provides:
 
-- **Market Opportunities tab** — pre-computed profitability ranked by profit/margin/ISK-per-hour, filtered to only show items the character can actually build given their trained skills
+- **Market Opportunities tab** — pre-computed profitability per selected trade hub, ranked by profit/margin/ISK-per-hour, filtered to only show items the character can actually build given their trained skills
+- **Market hub selector** — single dropdown in Header; switching hub refetches precomputed data for that region
 - **Blueprints tab** — full ESI blueprint library with BPO/BPC detection, T2 highlighting, search/filter
 - **Assets tab** — inventory grouped by type with quantity sums
 - **Jobs tab** — active industry jobs with time remaining
-- **Right sidebar** — drill-down production chain for any item; chain badge if a blueprint exists in the game DB
-- **AI chat panel (F.O.R.G.E. AI)** — Anthropic Claude advisor with live character context, 7 tools, history persistence
+- **Right sidebar** — drill-down production chain for any item; prices shown for the currently selected hub
+- **AI chat panel (F.O.R.G.E. AI)** — Anthropic Claude advisor with live character context, 9 tools, history persistence, cross-hub comparison capability
 
 **Live domain:** https://forge-ukc.com  
 **GitHub:** https://github.com/SacuShi/forge-manufacturing.git  
-**Current version:** v1.0.0.0 (4-part scheme: major.feature.change.patch)
+**Current version:** v1.1 (branch: `feature/v1.1-multimarket`, commit `75190fc`)  
+**Version scheme:** `major.feature.change.patch`
 
 ---
 
@@ -55,8 +57,9 @@ ssh gumpy54@192.168.1.62 "pm2 restart forge"
 ssh gumpy54@192.168.1.62 "pm2 stop forge && cd ~/forge-server && node sde-import.js && pm2 start forge && sleep 5 && curl -s -X POST http://localhost:3000/api/trigger-precompute"
 ```
 
-### CRITICAL deployment note
-Vite hashes output filenames on every build (e.g. `index-DgGW3P7F.js`). If you upload `index.html` but not `assets/` (or vice versa), the browser gets `NS_ERROR_CORRUPTED_CONTENT` / MIME type mismatch because `index.html` references files that don't exist yet. **Always upload both together.**
+### CRITICAL deployment notes
+- Vite hashes output filenames on every build (e.g. `index-DgGW3P7F.js`). Always upload `index.html` AND `assets/` together.
+- After deploying server.js with multi-region schema changes, the first `pm2 restart` triggers DB migration (DROP + CREATE `precomputed_profits` if `region_id` column missing), then `runPreCompute` loops all 6 regions. Allow 2–5 min for precompute to complete — non-Jita hubs will be empty until then. Watch logs: `ssh gumpy54@192.168.1.62 "pm2 logs forge --lines 60"`
 
 ### Local paths
 | Item | Path |
@@ -65,9 +68,6 @@ Vite hashes output filenames on every build (e.g. `index-DgGW3P7F.js`). If you u
 | Frontend source | `C:\Users\AndyMcD\Desktop\forge-manufacturing\forge-v1\src\` |
 | Frontend dist | `C:\Users\AndyMcD\Desktop\forge-manufacturing\forge-v1\dist\` |
 | Backend | `C:\Users\AndyMcD\Desktop\forge-manufacturing\server\` |
-| Active worktree | `C:\Users\AndyMcD\Desktop\forge-manufacturing\.claude\worktrees\hardcore-lamport-8943e7\` |
-
-> The worktree branch `claude/hardcore-lamport-8943e7` was where the v1.0 production frontend was developed. After v1.0.0.0 the main repo was synced and is now the source of truth. Both have identical src/.
 
 ### Build
 ```bash
@@ -102,11 +102,11 @@ npm run build        # tsc -b && vite build → dist/
 ### External Services
 | Service | URL | Purpose |
 |---|---|---|
-| EVE ESI | https://esi.evetech.net | Character data (blueprints, assets, skills, jobs, wallet) |
+| EVE ESI | https://esi.evetech.net | Character data (blueprints, assets, skills, jobs, wallet) + market prices |
 | EVE SSO | https://login.eveonline.com | OAuth authentication |
 | EVE Image Server | https://images.evetech.net | Item/character icons |
 | everef.net | https://data.everef.net/reference-data/reference-data-latest.tar.xz | SDE reference data |
-| Anthropic API | claude-3-5-sonnet (or current) | AI advisor |
+| Anthropic API | claude-sonnet-4-6 | AI advisor |
 
 ---
 
@@ -115,20 +115,21 @@ npm run build        # tsc -b && vite build → dist/
 ```
 forge-manufacturing/
 ├── server/
-│   ├── server.js           ← Express backend (v1.0.0.0)
+│   ├── server.js           ← Express backend (v1.1)
 │   ├── sde-import.js       ← SDE import script (v2)
 │   └── forge-security.js   ← Auth + rate limiting middleware
 ├── forge-v1/
 │   ├── src/
-│   │   ├── App.tsx             ← Root: auth states, market data, chat logic
+│   │   ├── App.tsx             ← Root: auth states, market data, chat logic, market hub state
 │   │   ├── main.tsx
 │   │   ├── api/
 │   │   │   └── client.ts       ← apiGet / apiPost helpers
 │   │   ├── components/
-│   │   │   ├── Header.tsx      ← Top bar with "Ask F.O.R.G.E. AI" button
+│   │   │   ├── Header.tsx      ← Top bar; contains MarketSelector + AI toggle
+│   │   │   ├── MarketSelector.tsx ← NEW v1.1: hub dropdown (6 trade hubs); MARKETS constant
 │   │   │   ├── LeftSidebar.tsx ← Character card, nav tabs, quick prompts, jobs
 │   │   │   ├── MainContent.tsx ← Tabs: Market, Blueprints, Assets, Jobs
-│   │   │   ├── RightSidebar.tsx← Item detail panel, price chart, chain drill-down
+│   │   │   ├── RightSidebar.tsx← Item detail panel, price chart (hub-aware since v1.1)
 │   │   │   ├── ChatPanel.tsx   ← AI chat slide-in panel
 │   │   │   ├── ItemTable.tsx   ← Sortable market opportunities table
 │   │   │   ├── ItemLink.tsx    ← Clickable item token in chat messages
@@ -136,14 +137,14 @@ forge-manufacturing/
 │   │   │   └── LoadingScreen.tsx← Step-by-step data load progress log
 │   │   ├── hooks/
 │   │   │   ├── useAuth.ts      ← Token exchange, ESI data loading, session state
-│   │   │   ├── useItemDetail.ts← Item detail API calls
+│   │   │   ├── useItemDetail.ts← Item detail API calls (passes regionId since v1.1)
 │   │   │   └── useItemNames.ts ← Item name lookups from DB
 │   │   ├── styles/
 │   │   │   ├── variables.css   ← CSS design tokens (dark/light mode)
 │   │   │   ├── global.css      ← Reset, app shell, scrollbars
-│   │   │   └── components.css  ← All component styles
+│   │   │   └── components.css  ← All component styles (market-selector styles added v1.1)
 │   │   ├── types/
-│   │   │   └── index.ts        ← All shared TypeScript interfaces
+│   │   │   └── index.ts        ← All shared TypeScript interfaces (Market, RegionalPrices added v1.1)
 │   │   ├── data/
 │   │   │   └── mockData.ts     ← QUICK_PROMPTS constant + any static data
 │   │   └── utils/
@@ -151,8 +152,8 @@ forge-manufacturing/
 │   ├── package.json
 │   ├── vite.config.ts
 │   └── tsconfig*.json
-├── CHANGELOG.md            ← Full change history since origin push
 ├── FORGE_MEMORY.md         ← THIS FILE
+├── CHANGELOG.md
 └── .gitignore
 ```
 
@@ -172,7 +173,6 @@ type_id    INTEGER PRIMARY KEY
 name       TEXT
 meta_level INTEGER DEFAULT 0   -- 0=T1, 1=T2, 2=T3
 ```
-Populated by `sde-import.js` Step 6 from `types.json` — covers ALL published EVE types (~50k+), including faction items, clothing, SKINs, etc.
 
 #### `blueprints`
 ```sql
@@ -199,41 +199,79 @@ skill_level   INTEGER NOT NULL
 activity_id   INTEGER NOT NULL DEFAULT 1
 PRIMARY KEY (blueprint_id, skill_id, activity_id)
 ```
-Created by `sde-import.js` Step 2. Used by `/api/top-profitable-by-skills` to filter results to buildable blueprints.
 
-#### `precomputed_profits`
+#### `precomputed_profits` ← SCHEMA CHANGED IN v1.1
 ```sql
-blueprint_id    INTEGER
-product_id      INTEGER
+blueprint_id    INTEGER NOT NULL
+region_id       INTEGER NOT NULL DEFAULT 10000002   -- ← NEW: part of composite PK
+product_id      INTEGER NOT NULL
 product_name    TEXT
-material_cost   REAL
-sell_price      REAL
-buy_price       REAL
-profit          REAL
-profit_margin   REAL
-isk_per_hour    REAL
-build_time      INTEGER
-material_count  INTEGER
-computed_at     TEXT
-avg_daily_volume REAL
-market_group_id INTEGER
-liquidity_risk  TEXT   -- NULL/""/low_volume/contract_only/extreme_margin/no_buy_orders/suspicious_spread
+material_cost   REAL DEFAULT 0    -- buy prices from THIS region
+sell_price      REAL DEFAULT 0    -- sell orders from THIS region
+buy_price       REAL DEFAULT 0
+profit          REAL DEFAULT 0    -- sell_price × qty − material_cost (all same region)
+profit_margin   REAL DEFAULT 0
+isk_per_hour    REAL DEFAULT 0
+build_time      INTEGER DEFAULT 0
+material_count  INTEGER DEFAULT 0
+computed_at     TEXT NOT NULL DEFAULT ''
+price_source    TEXT DEFAULT 'jita'
+avg_daily_volume REAL DEFAULT NULL  -- enriched from Jita ESI history, copied to all regions
+market_group_id INTEGER DEFAULT NULL
+liquidity_risk  TEXT DEFAULT NULL   -- NULL/""/low_volume/contract_only/extreme_margin/no_buy_orders/suspicious_spread
 activity_id     INTEGER DEFAULT 1
+PRIMARY KEY (blueprint_id, region_id)   -- ← composite PK, was just blueprint_id
 ```
-Rebuilt every 6 hours by the precompute engine. Triggered manually via `POST /api/trigger-precompute`.
+
+**IMPORTANT — v1.1 migration:** If `region_id` column is absent on startup, `initDb` DROPS and recreates this table with the composite PK (data is ephemeral — safe to drop). The precompute then rebuilds all 6 regions.
+
+**Volume enrichment:** `avg_daily_volume`, `market_group_id`, `liquidity_risk` are populated from **Jita ESI history only** (Jita rows), then copied to all other region rows via correlated UPDATE. This means all hubs share Jita-sourced volume data, which is acceptable since Jita volume is the most reliable indicator of item liquidity.
 
 #### `precompute_runs`
 ```sql
-id                  INTEGER PRIMARY KEY
-completed_at        TEXT
+id                   INTEGER PRIMARY KEY
+completed_at         TEXT
 blueprints_processed INTEGER
-duration_seconds    REAL
-status              TEXT
+duration_seconds     REAL
+status               TEXT
 ```
 
 ---
 
-## 6. API Endpoints
+## 6. Market Hubs (v1.1)
+
+```javascript
+// server.js
+const VALID_REGIONS = [
+  10000002, // Jita       — The Forge     (hisec)
+  10000043, // Amarr      — Domain        (hisec)
+  10000032, // Dodixie    — Sinq Laison   (hisec)
+  10000042, // Hek        — Metropolis    (hisec)
+  10000030, // Rens       — Heimatar      (hisec)
+  10000041, // Syndicate  — Syndicate     (nullsec)
+];
+
+const REGION_HUB_NAMES = {
+  10000002: 'Jita', 10000043: 'Amarr', 10000032: 'Dodixie',
+  10000042: 'Hek',  10000030: 'Rens',  10000041: 'Syndicate',
+};
+```
+
+```typescript
+// MarketSelector.tsx — MARKETS array mirrors VALID_REGIONS
+export const MARKETS: Market[] = [
+  { id: 10000002, name: 'Jita',      region: 'The Forge',   type: 'hisec'   },
+  { id: 10000043, name: 'Amarr',     region: 'Domain',      type: 'hisec'   },
+  { id: 10000032, name: 'Dodixie',   region: 'Sinq Laison', type: 'hisec'   },
+  { id: 10000042, name: 'Hek',       region: 'Metropolis',  type: 'hisec'   },
+  { id: 10000030, name: 'Rens',      region: 'Heimatar',    type: 'hisec'   },
+  { id: 10000041, name: 'Syndicate', region: 'Syndicate',   type: 'nullsec' },
+];
+```
+
+---
+
+## 7. API Endpoints
 
 All endpoints require `Authorization: Bearer <eve_token>` unless noted. Rate limited via `security.apiLimiter`.
 
@@ -245,91 +283,113 @@ All endpoints require `Authorization: Bearer <eve_token>` unless noted. Rate lim
 ### Market
 | Method | Path | Params | Notes |
 |---|---|---|---|
-| GET | `/api/top-profitable-by-skills` | `limit` (default 50, max 200), `offset` (default 0), `sort` (profit/margin/isk_per_hour/cost/sell_price), `minProfit`, `minVolume`, `includeRisky` | Skill-filtered pre-computed profitability. Fetches `(offset+limit)*3` candidates from DB then filters by `blueprint_skills`. Returns `{results, meta: {hasMore, offset, count, lastComputed, ...}}` |
-| GET | `/api/top-profitable` | `limit`, `sort`, etc. | Unfiltered version (admin/debug use) |
+| GET | `/api/top-profitable-by-skills` | `limit`, `offset`, `sort`, `minProfit`, `minVolume`, `includeRisky`, **`regionId`** (v1.1) | Skill-filtered pre-computed profitability for chosen hub. Returns `{results, meta}` |
+| GET | `/api/top-profitable` | same + `regionId` | Unfiltered version |
+| GET | `/api/prices/:regionId` | — | Returns live ESI prices for a valid region, cached 1hr in `regionPriceCache` |
 
 ### Item Detail
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/api/item-details` | Body: `{typeId, characterId}`. Returns name, icon, price history, current Jita prices, build analysis with materials (each has `canManufacture` flag from bulk DB query), profit/margin |
-| POST | `/api/blueprint-metadata` | Body: `{blueprintTypeIds: number[]}`. Returns bulk `meta_level` map for blueprint type_ids |
+| POST | `/api/item-details` | Body: `{typeId, characterId, regionId?}`. Returns name, icon, price history (Jita), current hub prices, build analysis with materials. `regionId` added v1.1 — defaults to 10000002 |
+| POST | `/api/blueprint-metadata` | Body: `{blueprintTypeIds: number[]}`. Returns bulk `meta_level` map |
 
 ### Session Cache
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/api/session-data` | Caches character session (assets, blueprints, skills, jobs, wallet) for 2 hours. Required before using AI |
+| POST | `/api/session-data` | Caches character session for 2 hours |
 | GET | `/api/session-data/:characterId` | Inspect cached session |
 | POST | `/api/invalidate-session` | Clear session cache |
 
 ### Chat / AI
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/api/ai-chat` | Body: `{messages: [{role, content}]}`. Uses Anthropic Claude with prompt caching. Context injected server-side from session cache. History capped at 10 messages per request |
+| POST | `/api/ai-chat` | Body: `{messages}`. Uses Anthropic Claude with prompt caching + 9 tools |
 | GET | `/api/chat-history/:characterId` | Returns persisted chat messages |
-| POST | `/api/save-message` | Body: `{characterId, role, content, conversationId}`. Persists one message |
+| POST | `/api/save-message` | Persists one message |
 | DELETE | `/api/chat-history/:characterId` | Clears history |
 
 ### Admin / Debug
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/admin/ai-costs` | AI usage tracking: token counts + estimated cost |
-| GET | `/api/diagnose-t2/:characterId` | T2 blueprint DB coverage diagnostics |
-| POST | `/api/trigger-precompute` | Manually trigger the 6-hour precompute cycle |
+| GET | `/api/admin/ai-costs` | AI usage tracking |
+| GET | `/api/diagnose-t2/:characterId` | T2 blueprint DB coverage |
+| POST | `/api/trigger-precompute` | Manually trigger precompute (all 6 regions) |
 
-### AI Tools (internal — used by `/api/ai-chat`)
-`get_precomputed` (supports `activityType`: all/manufacturing/reaction), `analyze_blueprints`, `get_blueprint`, `get_price`, `get_active_jobs`, `get_t2_blueprints`, `diagnose_blueprints`
+### AI Tools (internal — used by `/api/ai-chat`) — v1.1
+| Tool | Purpose |
+|---|---|
+| `get_precomputed(sort, limit, search, minProfit, includeRisky, activityType, regionId?)` | Pre-computed profitability. **`regionId` added v1.1** — defaults Jita. AI uses this for hub-specific top lists |
+| `compare_markets(query)` | **NEW v1.1** — Self-join across all 6 hubs for a named item. Returns profit for (A) local materials+sell and (B) Jita materials+hub sell per hub, plus a `recommendation` block |
+| `analyze_blueprints(sortBy, limit, buildableOnly)` | Player's blueprints vs assets |
+| `get_blueprint(itemName/productId)` | Single blueprint materials + costs |
+| `get_price(itemName)` | Live Jita price |
+| `get_active_jobs(activityFilter?)` | Job queue |
+| `get_t2_blueprints(sort?)` | All owned T2 blueprints |
+| `diagnose_blueprints()` | DB coverage check |
 
 ---
 
-## 7. Frontend Architecture
+## 8. Frontend Architecture
 
 ### Auth flow (`useAuth.ts`)
 ```
 idle → (EVE SSO redirect) → exchanging → loading → authed
                                                   ↘ error
 ```
-- `idle`: show LoginScreen
-- `exchanging`: code→token exchange in progress
-- `loading`: ESI data loading (blueprints, assets, skills, jobs, wallet) + session cache POST
-- `authed`: full app rendered
 
-### State in `App.tsx`
+### State in `App.tsx` (v1.1)
 | State | Type | Purpose |
 |---|---|---|
 | `theme` | `'dark'|'light'` | Persisted to localStorage |
 | `chatOpen` | `boolean` | Chat panel visible |
 | `chatAutoOpened` | `boolean` | Was chat auto-opened (closes on outside click) |
-| `marketItems` | `MarketItem[]` | Mapped display items (all loaded pages) |
-| `rawResults` | `TopProfitableResponse['results']` | Raw API results for `selectedDetail` lookups |
-| `marketHasMore` | `boolean` | Whether more pages exist on server |
+| `rawResults` | `TopProfitableResponse['results']` | Raw API results for all loaded pages |
+| `marketItems` | `MarketItem[]` | **useMemo** derived from `rawResults + auth.blueprints` (no overlay) |
+| `marketLoading` | `boolean` | Initial load OR market switch in progress |
+| `marketHasMore` | `boolean` | Whether more pages exist |
 | `marketLoadingMore` | `boolean` | "Load next 50" in-flight |
-| `selectedTypeId` | `number|null` | Currently selected item (drives RightSidebar) |
+| `selectedMarket` | `Market` | **NEW v1.1** — currently selected hub (default Jita) |
+| `selectedTypeId` | `number|null` | Currently selected item |
 | `panelHistory` | `Array<{typeId,name}>` | Back-stack for chain drill-down |
 | `chatMessages` | `ChatMessage[]` | Full conversation history |
 
-### Load-More pagination
-- Initial fetch: `/api/top-profitable-by-skills?limit=50`
-- Each "Load next 50": offset = `rawResults.length` (always accurate)
-- New items appended; ranks continue from previous last rank
-- `mapToMarketItems(results, blueprints, rankOffset)` — rankOffset ensures ranks are 51, 52... on page 2
+### Market hub switching (`handleMarketChange`)
+```typescript
+// When user selects a different hub:
+setSelectedMarket(market);
+setRawResults([]);          // clear — new hub data incoming
+setMarketLoading(true);
+const data = await apiGet(`/api/top-profitable-by-skills?limit=50&regionId=${market.id}`, token);
+setRawResults(data.results);
+// MarketSelector is disabled while marketLoading=true
+```
+No client-side price overlay — all prices are fully precomputed per hub on the server.
 
-### Auto-open chat
-- Chat panel auto-opens in `.finally()` of the market data fetch (every login)
-- Welcome message: action-oriented ("Your data is ready…")
-- If `chatAutoOpened === true`: any click outside `.chat-panel` in `.app-body` closes it
-- Manual toggle clears `chatAutoOpened` flag
+### `marketItems` derivation
+```typescript
+const marketItems = useMemo<MarketItem[]>(() => {
+  if (!rawResults.length) return [];
+  return mapToMarketItems(rawResults, auth.blueprints);
+}, [rawResults, auth.blueprints]);
+```
 
-### RightSidebar chain drill-down
-- `canManufacture` flag: set server-side via bulk SQL `SELECT DISTINCT product_id FROM blueprints WHERE product_id IN (...)`
-- Two badge states: `⛓ owned` (purple) if user has the blueprint, `⛓ chain` (cyan) if game blueprint exists but user doesn't own it
-- Back-navigation stack (`panelHistory`) — ← button traverses drill-down history
+### Load-more pagination
+- Initial: `/api/top-profitable-by-skills?limit=50&regionId=${selectedMarket.id}`
+- Load more: `?limit=50&offset=${rawResults.length}&regionId=${selectedMarket.id}`
+- `mapToMarketItems(results, blueprints, rankOffset)` — rankOffset for correct rank numbering
+
+### RightSidebar (hub-aware since v1.1)
+- `selectedMarket` prop passed through from App
+- Heading shows: `Current {marketLabel} Market` (e.g. "Current Amarr Market")
+- Price history sparkline note: "history always Jita" when non-Jita selected
+- `useItemDetail` passes `regionId` to POST `/api/item-details` — prices in detail panel match selected hub
 
 ---
 
-## 8. Design System
+## 9. Design System
 
 ### CSS Variables (variables.css)
-Dark mode is default (`:root`). Light mode via `[data-theme='light']`. Also honours `prefers-color-scheme`.
+Dark mode is default (`:root`). Light mode via `[data-theme='light']`.
 
 | Variable | Dark Value | Purpose |
 |---|---|---|
@@ -352,34 +412,26 @@ Dark mode is default (`:root`). Light mode via `[data-theme='light']`. Also hono
 
 ### Key component classes
 - `.btn` — standard ghost button
-- `.btn-chat` — "Ask F.O.R.G.E. AI" button; has `@keyframes forge-ai-pulse` 5s glow cycle; `animation: none` when `.open`
-- `.pill-filter` — rounded filter chip (All / Can Build / BPO / BPC)
-- `.bp-icon-bpo` — dark navy bg, cyan border (`#4fc3f7`)
-- `.bp-icon-bpc` — cyan tint bg, dark navy border
-- `.bp-icon-t2` — dark navy bg, orange border (`#ff9800`)
+- `.btn-chat` — "Ask F.O.R.G.E. AI"; has `@keyframes forge-ai-pulse` 5s glow; `animation: none` when `.open`
+- `.market-selector` — hub dropdown container (flex, gap 5px, white-space nowrap)
+- `.market-dropdown` — the `<select>` element; styled to match UI; disabled during market load
+- `.market-selector-loading` — `…` spinner text shown while loading
+- `.pill-filter` — rounded filter chip
 - `.mat-row-clickable` — hover highlight on material rows
-- `.chat-panel` — 0 width when closed, `var(--chat-panel-width)` when `.open` (CSS transition)
-- `.sidebar-overlay` — tablet/mobile dim overlay
-
-### Animations
-```css
-@keyframes forge-spin   /* loading spinner — in global.css */
-@keyframes forge-ai-pulse  /* AI button glow — in components.css */
-```
+- `.chat-panel` — slide-in AI panel
 
 ---
 
-## 9. EVE Online Domain Knowledge
+## 10. EVE Online Domain Knowledge
 
 ### Blueprint ownership detection
 ```typescript
-// ESI field: runs
-const isBPO = bp.runs === -1;          // Original — infinite runs
-const isBPC = bp.runs >= 0;            // Copy — limited runs
+const isBPO = bp.runs === -1;   // Original — infinite runs
+const isBPC = bp.runs >= 0;     // Copy — limited runs
 // WRONG: quantity === -1 is singleton flag, NOT BPO indicator
 ```
 
-### activity_id values (ESI + blueprints table)
+### activity_id values
 | ID | Activity |
 |---|---|
 | 1 | Manufacturing |
@@ -397,142 +449,140 @@ const isBPC = bp.runs >= 0;            // Copy — limited runs
 | 2 | 1 | T2 |
 | 14 | 2 | T3 |
 
-### Liquidity risk tiers (precomputed_profits)
-1. `contract_only` — item only traded on contracts, not open market
+### Liquidity risk tiers
+1. `contract_only` — item only on contracts, not open market
 2. `extreme_margin` — buy/sell spread > 50%
-3. `low_volume` — fewer than 5 units/day average (WARNING level, not filtered by default)
-4. `no_buy_orders` / `suspicious_spread` — no active buy orders
+3. `low_volume` — < 5 units/day average (WARNING level, not filtered by default)
+4. `no_buy_orders` / `suspicious_spread`
 
-### Market data
-- All prices from **Jita 4-4** (The Forge region — main trade hub)
-- Sell price = best sell order
-- Buy price = best buy order
-- Volume enrichment: 30-day average daily volume + `market_group_id` from ESI
+### Multi-market strategy (v1.1 insight)
+The most profitable EVE manufacturing strategy is almost always:
+- **Buy materials in Jita** (deepest liquidity, tightest spreads)
+- **Sell finished goods in a regional hub** where prices may be higher (e.g. Dodixie for Gallente hulls, Amarr for specific modules)
+
+The `compare_markets` AI tool surfaces this automatically. Some items (e.g. Vexor in Dodixie) genuinely pay more locally than in Jita — always check rather than assuming Jita is best for selling.
 
 ---
 
-## 10. SDE Import (sde-import.js v2)
+## 11. SDE Import (sde-import.js v2)
 
-Downloads `reference-data-latest.tar.xz` from `https://data.everef.net/reference-data/`.  
-Both `types.json` and `blueprints.json` parsed **once** in `main()` and passed to all steps.
+Downloads `reference-data-latest.tar.xz` from `https://data.everef.net/reference-data/`.
 
 | Step | Function | What it does |
 |---|---|---|
-| 1 | `addMetaLevel(typesData)` | Bulk UPDATE `items.meta_level` (T2=1, T3=2) |
-| 2 | `importBlueprintSkills(bpData)` | Creates + populates `blueprint_skills` table |
-| 3 | `importReactionFormulas(bpData)` | Imports reaction blueprints with `activity_id=9` |
-| 4 | `ensureReactionItems(bpData, typesData)` | Inserts moon goo, gas, reaction components not yet in `items` |
-| 5 | `ensureAllBlueprintItems(typesData)` | Ensures all blueprint_id/product_id/material_ids are in `items` |
-| 6 | `importAllTypes(typesData)` | **Bulk INSERT OR UPDATE** all ~50k types — covers faction items, clothing, SKINs, SKINR, implants, LP store items, etc. Uses `ON CONFLICT DO UPDATE` so correct names are never clobbered |
-| 7 | `verify()` | Reports counts; flags any unnamed blueprints |
-
-### Why Step 6 exists
-Before Step 6, items not referenced by any blueprint (faction modules, clothing, SKINR components) showed as "Item #12345" in the Assets tab because they were never inserted into the `items` table. Step 6 fixes this permanently.
+| 1 | `addMetaLevel(typesData)` | Bulk UPDATE `items.meta_level` |
+| 2 | `importBlueprintSkills(bpData)` | Creates + populates `blueprint_skills` |
+| 3 | `importReactionFormulas(bpData)` | Imports reactions with `activity_id=9` |
+| 4 | `ensureReactionItems(bpData, typesData)` | Inserts moon goo, gas, reaction components |
+| 5 | `ensureAllBlueprintItems(typesData)` | Ensures all bp/product/material IDs in `items` |
+| 6 | `importAllTypes(typesData)` | Bulk INSERT OR UPDATE all ~50k types |
+| 7 | `verify()` | Reports counts; flags unnamed blueprints |
 
 ---
 
-## 11. AI Advisor Architecture
+## 12. AI Advisor Architecture
 
-### Token efficiency measures
-- All `// ═══...═══` decorator comment lines removed from server.js (~975 tokens saved per file read)
-- Tool descriptions trimmed ~60%
-- AI conversation history: capped at 10 messages per request (slice `-10` both client-side and server-side)
-- Anthropic prompt caching (`cache_control: { type: "ephemeral" }`) on system prompt
-- Bulk SQL for material queries (2 queries per item-details call instead of N)
+### Model
+`claude-sonnet-4-6` with Anthropic prompt caching (`cache_control: { type: "ephemeral" }`) on the static system prompt (`FORGE_STATIC_SYSTEM_PROMPT`).
+
+### DO NOT MODIFY (preserved across all sessions)
+- **EVE OAuth lines** (~700–900 in server.js) — authentication system
+- **Prompt caching line** — `cache_control: { type: "ephemeral" }` on system prompt
+- **`FORGE_STATIC_SYSTEM_PROMPT` constant** — may be extended/appended but core personality/scope/format rules must be preserved
+
+### Tools (9 total as of v1.1)
+See Section 7 AI Tools table above.
+
+### `compare_markets` tool detail (v1.1)
+```javascript
+// SQL: self-join precomputed_profits to get both local and Jita material costs
+SELECT sell.region_id, sell.sell_price, sell.material_cost AS local_material_cost,
+       sell.profit AS local_profit, sell.profit_margin AS local_margin,
+       jita.material_cost AS jita_material_cost,
+       ROUND((sell.profit + sell.material_cost) / NULLIF(sell.sell_price, 0)) AS product_qty
+FROM precomputed_profits sell
+JOIN precomputed_profits jita ON jita.blueprint_id = sell.blueprint_id AND jita.region_id = 10000002
+WHERE sell.product_name LIKE ?
+ORDER BY sell.region_id
+```
+Returns per-hub: `localMaterials` (buy+sell same hub) and `jitaMaterials` (Jita inputs, hub sell) profit/margin/ISK-hr, plus a `recommendation` block with the single best strategy.
 
 ### Server-side context injection
-The AI receives character context from the session cache — **nothing sensitive is sent from the client**:
-- Wallet balance
-- Blueprint library
-- Asset inventory
-- Active jobs
-- Trained skills
+AI receives character context from session cache (nothing sensitive from client):
+wallet, blueprints, assets, active jobs, trained skills.
 
 ### Chat persistence
-- Messages saved to DB via `POST /api/save-message` after each send/receive
+- Saved via `POST /api/save-message` after each turn
 - Loaded on login via `GET /api/chat-history/:characterId`
-- History capped at 20 messages restored (last 20 if longer)
-- Clear via `DELETE /api/chat-history/:characterId`
+- Capped at 20 messages restored; 10 messages sent per AI request
 
 ---
 
-## 12. Development History & Key Decisions
+## 13. Development History & Key Decisions
 
-### Origin → v0.9.x (before Claude sessions)
-- Express backend with SQLite for blueprint/item data
-- Price fetching from Jita 4-4 (all pages)
-- Basic profitability calculation
-- `portionSize` profit bug fixed
-- Token optimisations
+### Origin → v0.9.x
+- Express + SQLite backend, Jita price fetching, basic profitability calculation
 
-### v0.9.2.x–v0.9.4 (early Claude work)
-- Multi-market backend foundation (v0.9.4)
-- AI advisor added with live player context
-- Skills session caching
-- `/api/top-profitable-by-skills` endpoint
+### v0.9.2–v0.9.4
+- Multi-market backend foundation; AI advisor; skills session caching; `/api/top-profitable-by-skills`
 
-### v1.0.0.0 (major Claude session — complete rewrite)
-
-**Frontend:** Complete rewrite from mock-data prototype to live authenticated app.
-- `useAuth` hook with full OAuth lifecycle
-- `LoadingScreen` with step-by-step progress log
-- Market Opportunities tab with live precomputed data
-- Blueprints tab: BPO/BPC grouping fix (was using `quantity === -1`, fixed to `runs === -1`)
-- Right sidebar chain drill-down with `canManufacture` from server
+### v1.0.0.0 (major Claude session)
+- Complete frontend rewrite: useAuth, LoadingScreen, Market/Blueprints/Assets/Jobs tabs
+- BPO/BPC detection fix (`runs === -1` not `quantity === -1`)
+- Right sidebar chain drill-down with `canManufacture`
 - AI chat panel with history, quick prompts, server-side context
-- Dark/light theme toggle
-
-**Backend:** Version bump to 1.0.0.0; 4-part version scheme established.
-- Bulk SQL for material queries (N queries → 2 bulk queries)
-- `canManufacture` flag via `SELECT DISTINCT product_id FROM blueprints`
-- DB migrations: `items.meta_level`, `blueprints.activity_id`, `precomputed_profits.activity_id`
-- Rate limiting, token verification on all sensitive endpoints
-
-**SDE import v2:** everef.net single-archive approach replacing Hoboleaks piecemeal downloads.
-
-**Version scheme established:** `major.feature.change.patch`
-- `1` = major version / full rewrite
-- `0` = feature additions
-- `0` = changes to existing features
-- `0` = patches/fixes
+- Bulk SQL for materials (N queries → 2)
+- SDE import v2 (everef.net)
 
 ### Post-v1.0.0.0 patches
 | Commit | Change |
 |---|---|
-| `78c2888` | sde-import Step 6: bulk import ALL types.json — fixes faction/clothing/SKINR item names |
-| `8729ad8` | "Ask F.O.R.G.E. AI" button label; 5s pulse glow animation; auto-open chat on login |
+| `78c2888` | sde-import Step 6: bulk import all types.json — fixes faction/clothing/SKINR item names |
+| `8729ad8` | AI button label; pulse glow animation; auto-open chat on login |
 | `1713c9e` | Quick prompt chips: remove 40-char truncation |
-| `7fb861a` | Load-more pagination: `offset` param on server; "Load next 50" button in Market tab |
+| `7fb861a` | Load-more pagination: offset param; "Load next 50" button |
+
+### v1.1 (this session — commit `75190fc`)
+
+**Decision: single market dropdown, not dual**
+User proposed two dropdowns (materials hub + sell hub). Decision was made to keep a single dropdown for simplicity, with the AI's `compare_markets` tool providing cross-hub strategy advice proactively. The AI will always surface the Jita-materials + regional-sell recommendation when relevant.
+
+**Decision: full precompute per region, not client-side overlay**
+Initial plan was a client-side price overlay (approximate qty from `profit+material_cost / sell_price`, overlay regional sell prices). This was replaced with running `runPreCompute` for all 6 regions — each hub gets fully self-consistent precomputed data. No approximations.
+
+**Backend changes:**
+- `VALID_REGIONS` array (6 hubs) + `REGION_HUB_NAMES` map added
+- `GET /api/prices/:regionId` — cached ESI price endpoint
+- `precomputed_profits` schema migrated: composite PK `(blueprint_id, region_id)`; migration in `initDb` via `pragma_table_info` check then DROP+CREATE
+- `runPreCompute` refactored: loads blueprints/materials once, loops `VALID_REGIONS`, fetches prices per region, DELETE+INSERT with `region_id`
+- `runVolumeEnrichment`: enriches Jita rows only, then copies volume data to all other regions via correlated UPDATE
+- `/api/top-profitable` and `/api/top-profitable-by-skills`: both accept `?regionId`, WHERE starts with `region_id = ?`
+- `/api/item-details`: accepts `regionId` in POST body
+- AI `get_precomputed` hardcoded to `region_id = 10000002` → now accepts `regionId` param (defaults Jita)
+- AI `get_precomputed` WHERE now uses parameterised `region_id = ?` (was hardcoded string)
+- New `compare_markets` AI tool added
+- `FORGE_STATIC_SYSTEM_PROMPT` updated: `get_precomputed` gets regionId docs; `compare_markets` documented with proactive-use instruction
+
+**Frontend changes:**
+- `Market`, `RegionalPrices` types added to `types/index.ts`
+- New `MarketSelector.tsx` component + `MARKETS` constant
+- `Header.tsx`: `selectedMarket`, `regionLoading`, `onMarketChange` props; `<MarketSelector>` replaces static teaser
+- `App.tsx`: `selectedMarket` state; `handleMarketChange` clears rawResults and refetches for new hub; `handleLoadMoreMarket` includes `&regionId`; `marketItems` is `useMemo` (no overlay function); `marketLoading` passed as `regionLoading` to Header
+- `useItemDetail.ts`: `regionId` param added, passed in POST body, added to useEffect deps
+- `RightSidebar.tsx`: `selectedMarket` prop; heading shows hub name; sparkline note for non-Jita
+- `components.css`: `.market-teaser` removed; `.market-selector`, `.market-dropdown`, `.market-selector-loading` added
 
 ---
 
-## 13. Known Patterns & Conventions
+## 14. Known Patterns & Conventions
 
 ### API calls
 ```typescript
-// client.ts helpers
 apiGet<T>(path: string, token: string): Promise<T>
 apiPost<T>(path: string, body: object, token: string): Promise<T>
 ```
 
-### Token in requests
-```typescript
-headers: { 'Authorization': `Bearer ${auth.token}` }
-```
-
-### Item icons
-```
-https://images.evetech.net/types/{typeId}/icon?size=32
-https://images.evetech.net/characters/{characterId}/portrait?size=32
-```
-
-### Error handling pattern
-```typescript
-.catch((e: Error) => setError(e.message))
-onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = 'hidden'; }}
-```
-
-### DB helper pattern (server.js)
+### DB helpers (server.js)
 ```javascript
 const dbAll = (sql, p = []) => new Promise((res, rej) => db.all(sql, p, (e, r) => e ? rej(e) : res(r)));
 const dbGet = (sql, p = []) => new Promise((res, rej) => db.get(sql, p, (e, r) => e ? rej(e) : res(r)));
@@ -542,24 +592,27 @@ const dbRun = (sql, p = []) => new Promise((res, rej) => db.run(sql, p, function
 ### Bulk SQL pattern (canManufacture)
 ```javascript
 const ph = matIds.map(() => '?').join(',');
-const manufRows = await dbAll(
-  `SELECT DISTINCT product_id FROM blueprints WHERE product_id IN (${ph})`,
-  matIds
+const manufSet = new Set(
+  (await dbAll(`SELECT DISTINCT product_id FROM blueprints WHERE product_id IN (${ph})`, matIds))
+  .map(r => r.product_id)
 );
-const manufSet = new Set(manufRows.map(r => r.product_id));
-// then: canManufacture: manufSet.has(mat.material_id)
+```
+
+### Item icons
+```
+https://images.evetech.net/types/{typeId}/icon?size=32
+https://images.evetech.net/characters/{characterId}/portrait?size=32
 ```
 
 ### React component conventions
 - Functional components only (`FC<Props>`)
 - `useCallback` for all handlers passed as props
 - `useMemo` for derived/filtered lists
-- Inline styles for one-off layout; CSS classes for reusable styling
-- `aria-label`, `role`, `aria-pressed` used throughout for accessibility
+- `aria-label`, `role`, `aria-pressed` throughout
 
 ---
 
-## 14. Environment Variables (.env on server)
+## 15. Environment Variables (.env on server)
 
 ```
 PORT=3000
@@ -573,46 +626,53 @@ SESSION_SECRET=...
 
 ---
 
-## 15. Security Model
+## 16. Security Model
 
 - All AI/session/item endpoints require verified EVE token (`security.verifyEveToken`)
-- Token verification confirms EVE SSO signature, not just presence
-- Character ownership validation on history/session endpoints (can't read another character's data)
+- Character ownership validation on history/session endpoints
 - Rate limiting on all public endpoints via `security.apiLimiter`
-- Input validation middleware on AI chat and message save endpoints
+- `VALID_REGIONS` whitelist — `/api/prices/:regionId` returns 400 for unknown region IDs
+- Input sanitisation on AI tool queries (`replace(/[^a-zA-Z0-9 '\-]/g, '')`)
 - Helmet CSP configured for EVE SSO + ESI domains
 - Cloudflared proxy (`app.set('trust proxy', 1)`)
-- Nothing sensitive (session data, skills, assets) sent from client — server injects from session cache
+- Nothing sensitive sent from client — server injects from session cache
 
 ---
 
-## 16. Outstanding / Future Work
+## 17. Outstanding / Future Work
 
-- **Multi-market support** — foundation was started in v0.9.4 but not completed; currently Jita 4-4 only
-- **SKINR items** — may still show "Item #..." for some if types.json doesn't cover them (Step 6 helps but some may be dynamic/generated IDs)
-- **Reaction chain drill-down** — chain icon exists for reaction products but full multi-step reaction chain not yet visualised
-- **ME/TE optimisation suggestions** — AI has the data but no dedicated UI tool
+- **Haul cost awareness** — factor in freight cost (ISK/m³ × volume × jumps) when AI compares hub strategies
+- **Production planner UI** — visual queue builder from AI recommendations
+- **Material shortfall shopping list** — "what do I need to buy and where" export from RightSidebar
+- **Reaction chain drill-down** — chain icon exists but multi-step reaction chains not visualised
+- **ME/TE optimisation suggestions** — AI has data but no dedicated UI tool
 - **Push notifications** — jobs completing while user is away
+- **SKINR items** — some dynamic IDs may still show "Item #..." if not in types.json
 
 ---
 
-## 17. Quick Reference
+## 18. Quick Reference
 
 ### Rebuild & deploy (full)
 ```bash
-# 1. Make changes
-# 2. Build
+# 1. Build
 cd "C:\Users\AndyMcD\Desktop\forge-manufacturing\forge-v1" && npm run build
-# 3. Deploy
+
+# 2. Deploy backend
 scp server/server.js gumpy54@192.168.1.62:/home/gumpy54/forge-server/server.js
+
+# 3. Deploy frontend
 scp forge-v1/dist/index.html gumpy54@192.168.1.62:/home/gumpy54/forge-server/public/index.html
 scp -r forge-v1/dist/assets gumpy54@192.168.1.62:/home/gumpy54/forge-server/public/
+
+# 4. Restart
 ssh gumpy54@192.168.1.62 "pm2 restart forge"
-# 4. Commit
+
+# 5. Commit & push
 cd "C:\Users\AndyMcD\Desktop\forge-manufacturing"
-git add -A -- ':!.claude/' ':!.clone/'
-git commit -m "feat/fix: description"
-git push origin main
+git add server/server.js forge-v1/src/... forge-v1/dist/...
+git commit -m "feat: description"
+git push origin feature/v1.1-multimarket
 ```
 
 ### Check server logs
@@ -620,7 +680,7 @@ git push origin main
 ssh gumpy54@192.168.1.62 "pm2 logs forge --lines 50"
 ```
 
-### Trigger precompute manually
+### Trigger precompute manually (all 6 regions)
 ```bash
 ssh gumpy54@192.168.1.62 "curl -s -X POST http://localhost:3000/api/trigger-precompute"
 ```
