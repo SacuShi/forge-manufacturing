@@ -3,9 +3,15 @@
  *
  * Fetches the True Profit breakdown for the currently selected item.
  *
- * Triggered whenever productTypeId, regionId, me, or te changes.
- * ME and TE are resolved by the caller (App.tsx) using the itemNames map
- * to match product type_id → blueprint type_id → ESI blueprint entry.
+ * v1.3.0: Accepts separate sellRegionId (where goods are sold) and
+ * materialRegionId (where materials are purchased) so the True Profit panel
+ * reflects the user's actual sourcing and selling hubs independently.
+ *
+ * ME and TE are resolved by the caller (App.tsx) via name-based blueprint
+ * matching (product type_id → blueprint name → ESI blueprint entry).
+ *
+ * When the server returns prices_warm=false (cache cold after restart),
+ * a silent 15-second retry is scheduled so values auto-upgrade to live prices.
  *
  * Returns: TrueCostResponse (material cost, mfg fees, sales tax, true profit)
  */
@@ -25,11 +31,12 @@ interface UseTrueCostResult {
 const WARM_RETRY_MS = 15_000;
 
 export function useTrueCost(
-  productTypeId: number | null,
-  regionId:      number,
-  me:            number,       // material efficiency from the character's best blueprint (0 if unknown)
-  te:            number,       // time efficiency — passed through to server for future use
-  token:         string | null,
+  productTypeId:    number | null,
+  sellRegionId:     number,       // hub where finished goods are sold
+  materialRegionId: number,       // hub where raw materials are purchased
+  me:               number,       // material efficiency from the character's best blueprint (0 if unknown)
+  te:               number,       // time efficiency — passed through to server for future use
+  token:            string | null,
 ): UseTrueCostResult {
   const [data,    setData]    = useState<TrueCostResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -59,11 +66,12 @@ export function useTrueCost(
 
       try {
         const result = await apiPost<TrueCostResponse>('/api/true-cost', {
-          product_id: productTypeId,
+          product_id:       productTypeId,
           me,
           te,
-          runs:     1,
-          regionId,
+          runs:             1,
+          regionId:         sellRegionId,       // sell hub (backward-compat param name)
+          materialRegionId: materialRegionId,   // source hub
         }, token);
 
         if (!cancelled) {
@@ -100,9 +108,9 @@ export function useTrueCost(
       }
     };
 
-  // Re-fetch when item, region, or blueprint ME/TE changes
+  // Re-fetch when item, either hub, or blueprint ME/TE changes
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [productTypeId, regionId, token, me, te]);
+  }, [productTypeId, sellRegionId, materialRegionId, token, me, te]);
 
   return { data, loading, error };
 }

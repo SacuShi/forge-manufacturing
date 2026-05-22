@@ -1,9 +1,11 @@
 /**
  * FORGE v1.1 — MarketSelector component
  *
- * Dropdown for switching between EVE market hubs.
- * Replaces the static "◎ Jita 4-4 ▾" teaser in the Header.
- * Jita is the default; switching to another hub triggers a live price fetch.
+ * Dropdown for switching between the six known EVE trade hubs.
+ *
+ * v1.3.0: Accepts an optional `label` prop (e.g. "Source" / "Market") so two
+ * instances can be placed side-by-side in the Header for independent material-
+ * sourcing and selling-hub selection.
  */
 
 import type { FC } from 'react';
@@ -25,7 +27,14 @@ export const MARKETS: Market[] = [
 interface MarketSelectorProps {
   selectedMarket: Market;
   onMarketChange: (market: Market) => void;
-  loading?: boolean;
+  loading?:       boolean;
+  /**
+   * Short label rendered before the icon, e.g. "Source" or "Market".
+   * When omitted the selector renders without a label (single-hub legacy mode).
+   */
+  label?:         string;
+  /** Accessible label for the <select> element — defaults to `${label} hub`. */
+  ariaLabel?:     string;
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -33,18 +42,28 @@ interface MarketSelectorProps {
 export const MarketSelector: FC<MarketSelectorProps> = ({
   selectedMarket,
   onMarketChange,
-  loading = false,
+  loading   = false,
+  label,
+  ariaLabel,
 }) => (
   <div className="market-selector">
+
+    {/* Optional role label — "Source:" or "Market:" */}
+    {label && (
+      <span className="market-selector-label" aria-hidden="true">
+        {label}:
+      </span>
+    )}
+
     <span className="market-selector-icon" aria-hidden="true">◎</span>
+
     <select
-      id="market-select"
       className="market-dropdown"
       value={selectedMarket.id}
       disabled={loading}
-      aria-label="Select market hub"
+      aria-label={ariaLabel ?? (label ? `${label} hub` : 'Select market hub')}
       onChange={(e) => {
-        const market = MARKETS.find((m) => m.id === parseInt(e.target.value));
+        const market = MARKETS.find((m) => m.id === parseInt(e.target.value, 10));
         if (market) onMarketChange(market);
       }}
     >
@@ -54,6 +73,9 @@ export const MarketSelector: FC<MarketSelectorProps> = ({
         </option>
       ))}
     </select>
-    {loading && <span className="market-selector-loading" aria-label="Loading prices">…</span>}
+
+    {loading && (
+      <span className="market-selector-loading" aria-label="Loading prices">…</span>
+    )}
   </div>
 );

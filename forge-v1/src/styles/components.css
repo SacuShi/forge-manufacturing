@@ -202,6 +202,27 @@
   font-size: 11px;
 }
 
+/* v1.3.0 — Two selectors side by side (Source · Market) */
+.market-selector-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  /* Faint separator between the two hub selectors */
+  border-left: 1px solid rgba(79, 195, 247, 0.12);
+  border-right: 1px solid rgba(79, 195, 247, 0.12);
+  padding: 0 12px;
+}
+
+/* Short role label rendered before the ◎ icon — "Source:" / "Market:" */
+.market-selector-label {
+  color: var(--color-text-tertiary);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
 .session-expired-message {
   background: rgba(255, 180, 0, 0.1);
   border: 1px solid var(--color-warning, #ffb400);

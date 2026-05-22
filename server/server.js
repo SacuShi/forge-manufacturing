@@ -241,9 +241,15 @@ async function runMigrations() {
       structure_type_id      INTEGER DEFAULT NULL,   -- NULL = NPC station
       rig_ids                TEXT    DEFAULT '[]',   -- JSON array of rig type_ids
       facility_tax           REAL    DEFAULT 0.0,    -- 0.0–1.0 decimal (not %)
+      material_region_id     INTEGER DEFAULT 10000002, -- hub where materials are sourced (default Jita)
+      material_region_name   TEXT    DEFAULT 'Jita',
       updated_at             TEXT    NOT NULL DEFAULT ''
     )
   `);
+
+  // v1.3.0 migration: material source hub columns (idempotent — ignored if already present)
+  try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN material_region_id   INTEGER DEFAULT 10000002`); } catch (_) {}
+  try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN material_region_name TEXT    DEFAULT 'Jita'`);    } catch (_) {}
 
   console.log('✓ Database migrations complete');
 }
@@ -1209,7 +1215,14 @@ app.post('/api/get-blueprint', async (req, res) => {
 // ITEM DETAILS - For right panel with build analysis
 app.post('/api/item-details', async (req, res) => {
   try {
-    const { typeId, assets, ownedBlueprints, regionId = 10000002 } = req.body;
+    const {
+      typeId,
+      assets,
+      ownedBlueprints,
+      regionId         = 10000002,  // sell hub — drives displayed current price
+      materialRegionId = regionId,  // source hub — drives material unit costs in build analysis
+    } = req.body;
+
     if (!typeId) {
       return res.status(400).json({ error: "Missing typeId" });
     }
@@ -1250,15 +1263,21 @@ app.post('/api/item-details', async (req, res) => {
       }
     }
 
-    // Add current market prices from cache (falls back to Jita if region not cached)
-    const prices = regionPriceCache.get(regionId)?.prices || jitaPricesCache || {};
-    if (prices[typeId]) {
+    // Sell-hub prices — used for the "Current Market" price display and profit calculation
+    const sellPrices = regionPriceCache.get(regionId)?.prices || jitaPricesCache || {};
+    if (sellPrices[typeId]) {
       itemDetails.currentPrice = {
-        sell: prices[typeId].sell,
-        buy: prices[typeId].buy,
-        median: prices[typeId].median
+        sell:   sellPrices[typeId].sell,
+        buy:    sellPrices[typeId].buy,
+        median: sellPrices[typeId].median,
       };
     }
+
+    // Source-hub prices — used for material unit costs in the build analysis.
+    // Falls back to sell prices when source == sell (or source cache is cold).
+    const matPrices = (materialRegionId !== regionId)
+      ? (regionPriceCache.get(materialRegionId)?.prices || sellPrices)
+      : sellPrices;
 
     // BUILD ANALYSIS (if assets and blueprints provided)
     if (assets && ownedBlueprints) {
@@ -1334,7 +1353,9 @@ app.post('/api/item-details', async (req, res) => {
             }
           }
 
-          const matPrice = prices[mat.material_id];
+          // Unit cost uses the source-hub price (matPrices), which may differ
+          // from the sell-hub if the user has selected separate Source/Market hubs.
+          const matPrice = matPrices[mat.material_id];
           const unitCost = matPrice ? matPrice.buy : 0;
           const itemCost = unitCost * needed;
           totalCost += itemCost;
@@ -1354,7 +1375,7 @@ app.post('/api/item-details', async (req, res) => {
           if (shortage > 0) canBuild = false;
         }
 
-        // Calculate potential profit
+        // Calculate potential profit — sell price from sell hub, material cost from source hub
         const sellPrice = itemDetails.currentPrice ? itemDetails.currentPrice.sell : 0;
         const productQuantity = blueprint.product_quantity || 1;
         const batchRevenue = sellPrice * productQuantity;
@@ -3033,56 +3054,114 @@ async function runVolumeEnrichment() {
 // Serves data from DB — zero AI tokens
 app.get('/api/top-profitable', security.apiLimiter, async (req, res) => {
   try {
-    const sort = req.query.sort || 'profit';
-    const limit = Math.min(parseInt(req.query.limit) || 20, 100);
-    const minProfit = parseFloat(req.query.minProfit) || 0;
-    const minVolume = parseFloat(req.query.minVolume) !== undefined ? parseFloat(req.query.minVolume) : 5;
+    const sort        = req.query.sort || 'profit';
+    const limit       = Math.min(parseInt(req.query.limit) || 20, 100);
+    const minProfit   = parseFloat(req.query.minProfit) || 0;
+    const minVolume   = parseFloat(req.query.minVolume) !== undefined ? parseFloat(req.query.minVolume) : 5;
     const includeRisky = req.query.includeRisky === 'true';
-    const regionId = VALID_REGIONS.includes(parseInt(req.query.regionId)) ? parseInt(req.query.regionId) : 10000002;
+
+    // Sell hub — where finished goods are listed for sale
+    const regionId = VALID_REGIONS.includes(parseInt(req.query.regionId))
+      ? parseInt(req.query.regionId) : 10000002;
+
+    // Source hub — where raw materials are purchased.
+    // Defaults to the sell hub when not supplied (preserves existing behaviour).
+    const sourceRegionId = VALID_REGIONS.includes(parseInt(req.query.sourceRegionId))
+      ? parseInt(req.query.sourceRegionId) : regionId;
+
+    const isCrossHub = sourceRegionId !== regionId;
 
     // Validate sort column to prevent SQL injection
     const allowedSorts = {
-      profit: 'profit DESC',
-      margin: 'profit_margin DESC',
-      isk_per_hour: 'isk_per_hour DESC',
-      cost: 'material_cost ASC',
-      sell_price: 'sell_price DESC'
+      profit:      'profit DESC',
+      margin:      'profit_margin DESC',
+      isk_per_hour:'isk_per_hour DESC',
+      cost:        'material_cost ASC',
+      sell_price:  'sell_price DESC',
     };
-
     const orderClause = allowedSorts[sort] || allowedSorts.profit;
 
-    // Build WHERE clause with CRITICAL risk filtering only
-    // low_volume is a WARNING (shown to user), not CRITICAL (excluded)
-    let whereConditions = ['region_id = ?', 'profit > ?', 'sell_price > 0'];
-    const params = [regionId, minProfit];
+    // Shared liquidity-risk filter (low_volume is a WARNING, not excluded)
+    const riskFilter = `(
+      liquidity_risk IS NULL
+      OR liquidity_risk = ""
+      OR liquidity_risk = "low_volume"
+    )`;
 
-    // Apply volume filter (skip if volume data not available yet)
-    if (minVolume > 0) {
-      whereConditions.push('(avg_daily_volume >= ? OR avg_daily_volume IS NULL)');
-      params.push(minVolume);
+    let results;
+
+    if (!isCrossHub) {
+      // ── Same-hub path (unchanged behaviour) ──────────────────────────────
+      let whereConditions = ['region_id = ?', 'profit > ?', 'sell_price > 0'];
+      const params = [regionId, minProfit];
+
+      if (minVolume > 0) {
+        whereConditions.push('(avg_daily_volume >= ? OR avg_daily_volume IS NULL)');
+        params.push(minVolume);
+      }
+      if (!includeRisky) whereConditions.push(riskFilter);
+
+      results = await dbAll(`
+        SELECT blueprint_id, product_id, product_name, material_cost,
+               sell_price, buy_price, profit, profit_margin, isk_per_hour,
+               build_time, material_count, computed_at,
+               avg_daily_volume, market_group_id, liquidity_risk
+        FROM precomputed_profits
+        WHERE ${whereConditions.join(' AND ')}
+        ORDER BY ${orderClause}
+        LIMIT ?
+      `, [...params, limit]);
+
+    } else {
+      // ── Cross-hub path: materials from sourceRegionId, sell in regionId ──
+      // Self-join precomputed_profits: sell-hub row for revenue/metadata,
+      // source-hub row for material cost.  Profit is recalculated in SQL so
+      // filtering and sorting are always on the true cross-hub figure.
+      let joinConditions = [
+        `sell.region_id = ?`,
+        `(sell.sell_price - src.material_cost) > ?`,
+        `sell.sell_price > 0`,
+      ];
+      const params = [regionId, minProfit];
+
+      if (minVolume > 0) {
+        joinConditions.push('(sell.avg_daily_volume >= ? OR sell.avg_daily_volume IS NULL)');
+        params.push(minVolume);
+      }
+      if (!includeRisky) {
+        joinConditions.push(riskFilter.replace(/liquidity_risk/g, 'sell.liquidity_risk'));
+      }
+
+      results = await dbAll(`
+        SELECT
+          sell.blueprint_id,
+          sell.product_id,
+          sell.product_name,
+          src.material_cost,
+          sell.sell_price,
+          sell.buy_price,
+          (sell.sell_price - src.material_cost)                              AS profit,
+          CASE WHEN sell.sell_price > 0
+            THEN (sell.sell_price - src.material_cost) / sell.sell_price * 100
+            ELSE 0 END                                                        AS profit_margin,
+          CASE WHEN sell.build_time > 0
+            THEN (sell.sell_price - src.material_cost) / (sell.build_time / 3600.0)
+            ELSE 0 END                                                        AS isk_per_hour,
+          sell.build_time,
+          sell.material_count,
+          sell.computed_at,
+          sell.avg_daily_volume,
+          sell.market_group_id,
+          sell.liquidity_risk
+        FROM precomputed_profits sell
+        JOIN precomputed_profits src
+          ON  src.blueprint_id = sell.blueprint_id
+          AND src.region_id    = ?
+        WHERE ${joinConditions.join(' AND ')}
+        ORDER BY profit DESC
+        LIMIT ?
+      `, [...params, sourceRegionId, limit]);
     }
-
-    // Exclude CRITICAL risks only (not low_volume)
-    if (!includeRisky) {
-      whereConditions.push(`(
-        liquidity_risk IS NULL 
-        OR liquidity_risk = ""
-        OR liquidity_risk = "low_volume"
-      )`);
-    }
-
-    const whereClause = whereConditions.join(' AND ');
-
-    const results = await dbAll(`
-      SELECT blueprint_id, product_id, product_name, material_cost,
-             sell_price, buy_price, profit, profit_margin, isk_per_hour,
-             build_time, material_count, computed_at,
-             avg_daily_volume, market_group_id, liquidity_risk
-      FROM precomputed_profits
-      WHERE ${whereClause}
-      ORDER BY ${orderClause}
-      LIMIT ?
-    `, [...params, limit]);
 
     // Get last run info
     const lastRun = await dbGet(`
@@ -3127,82 +3206,169 @@ app.get('/api/top-profitable', security.apiLimiter, async (req, res) => {
 // For Market Opportunities tab — shows only blueprints user can build
 app.get('/api/top-profitable-by-skills', security.apiLimiter, security.verifyEveToken, async (req, res) => {
   try {
-    const characterId = req.characterId;
-    const sort = req.query.sort || 'profit';
-    const limit = Math.min(parseInt(req.query.limit) || 50, 200);
-    const offset = Math.max(parseInt(req.query.offset) || 0, 0);
-    const minProfit = parseFloat(req.query.minProfit) || 0;
-    const minVolume = parseFloat(req.query.minVolume) !== undefined ? parseFloat(req.query.minVolume) : 5;
+    const characterId  = req.characterId;
+    const sort         = req.query.sort || 'profit';
+    const limit        = Math.min(parseInt(req.query.limit) || 50, 200);
+    const offset       = Math.max(parseInt(req.query.offset) || 0, 0);
+    const minProfit    = parseFloat(req.query.minProfit) || 0;
+    const minVolume    = parseFloat(req.query.minVolume) !== undefined ? parseFloat(req.query.minVolume) : 5;
     const includeRisky = req.query.includeRisky === 'true';
-    const regionId = VALID_REGIONS.includes(parseInt(req.query.regionId)) ? parseInt(req.query.regionId) : 10000002;
+
+    // Sell hub — where finished goods are listed for sale
+    const regionId = VALID_REGIONS.includes(parseInt(req.query.regionId))
+      ? parseInt(req.query.regionId) : 10000002;
+
+    // Source hub — where raw materials are purchased.
+    // Defaults to the sell hub when not supplied (preserves existing behaviour).
+    const sourceRegionId = VALID_REGIONS.includes(parseInt(req.query.sourceRegionId))
+      ? parseInt(req.query.sourceRegionId) : regionId;
+
+    const isCrossHub = sourceRegionId !== regionId;
+
+    // Shared liquidity-risk filter (low_volume is a WARNING, not excluded)
+    const riskFilter = `(
+      liquidity_risk IS NULL
+      OR liquidity_risk = ""
+      OR liquidity_risk = "low_volume"
+    )`;
 
     // Get user's skills from session cache
-    const sessionKey = `session:${characterId}`;
+    const sessionKey  = `session:${characterId}`;
     const sessionData = getCached(sessionKey);
 
     if (!sessionData || !sessionData.skills || sessionData.skills.length === 0) {
       console.warn(`⚠ Skills not in session for character ${characterId} — returning unfiltered top-profitable`);
 
-      // Build same query as /api/top-profitable so the tab isn't blank
-      const fbAllowedSorts = { profit: 'profit DESC', margin: 'profit_margin DESC', isk_per_hour: 'isk_per_hour DESC' };
-      const fbOrder = fbAllowedSorts[sort] || fbAllowedSorts.profit;
-      const fbWhere = ['region_id = ?', 'profit > ?', 'sell_price > 0', `(liquidity_risk IS NULL OR liquidity_risk = "" OR liquidity_risk = "low_volume")`];
+      // Fall back to the same cross-hub aware logic but without skill filtering
+      const fbWhere  = isCrossHub
+        ? [`sell.region_id = ?`, `(sell.sell_price - src.material_cost) > ?`, `sell.sell_price > 0`,
+           `(sell.liquidity_risk IS NULL OR sell.liquidity_risk = "" OR sell.liquidity_risk = "low_volume")`]
+        : [`region_id = ?`, `profit > ?`, `sell_price > 0`,
+           `(liquidity_risk IS NULL OR liquidity_risk = "" OR liquidity_risk = "low_volume")`];
+
       const fbParams = [regionId, minProfit];
+
       const fbResults = await dbAll(
-        `SELECT blueprint_id, product_id, product_name, material_cost, sell_price, buy_price, profit, profit_margin, isk_per_hour, build_time, material_count, computed_at, avg_daily_volume, liquidity_risk, COALESCE(activity_id,1) as activity_id FROM precomputed_profits WHERE ${fbWhere.join(' AND ')} ORDER BY ${fbOrder} LIMIT ?`,
-        [...fbParams, limit]
+        isCrossHub
+          ? `SELECT sell.blueprint_id, sell.product_id, sell.product_name,
+                    src.material_cost, sell.sell_price, sell.buy_price,
+                    (sell.sell_price - src.material_cost) AS profit,
+                    CASE WHEN sell.sell_price > 0
+                      THEN (sell.sell_price - src.material_cost) / sell.sell_price * 100
+                      ELSE 0 END AS profit_margin,
+                    CASE WHEN sell.build_time > 0
+                      THEN (sell.sell_price - src.material_cost) / (sell.build_time / 3600.0)
+                      ELSE 0 END AS isk_per_hour,
+                    sell.build_time, sell.material_count, sell.computed_at,
+                    sell.avg_daily_volume, sell.liquidity_risk, COALESCE(sell.activity_id,1) AS activity_id
+             FROM precomputed_profits sell
+             JOIN precomputed_profits src ON src.blueprint_id = sell.blueprint_id AND src.region_id = ?
+             WHERE ${fbWhere.join(' AND ')}
+             ORDER BY profit DESC LIMIT ?`
+          : `SELECT blueprint_id, product_id, product_name, material_cost, sell_price, buy_price,
+                    profit, profit_margin, isk_per_hour, build_time, material_count, computed_at,
+                    avg_daily_volume, liquidity_risk, COALESCE(activity_id,1) AS activity_id
+             FROM precomputed_profits
+             WHERE ${fbWhere.join(' AND ')}
+             ORDER BY profit DESC LIMIT ?`,
+        isCrossHub ? [...fbParams, sourceRegionId, limit] : [...fbParams, limit]
       );
+
       const fbLastRun = await dbGet(`SELECT completed_at FROM precompute_runs ORDER BY id DESC LIMIT 1`);
       return res.json({
         results: fbResults,
-        meta: { count: fbResults.length, sort, filter: 'unfiltered_skills_unavailable', lastComputed: fbLastRun?.completed_at || null }
+        meta: { count: fbResults.length, sort, filter: 'unfiltered_skills_unavailable',
+                lastComputed: fbLastRun?.completed_at || null,
+                sourceRegionId, sellRegionId: regionId },
       });
     }
 
     const characterSkills = sessionData.skills || [];
 
-    // Validate sort column
+    // Validate sort column to prevent SQL injection
     const allowedSorts = {
-      profit: 'profit DESC',
-      margin: 'profit_margin DESC',
+      profit:       'profit DESC',
+      margin:       'profit_margin DESC',
       isk_per_hour: 'isk_per_hour DESC',
-      cost: 'material_cost ASC',
-      sell_price: 'sell_price DESC'
+      cost:         'material_cost ASC',
+      sell_price:   'sell_price DESC',
     };
-
     const orderClause = allowedSorts[sort] || allowedSorts.profit;
 
-    // Build WHERE clause
-    let whereConditions = ['region_id = ?', 'profit > ?', 'sell_price > 0'];
-    const params = [regionId, minProfit];
+    // Build candidate query — fetches 3× the needed count to survive skill filtering
+    let candidates;
 
-    if (minVolume > 0) {
-      whereConditions.push('(avg_daily_volume >= ? OR avg_daily_volume IS NULL)');
-      params.push(minVolume);
+    if (!isCrossHub) {
+      // ── Same-hub path (unchanged behaviour) ────────────────────────────
+      let whereConditions = ['region_id = ?', 'profit > ?', 'sell_price > 0'];
+      const params = [regionId, minProfit];
+
+      if (minVolume > 0) {
+        whereConditions.push('(avg_daily_volume >= ? OR avg_daily_volume IS NULL)');
+        params.push(minVolume);
+      }
+      if (!includeRisky) whereConditions.push(riskFilter);
+
+      candidates = await dbAll(`
+        SELECT blueprint_id, product_id, product_name, material_cost,
+               sell_price, buy_price, profit, profit_margin, isk_per_hour,
+               build_time, material_count, computed_at,
+               avg_daily_volume, market_group_id, liquidity_risk,
+               COALESCE(activity_id, 1) AS activity_id
+        FROM precomputed_profits
+        WHERE ${whereConditions.join(' AND ')}
+        ORDER BY ${orderClause}
+        LIMIT ?
+      `, [...params, (offset + limit) * 3]);
+
+    } else {
+      // ── Cross-hub path: materials from sourceRegionId, sell in regionId ─
+      let joinConditions = [
+        `sell.region_id = ?`,
+        `(sell.sell_price - src.material_cost) > ?`,
+        `sell.sell_price > 0`,
+      ];
+      const params = [regionId, minProfit];
+
+      if (minVolume > 0) {
+        joinConditions.push('(sell.avg_daily_volume >= ? OR sell.avg_daily_volume IS NULL)');
+        params.push(minVolume);
+      }
+      if (!includeRisky) {
+        joinConditions.push(riskFilter.replace(/liquidity_risk/g, 'sell.liquidity_risk'));
+      }
+
+      candidates = await dbAll(`
+        SELECT
+          sell.blueprint_id,
+          sell.product_id,
+          sell.product_name,
+          src.material_cost,
+          sell.sell_price,
+          sell.buy_price,
+          (sell.sell_price - src.material_cost)                              AS profit,
+          CASE WHEN sell.sell_price > 0
+            THEN (sell.sell_price - src.material_cost) / sell.sell_price * 100
+            ELSE 0 END                                                        AS profit_margin,
+          CASE WHEN sell.build_time > 0
+            THEN (sell.sell_price - src.material_cost) / (sell.build_time / 3600.0)
+            ELSE 0 END                                                        AS isk_per_hour,
+          sell.build_time,
+          sell.material_count,
+          sell.computed_at,
+          sell.avg_daily_volume,
+          sell.market_group_id,
+          sell.liquidity_risk,
+          COALESCE(sell.activity_id, 1) AS activity_id
+        FROM precomputed_profits sell
+        JOIN precomputed_profits src
+          ON  src.blueprint_id = sell.blueprint_id
+          AND src.region_id    = ?
+        WHERE ${joinConditions.join(' AND ')}
+        ORDER BY profit DESC
+        LIMIT ?
+      `, [...params, sourceRegionId, (offset + limit) * 3]);
     }
-
-    if (!includeRisky) {
-      whereConditions.push(`(
-        liquidity_risk IS NULL
-        OR liquidity_risk = ""
-        OR liquidity_risk = "low_volume"
-      )`);
-    }
-
-    const whereClause = whereConditions.join(' AND ');
-
-    // Get candidate items — 3× (offset + limit) to survive skill filtering
-    const candidates = await dbAll(`
-      SELECT blueprint_id, product_id, product_name, material_cost,
-             sell_price, buy_price, profit, profit_margin, isk_per_hour,
-             build_time, material_count, computed_at,
-             avg_daily_volume, market_group_id, liquidity_risk,
-             COALESCE(activity_id, 1) as activity_id
-      FROM precomputed_profits
-      WHERE ${whereClause}
-      ORDER BY ${orderClause}
-      LIMIT ?
-    `, [...params, (offset + limit) * 3]);
 
     // Filter by skill requirements, skipping the first `offset` qualified items
     const results = [];
@@ -3228,18 +3394,22 @@ app.get('/api/top-profitable-by-skills', security.apiLimiter, security.verifyEve
     res.json({
       results,
       meta: {
-        count: results.length,
+        count:         results.length,
         sort,
         minProfit,
         minVolume,
         includeRisky,
-        filter: 'by_skills',
-        skillsLoaded: characterSkills.length,
-        lastComputed: lastRun?.completed_at || null,
+        filter:        'by_skills',
+        skillsLoaded:  characterSkills.length,
+        lastComputed:  lastRun?.completed_at || null,
         lastRunStatus: lastRun?.status || 'never',
         offset,
-        hasMore: results.length >= limit,
-      }
+        hasMore:       results.length >= limit,
+        // Hub context — lets the client know which hubs produced these figures
+        sellRegionId:   regionId,
+        sourceRegionId: sourceRegionId,
+        isCrossHub:     isCrossHub,
+      },
     });
 
   } catch (err) {
@@ -3672,8 +3842,13 @@ app.get('/api/industry-settings', security.apiLimiter, security.verifyEveToken, 
       [characterId]
     );
     res.json(settings || {
-      system_id: null, system_name: null,
-      structure_type_id: null, rig_ids: '[]', facility_tax: 0,
+      system_id:            null,
+      system_name:          null,
+      structure_type_id:    null,
+      rig_ids:              '[]',
+      facility_tax:         0,
+      material_region_id:   10000002,   // default: Jita
+      material_region_name: 'Jita',
     });
   } catch (err) {
     console.error('Industry settings GET error:', err.message);
@@ -3681,31 +3856,51 @@ app.get('/api/industry-settings', security.apiLimiter, security.verifyEveToken, 
   }
 });
 
-// POST /api/industry-settings — save settings for the authed character
+// POST /api/industry-settings — save settings for the authed character.
+// Accepts both manufacturing location fields (system, structure, rigs, tax) and
+// the material source hub (material_region_id / material_region_name).
+// Any subset of fields may be sent; omitted fields are preserved via ON CONFLICT DO UPDATE.
 app.post('/api/industry-settings', security.apiLimiter, security.verifyEveToken, async (req, res) => {
   try {
     const characterId = req.characterId;
-    const { system_id, system_name, structure_type_id, rig_ids, facility_tax } = req.body;
+    const {
+      system_id, system_name,
+      structure_type_id, rig_ids, facility_tax,
+      material_region_id   = 10000002,
+      material_region_name = 'Jita',
+    } = req.body;
 
     // Validate: facility_tax must be 0–100
     const tax = Math.min(100, Math.max(0, parseFloat(facility_tax) || 0));
 
+    // Validate material_region_id against the known hub whitelist
+    const validMatRegion = VALID_REGIONS.includes(parseInt(material_region_id))
+      ? parseInt(material_region_id)
+      : 10000002;
+
     await dbRun(`
       INSERT INTO character_industry_settings
-        (character_id, system_id, system_name, structure_type_id, rig_ids, facility_tax, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+        (character_id, system_id, system_name, structure_type_id,
+         rig_ids, facility_tax, material_region_id, material_region_name, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(character_id) DO UPDATE SET
-        system_id          = excluded.system_id,
-        system_name        = excluded.system_name,
-        structure_type_id  = excluded.structure_type_id,
-        rig_ids            = excluded.rig_ids,
-        facility_tax       = excluded.facility_tax,
-        updated_at         = excluded.updated_at
+        system_id            = excluded.system_id,
+        system_name          = excluded.system_name,
+        structure_type_id    = excluded.structure_type_id,
+        rig_ids              = excluded.rig_ids,
+        facility_tax         = excluded.facility_tax,
+        material_region_id   = excluded.material_region_id,
+        material_region_name = excluded.material_region_name,
+        updated_at           = excluded.updated_at
     `, [
-      characterId, system_id || null, system_name || null,
+      characterId,
+      system_id         || null,
+      system_name       || null,
       structure_type_id || null,
       JSON.stringify(Array.isArray(rig_ids) ? rig_ids : []),
       tax,
+      validMatRegion,
+      material_region_name || REGION_HUB_NAMES[validMatRegion] || 'Jita',
       new Date().toISOString(),
     ]);
 
@@ -3774,7 +3969,20 @@ app.get('/api/system-search', security.apiLimiter, security.verifyEveToken, asyn
 //   Total Job Cost  = System Job Cost + SCC Surcharge + Facility Tax
 app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (req, res) => {
   try {
-    const { product_id, me = 0, te = 0, runs = 1, regionId = 10000002 } = req.body;
+    const {
+      product_id,
+      me             = 0,
+      te             = 0,
+      runs           = 1,
+      regionId       = 10000002,  // sell hub (backward-compat param name)
+      materialRegionId = regionId, // source hub — where materials are purchased
+    } = req.body;
+
+    // Validate both hub IDs against the known whitelist
+    const sellRegionId = VALID_REGIONS.includes(parseInt(regionId))
+      ? parseInt(regionId) : 10000002;
+    const matRegionId  = VALID_REGIONS.includes(parseInt(materialRegionId))
+      ? parseInt(materialRegionId) : sellRegionId;
     const characterId = req.characterId;
 
     if (!product_id) return res.status(400).json({ error: 'product_id required' });
@@ -3834,52 +4042,76 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
     const facilityTaxCost = eiv * facilityTaxDecimal;
     const totalJobCost   = systemJobCost + sccSurcharge + facilityTaxCost;
 
-    // ── Market prices: materials + sell price (selected hub) ─────────────
-    // Both material sourcing and selling use the hub the user has selected.
-    // If the live price cache is cold (e.g. after a server restart before
-    // precompute finishes), fall back to the precomputed DB row for this
-    // product+region and kick off a background cache warm so the next
-    // request gets live prices. Never block the response on a slow ESI fetch.
-    const regionEntry = regionPriceCache.get(regionId);
-    const pricesWarm  = !!(regionEntry && Date.now() < regionEntry.expiry);
+    // ── Market prices: source hub for materials, sell hub for revenue ────
+    //
+    // Source hub  (matRegionId)  — where the player buys raw materials
+    // Sell hub    (sellRegionId) — where the finished goods are listed
+    //
+    // When both caches are warm, prices are exact.
+    // When either is cold (e.g. first request after a restart), we fall back
+    // to the precomputed DB row for that region (ME-scaled approximation) and
+    // kick off a background warm so the next request gets live prices.
+    const matEntry  = regionPriceCache.get(matRegionId);
+    const sellEntry = regionPriceCache.get(sellRegionId);
+    const matWarm   = !!(matEntry  && Date.now() < matEntry.expiry);
+    const sellWarm  = !!(sellEntry && Date.now() < sellEntry.expiry);
+    const pricesWarm = matWarm && sellWarm; // both must be warm for live flag
 
+    // ── Material cost ─────────────────────────────────────────────────────
     let totalMaterialCost = 0;
-    let unitSell          = 0;
 
-    if (pricesWarm) {
-      // ── Live prices: calculate exactly with ME-adjusted quantities ──────
+    if (matWarm) {
+      // Live source-hub prices — exact ME-adjusted quantities
       for (const mat of materials) {
-        const matPrice = regionEntry.prices[mat.material_id]?.sell || 0;
+        const matPrice = matEntry.prices[mat.material_id]?.sell || 0;
         const adjQty   = Math.max(1, Math.ceil(mat.quantity * meFactor)) * runs;
         totalMaterialCost += matPrice * adjQty;
       }
-      unitSell = regionEntry.prices[product_id]?.sell || 0;
     } else {
-      // ── Cache cold: use precomputed DB row as best-available fallback ───
-      // precomputed material_cost is at ME=0; scale by meFactor as approximation.
-      const precomp = await dbGet(
-        'SELECT material_cost, sell_price FROM precomputed_profits WHERE product_id = ? AND region_id = ?',
-        [product_id, regionId]
+      // Cold — fall back to precomputed DB value (ME=0, scaled by meFactor)
+      const precompMat = await dbGet(
+        'SELECT material_cost FROM precomputed_profits WHERE product_id = ? AND region_id = ?',
+        [product_id, matRegionId]
       );
-      if (precomp) {
-        totalMaterialCost = (precomp.material_cost || 0) * meFactor * runs;
-        unitSell          = precomp.sell_price || 0;
-      }
-      // Trigger background warm — next request will get live prices
-      if (!regionWarmingSet.has(regionId)) {
-        regionWarmingSet.add(regionId);
-        fetchRegionPrices(regionId)
-          .then(prices => regionPriceCache.set(regionId, { prices, expiry: Date.now() + 3600000 }))
+      totalMaterialCost = ((precompMat?.material_cost || 0) * meFactor * runs);
+      // Trigger background warm for source hub
+      if (!regionWarmingSet.has(matRegionId)) {
+        regionWarmingSet.add(matRegionId);
+        fetchRegionPrices(matRegionId)
+          .then(prices => regionPriceCache.set(matRegionId, { prices, expiry: Date.now() + 3600000 }))
           .catch(() => {})
-          .finally(() => regionWarmingSet.delete(regionId));
+          .finally(() => regionWarmingSet.delete(matRegionId));
+      }
+    }
+
+    // ── Sell price ────────────────────────────────────────────────────────
+    let unitSell = 0;
+
+    if (sellWarm) {
+      unitSell = sellEntry.prices[product_id]?.sell || 0;
+    } else {
+      // Cold — fall back to precomputed sell price for the sell hub
+      const precompSell = await dbGet(
+        'SELECT sell_price FROM precomputed_profits WHERE product_id = ? AND region_id = ?',
+        [product_id, sellRegionId]
+      );
+      unitSell = precompSell?.sell_price || 0;
+      // Trigger background warm for sell hub (if not already warming)
+      if (!regionWarmingSet.has(sellRegionId)) {
+        regionWarmingSet.add(sellRegionId);
+        fetchRegionPrices(sellRegionId)
+          .then(prices => regionPriceCache.set(sellRegionId, { prices, expiry: Date.now() + 3600000 }))
+          .catch(() => {})
+          .finally(() => regionWarmingSet.delete(sellRegionId));
       }
     }
 
     const productUnits = (blueprint.product_quantity || 1) * runs;
     const sellPrice    = unitSell * productUnits;
 
-    // ── Sales fees ─────────────────────────────────────────────────────────
-    const hub             = HUB_STANDINGS[regionId];
+    // ── Sales fees (broker fee + transaction tax) ─────────────────────────
+    // Standings are looked up by sell hub — that is where the order is placed.
+    const hub             = HUB_STANDINGS[sellRegionId];
     const brokerRelations = skillMap[3446]  || 0;
     const accounting      = skillMap[16622] || 0;
     const factionStanding = standings.factions[hub?.faction_id] || 0;

@@ -5,6 +5,10 @@
  * Returns the full ItemDetailApiResponse (price history, build analysis,
  * current market prices) from the server.
  *
+ * v1.3.0: Accepts a separate materialRegionId so material unit costs in the
+ * build analysis reflect the player's chosen sourcing hub rather than always
+ * using the sell hub.
+ *
  * Automatically cancels in-flight requests when typeId changes.
  * Clears detail and error when typeId becomes null.
  */
@@ -20,11 +24,12 @@ export interface UseItemDetailReturn {
 }
 
 export function useItemDetail(
-  typeId: number | null,
-  assets: EsiAsset[],
-  blueprints: EsiBlueprint[],
-  token: string | null,
-  regionId = 10000002,
+  typeId:           number | null,
+  assets:           EsiAsset[],
+  blueprints:       EsiBlueprint[],
+  token:            string | null,
+  regionId         = 10000002,   // sell hub — drives "Current Market" price display
+  materialRegionId = regionId,   // source hub — drives material unit costs in build analysis
 ): UseItemDetailReturn {
   const [detail,  setDetail]  = useState<ItemDetailApiResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -54,6 +59,7 @@ export function useItemDetail(
         assets,
         ownedBlueprints: blueprints,
         regionId,
+        materialRegionId,
       }),
     })
       .then(async (res) => {
@@ -78,7 +84,7 @@ export function useItemDetail(
 
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [typeId, regionId]);
+  }, [typeId, regionId, materialRegionId]);
 
   return { detail, loading, error };
 }

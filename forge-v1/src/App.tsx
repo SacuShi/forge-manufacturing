@@ -109,6 +109,15 @@ const App: FC = () => {
   const [marketHasMore,     setMarketHasMore]     = useState(true);
   const [marketError,       setMarketError]       = useState<string | null>(null);
   const [selectedMarket,    setSelectedMarket]    = useState<Market>(MARKETS[0]);
+  // v1.3.0 — Source hub: where materials are purchased. Persisted across sessions.
+  const [selectedSourceMarket, setSelectedSourceMarket] = useState<Market>(() => {
+    const saved = localStorage.getItem('forge-source-market');
+    if (saved) {
+      const found = MARKETS.find((m) => m.id === parseInt(saved, 10));
+      if (found) return found;
+    }
+    return MARKETS[0]; // default: Jita
+  });
 
   // v1.2.0 — Industry settings + settings modal
   const [industrySettings, setIndustrySettings] = useState<IndustrySettings | null>(null);
@@ -125,7 +134,11 @@ const App: FC = () => {
     detail: apiDetail,
     loading: detailLoading,
     error: detailError,
-  } = useItemDetail(selectedTypeId, auth.assets, auth.blueprints, auth.token, selectedMarket.id);
+  } = useItemDetail(
+    selectedTypeId, auth.assets, auth.blueprints, auth.token,
+    selectedMarket.id,        // sell hub — drives "Current Market" price box
+    selectedSourceMarket.id,  // source hub — drives material unit costs in build analysis
+  );
 
   // v1.2.0 — Resolve the character's best blueprint ME/TE for the selected product.
   //
@@ -158,7 +171,14 @@ const App: FC = () => {
     data:    trueCostData,
     loading: trueCostLoading,
     error:   trueCostError,
-  } = useTrueCost(selectedTypeId, selectedMarket.id, selectedBlueprintME, selectedBlueprintTE, auth.token);
+  } = useTrueCost(
+    selectedTypeId,
+    selectedMarket.id,        // sell hub
+    selectedSourceMarket.id,  // source hub — determines material purchase prices
+    selectedBlueprintME,
+    selectedBlueprintTE,
+    auth.token,
+  );
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -190,8 +210,12 @@ const App: FC = () => {
     if (auth.status !== 'authed') return;
 
     setMarketLoading(true);
-    // Use skills-filtered endpoint: shows only blueprints user can build based on trained skills
-    apiGet<TopProfitableResponse>('/api/top-profitable-by-skills?limit=50', auth.token ?? '')
+    // Use skills-filtered endpoint; pass both hubs so the table reflects the user's
+    // persisted source/sell combination from the first load.
+    apiGet<TopProfitableResponse>(
+      `/api/top-profitable-by-skills?limit=50&regionId=${selectedMarket.id}&sourceRegionId=${selectedSourceMarket.id}`,
+      auth.token ?? ''
+    )
       .then((data) => {
         setRawResults(data.results);
         setMarketHasMore(data.meta.hasMore ?? data.results.length >= 50);
@@ -266,7 +290,7 @@ const App: FC = () => {
     try {
       const nextOffset = rawResults.length;
       const data = await apiGet<TopProfitableResponse>(
-        `/api/top-profitable-by-skills?limit=50&offset=${nextOffset}&regionId=${selectedMarket.id}`,
+        `/api/top-profitable-by-skills?limit=50&offset=${nextOffset}&regionId=${selectedMarket.id}&sourceRegionId=${selectedSourceMarket.id}`,
         auth.token
       );
       setRawResults((prev) => [...prev, ...data.results]);
@@ -276,7 +300,7 @@ const App: FC = () => {
     } finally {
       setMarketLoadingMore(false);
     }
-  }, [marketLoadingMore, marketHasMore, auth.token, rawResults.length, selectedMarket.id]);
+  }, [marketLoadingMore, marketHasMore, auth.token, rawResults.length, selectedMarket.id, selectedSourceMarket.id]);
 
   const handleToggleChat = () => {
     setChatOpen((p) => !p);
@@ -336,7 +360,7 @@ const App: FC = () => {
     setMarketLoading(true);
     try {
       const data = await apiGet<TopProfitableResponse>(
-        `/api/top-profitable-by-skills?limit=50&regionId=${market.id}`,
+        `/api/top-profitable-by-skills?limit=50&regionId=${market.id}&sourceRegionId=${selectedSourceMarket.id}`,
         auth.token ?? ''
       );
       setRawResults(data.results);
@@ -344,12 +368,38 @@ const App: FC = () => {
     } catch (e) {
       console.error('Failed to load market for region:', e);
       setMarketError((e as Error).message);
-      // Fall back to Jita selector on error
       setSelectedMarket(MARKETS[0]);
     } finally {
       setMarketLoading(false);
     }
-  }, [auth.token]);
+  }, [auth.token, selectedSourceMarket.id]);
+
+  // v1.3.0 — Source hub change: persist selection, then reload the market table
+  // so profit/margin/ISK-per-hour all reflect the new material purchase costs.
+  const handleSourceMarketChange = useCallback(async (market: Market) => {
+    setSelectedSourceMarket(market);
+    localStorage.setItem('forge-source-market', String(market.id));
+    setRawResults([]);
+    setMarketHasMore(true);
+    setMarketError(null);
+    setMarketLoading(true);
+    try {
+      const data = await apiGet<TopProfitableResponse>(
+        `/api/top-profitable-by-skills?limit=50&regionId=${selectedMarket.id}&sourceRegionId=${market.id}`,
+        auth.token ?? ''
+      );
+      setRawResults(data.results);
+      setMarketHasMore(data.meta.hasMore ?? data.results.length >= 50);
+    } catch (e) {
+      console.error('Failed to load market with new source region:', e);
+      setMarketError((e as Error).message);
+      // Revert source on error so the selector doesn't show a hub whose prices failed
+      setSelectedSourceMarket(MARKETS[0]);
+      localStorage.setItem('forge-source-market', String(MARKETS[0].id));
+    } finally {
+      setMarketLoading(false);
+    }
+  }, [auth.token, selectedMarket.id]);
 
   const handleSendMessage = useCallback(async (text: string) => {
     const now    = Date.now();
@@ -473,12 +523,14 @@ const App: FC = () => {
         chatOpen={chatOpen}
         theme={theme}
         selectedMarket={selectedMarket}
+        selectedSourceMarket={selectedSourceMarket}
         regionLoading={marketLoading}
         onToggleChat={handleToggleChat}
         onMenuToggle={() => setDrawerOpen((o) => !o)}
         onThemeToggle={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
         onLogout={auth.logout}
         onMarketChange={handleMarketChange}
+        onSourceMarketChange={handleSourceMarketChange}
         onOpenSettings={() => setSettingsOpen(true)}
       />
 

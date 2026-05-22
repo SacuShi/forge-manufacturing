@@ -261,13 +261,16 @@ export interface SystemSearchResult {
 
 /** Character manufacturing setup — stored in character_industry_settings */
 export interface IndustrySettings {
-  system_id:         number | null;
-  system_name:       string | null;
-  structure_type_id: number | null;
+  system_id:            number | null;
+  system_name:          string | null;
+  structure_type_id:    number | null;
   /** JSON-encoded array of rig type_ids */
-  rig_ids:           string;
+  rig_ids:              string;
   /** Stored as percentage 0–100 */
-  facility_tax:      number;
+  facility_tax:         number;
+  /** Region ID of the hub where materials are sourced (default 10000002 = Jita) */
+  material_region_id?:   number;
+  material_region_name?: string | null;
 }
 
 /** Full response from POST /api/true-cost */
