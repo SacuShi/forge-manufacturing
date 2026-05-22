@@ -39,6 +39,29 @@ interface MarketSelectorProps {
 
 // ── Component ────────────────────────────────────────────────────────────────
 
+/**
+ * Returns a tooltip explaining which price is used for this selector role.
+ * Both hubs use the lowest sell (ask) price — the tooltip clarifies what
+ * that means practically for Source vs Market so the user isn't surprised.
+ */
+function getTooltip(label: string | undefined, hubName: string): string {
+  if (label === 'Source') {
+    return (
+      `Material costs use ${hubName} sell price (lowest ask) — ` +
+      `the price you pay to buy materials immediately from sell orders. ` +
+      `Using buy-order prices would be cheaper but assumes you wait for fills.`
+    );
+  }
+  if (label === 'Market') {
+    return (
+      `Revenue uses ${hubName} sell price (lowest ask) — ` +
+      `assumes you list finished goods at the current cheapest price. ` +
+      `Actual revenue depends on how aggressively you undercut.`
+    );
+  }
+  return `${hubName} market hub`;
+}
+
 export const MarketSelector: FC<MarketSelectorProps> = ({
   selectedMarket,
   onMarketChange,
@@ -46,7 +69,10 @@ export const MarketSelector: FC<MarketSelectorProps> = ({
   label,
   ariaLabel,
 }) => (
-  <div className="market-selector">
+  <div
+    className="market-selector"
+    title={getTooltip(label, selectedMarket.name)}
+  >
 
     {/* Optional role label — "Source:" or "Market:" */}
     {label && (
