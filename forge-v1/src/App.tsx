@@ -127,12 +127,38 @@ const App: FC = () => {
     error: detailError,
   } = useItemDetail(selectedTypeId, auth.assets, auth.blueprints, auth.token, selectedMarket.id);
 
-  // v1.2.0 — True Profit calculation (EVE Ref API via /api/true-cost)
+  // v1.2.0 — Resolve the character's best blueprint ME/TE for the selected product.
+  //
+  // ESI blueprint type_ids differ from product type_ids, so we match by name:
+  //   itemNames.get(bp.type_id) === productName + " Blueprint"
+  // BPO (quantity === -1) is preferred over any BPC when both exist.
+  const { selectedBlueprintME, selectedBlueprintTE } = useMemo(() => {
+    if (!selectedTypeId || !itemNames.size || !auth.blueprints.length) {
+      return { selectedBlueprintME: 0, selectedBlueprintTE: 0 };
+    }
+    const productName = itemNames.get(selectedTypeId);
+    if (!productName) return { selectedBlueprintME: 0, selectedBlueprintTE: 0 };
+    const bpNameTarget = (productName + ' Blueprint').toLowerCase();
+
+    let best: (typeof auth.blueprints)[0] | null = null;
+    for (const bp of auth.blueprints) {
+      const bpName = itemNames.get(bp.type_id);
+      if (!bpName || bpName.toLowerCase() !== bpNameTarget) continue;
+      // Prefer BPO (quantity === -1); among BPCs pick any
+      if (!best || bp.quantity === -1) best = bp;
+    }
+    return {
+      selectedBlueprintME: best?.material_efficiency ?? 0,
+      selectedBlueprintTE: best?.time_efficiency     ?? 0,
+    };
+  }, [selectedTypeId, auth.blueprints, itemNames]);
+
+  // v1.2.0 — True Profit calculation via /api/true-cost (local ESI calc, no external API)
   const {
     data:    trueCostData,
     loading: trueCostLoading,
     error:   trueCostError,
-  } = useTrueCost(selectedTypeId, selectedMarket.id, auth.blueprints, auth.token);
+  } = useTrueCost(selectedTypeId, selectedMarket.id, selectedBlueprintME, selectedBlueprintTE, auth.token);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);

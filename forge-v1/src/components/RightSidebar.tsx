@@ -126,7 +126,14 @@ const RightSidebar: FC<RightSidebarProps> = ({
       const productName = bpName.replace(/ Blueprint$/i, '').toLowerCase();
       const pid = nameToTypeId.get(productName);
       if (pid) {
-        ptbMap.set(pid, bp);
+        // Always prefer BPO (quantity === -1) over any BPC.
+        // Without this guard, the last entry in the ESI array wins —
+        // which is typically the BPC — so the panel showed BPC info
+        // even when the user clicked the BPO card.
+        const isBpo = bp.quantity === -1;
+        if (!ptbMap.has(pid) || isBpo) {
+          ptbMap.set(pid, bp);
+        }
         ownedSet.add(pid);
       }
     });
