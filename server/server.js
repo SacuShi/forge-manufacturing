@@ -3702,10 +3702,28 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
       (skillParams ? `&${skillParams}` : '') +
       (rigParams   ? `&${rigParams}`   : '');
 
-    const eveRefRes  = await fetch(eveRefUrl, { headers: { Accept: 'application/json' } });
+    const eveRefController = new AbortController();
+    const eveRefTimeout    = setTimeout(() => eveRefController.abort(), 15000); // 15 s
+
+    let eveRefRes;
+    try {
+      eveRefRes = await fetch(eveRefUrl, {
+        headers: { Accept: 'application/json' },
+        signal:  eveRefController.signal,
+      });
+    } catch (fetchErr) {
+      clearTimeout(eveRefTimeout);
+      const msg = fetchErr.name === 'AbortError'
+        ? 'EVE Ref API timed out (>15s) — try again or check server connectivity'
+        : `EVE Ref API unreachable: ${fetchErr.message}`;
+      console.error('EVE Ref fetch failed:', msg);
+      return res.status(502).json({ error: msg });
+    }
+    clearTimeout(eveRefTimeout);
+
     if (!eveRefRes.ok) {
       const errText = await eveRefRes.text();
-      console.error(`EVE Ref API error ${eveRefRes.status}:`, errText);
+      console.error(`EVE Ref API error ${eveRefRes.status}:`, errText.slice(0, 200));
       return res.status(502).json({ error: `EVE Ref API unavailable (${eveRefRes.status})` });
     }
 

@@ -91,10 +91,10 @@ export function useTrueCost(
       } catch (e) {
         if (!cancelled) {
           const raw = (e as Error).message;
-          // If the error body is HTML (e.g. Cloudflare 502 page), show a clean message.
+          // If the error body is HTML (e.g. Cloudflare 502 / gateway timeout), show a clean message.
           const isHtml = raw.includes('<!DOCTYPE') || raw.includes('<html');
           setError(isHtml
-            ? 'Manufacturing fee service unavailable — deploy the latest server.js and restart PM2'
+            ? 'EVE Ref API timed out — the manufacturing fee service is slow to respond. Try selecting a different item or wait a moment.'
             : raw
           );
         }
