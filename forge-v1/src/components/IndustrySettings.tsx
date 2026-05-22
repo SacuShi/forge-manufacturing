@@ -226,7 +226,7 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
 
         <div className="modal-body">
           <p className="modal-hint">
-            Configure your manufacturing location and structure. Used to calculate accurate job fees via the EVE Ref API.
+            Configure your manufacturing location and structure. Used to calculate accurate job fees (System Cost Index × EIV + SCC surcharge + facility tax).
           </p>
 
           {/* ── Manufacturing System ─────────────────────────────────────── */}

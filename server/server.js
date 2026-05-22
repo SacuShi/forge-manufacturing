@@ -540,37 +540,80 @@ async function fetchAdjustedPrices() {
   }
 }
 
-// ── ESI manufacturing system cost-index cache ──────────────────────────────────
+// ── ESI manufacturing system cost-index + name cache ──────────────────────────
 // ESI /industry/systems/ returns the manufacturing SCI for every solar system.
 // SCI × EIV = the "System Job Cost Fee" component of a manufacturing job.
+// We also fetch system names (via /universe/names/ bulk lookup) so that
+// /api/system-search can do instant local matching without calling ESI search.
 // Refreshed every hour (CCP updates SCIs roughly every hour).
-const costIndexCache = { data: null, expiry: 0 };
+//
+// costIndexCache.sciMap  : Map<system_id, cost_index>
+// costIndexCache.nameMap : Map<name_lowercase, { system_id, system_name }>
+const costIndexCache = { sciMap: null, nameMap: null, expiry: 0 };
 
 async function fetchCostIndices() {
-  if (costIndexCache.data && Date.now() < costIndexCache.expiry) {
-    return costIndexCache.data;
+  if (costIndexCache.sciMap && Date.now() < costIndexCache.expiry) {
+    return costIndexCache.sciMap;
   }
+
   const ctrl = new AbortController();
   const t    = setTimeout(() => ctrl.abort(), 30000);
+  let systems;
   try {
     const res = await fetch(
       'https://esi.evetech.net/latest/industry/systems/?datasource=tranquility',
       { headers: { Accept: 'application/json' }, signal: ctrl.signal }
     );
     if (!res.ok) throw new Error(`ESI /industry/systems/ HTTP ${res.status}`);
-    const systems = await res.json();
-    const map     = {};
-    for (const sys of systems) {
-      const mfg = sys.cost_indices.find(c => c.activity === 'manufacturing');
-      if (mfg) map[sys.solar_system_id] = mfg.cost_index;
-    }
-    costIndexCache.data   = map;
-    costIndexCache.expiry = Date.now() + 3600000;
-    console.log(`✓ ESI cost indices cached — ${Object.keys(map).length} systems`);
-    return map;
+    systems = await res.json();
   } finally {
     clearTimeout(t);
   }
+
+  // Build SCI map
+  const sciMap = {};
+  const systemIds = [];
+  for (const sys of systems) {
+    const mfg = sys.cost_indices.find(c => c.activity === 'manufacturing');
+    if (mfg) {
+      sciMap[sys.solar_system_id] = mfg.cost_index;
+      systemIds.push(sys.solar_system_id);
+    }
+  }
+
+  // Bulk-fetch system names in parallel batches of 1000 (ESI /universe/names/ limit).
+  // This runs once per hour and gives us a fully local search index.
+  const nameMap  = new Map(); // name_lower → { system_id, system_name }
+  const BATCH    = 1000;
+  const batches  = [];
+  for (let i = 0; i < systemIds.length; i += BATCH) {
+    batches.push(systemIds.slice(i, i + BATCH));
+  }
+  const nameResults = await Promise.all(
+    batches.map(async (batch) => {
+      try {
+        const r = await fetch('https://esi.evetech.net/latest/universe/names/', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body:    JSON.stringify(batch),
+        });
+        return r.ok ? await r.json() : [];
+      } catch { return []; }
+    })
+  );
+  for (const batch of nameResults) {
+    for (const item of batch) {
+      if (item.category === 'solar_system') {
+        nameMap.set(item.name.toLowerCase(), { system_id: item.id, system_name: item.name });
+      }
+    }
+  }
+
+  costIndexCache.sciMap  = sciMap;
+  costIndexCache.nameMap = nameMap;
+  costIndexCache.expiry  = Date.now() + 3600000;
+  console.log(`✓ ESI cost indices + names cached — ${systemIds.length} systems`);
+  return sciMap;
 }
 
 // Maps EVE skill_id → EVE Ref API query param name.
@@ -3666,35 +3709,40 @@ app.post('/api/industry-settings', security.apiLimiter, security.verifyEveToken,
   }
 });
 
-// GET /api/system-search?q=<query> — autocomplete solar system names via ESI
+// GET /api/system-search?q=<query> — autocomplete solar system names (local index)
+// Uses the system name map built by fetchCostIndices() — no ESI search call needed.
+// Prefix matches are ranked first; falls back to substring matches.
+// Returns up to 10 results.
 app.get('/api/system-search', security.apiLimiter, security.verifyEveToken, async (req, res) => {
   try {
-    const q = (req.query.q || '').trim();
+    const q = (req.query.q || '').trim().toLowerCase();
     if (q.length < 2) return res.json([]);
 
-    const searchRes = await fetch(
-      `https://esi.evetech.net/latest/search/?categories=solar_system` +
-      `&search=${encodeURIComponent(q)}&strict=false&datasource=tranquility`
-    );
-    if (!searchRes.ok) return res.json([]);
+    // Warm the cache if needed (also triggers name lookup on first call)
+    await fetchCostIndices();
 
-    const data = await searchRes.json();
-    const ids = (data.solar_system || []).slice(0, 10);
-    if (!ids.length) return res.json([]);
+    const nameMap = costIndexCache.nameMap;
+    if (!nameMap || nameMap.size === 0) return res.json([]);
 
-    const namesRes = await fetch('https://esi.evetech.net/latest/universe/names/', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(ids),
-    });
-    if (!namesRes.ok) return res.json([]);
+    const prefix    = [];
+    const substring = [];
 
-    const names = await namesRes.json();
-    res.json(
-      names
-        .filter(n => n.category === 'solar_system')
-        .map(n => ({ system_id: n.id, system_name: n.name }))
-    );
+    for (const [nameLower, info] of nameMap) {
+      if (nameLower.startsWith(q)) {
+        prefix.push(info);
+      } else if (nameLower.includes(q)) {
+        substring.push(info);
+      }
+      // Early exit once we have enough results
+      if (prefix.length >= 10) break;
+    }
+
+    // Prefix matches first (sorted alphabetically), then substring matches
+    prefix.sort((a, b) => a.system_name.localeCompare(b.system_name));
+    substring.sort((a, b) => a.system_name.localeCompare(b.system_name));
+
+    const results = [...prefix, ...substring].slice(0, 10);
+    res.json(results);
   } catch (err) {
     console.error('System search error:', err.message);
     res.json([]);
