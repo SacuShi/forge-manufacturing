@@ -4178,7 +4178,7 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
 
       // Context
       region_id:        regionId,
-      prices_warm:      pricesWarm && jitaWarm,
+      prices_warm:      pricesWarm,   // true only when both sell and source hub caches are live
       setup_configured: !!(settings?.system_id),
       manufacturing_setup: {
         system_id:          settings?.system_id         || null,
