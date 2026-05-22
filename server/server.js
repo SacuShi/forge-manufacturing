@@ -224,6 +224,19 @@ async function runMigrations() {
     console.log('✓ precomputed_profits migrated to multi-region schema');
   }
 
+  // v1.2.0 migration: Industry settings per character
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS character_industry_settings (
+      character_id           INTEGER PRIMARY KEY,
+      system_id              INTEGER DEFAULT NULL,
+      system_name            TEXT    DEFAULT NULL,
+      structure_type_id      INTEGER DEFAULT NULL,   -- NULL = NPC station
+      rig_ids                TEXT    DEFAULT '[]',   -- JSON array of rig type_ids
+      facility_tax           REAL    DEFAULT 0.0,    -- 0.0–1.0 decimal (not %)
+      updated_at             TEXT    NOT NULL DEFAULT ''
+    )
+  `);
+
   console.log('✓ Database migrations complete');
 }
 
@@ -479,6 +492,65 @@ const REGION_HUB_NAMES = {
   10000042: 'Hek',
   10000030: 'Rens',
   10000041: 'Syndicate',
+};
+
+// NPC corp + faction standings that affect broker fees at each trade hub.
+// Used by /api/true-cost to calculate the character-specific broker fee rate.
+// corp_id  = NPC corporation that owns the station
+// faction_id = NPC faction associated with that hub's space
+const HUB_STANDINGS = {
+  10000002: { corp_id: 1000035, faction_id: 500001 }, // Jita — Caldari Navy / Caldari State
+  10000043: { corp_id: 1000082, faction_id: 500003 }, // Amarr — Imperial Navy / Amarr Empire
+  10000032: { corp_id: 1000049, faction_id: 500004 }, // Dodixie — Federation Navy / Gallente Federation
+  10000042: { corp_id: 1000070, faction_id: 500002 }, // Hek — Brutor Tribe / Minmatar Republic
+  10000030: { corp_id: 1000006, faction_id: 500002 }, // Rens — Brutor Tribe / Minmatar Republic
+  10000041: { corp_id: 1000462, faction_id: 500010 }, // Syndicate — Intaki Syndicate (null-sec, no faction bonus)
+};
+
+// Maps EVE skill_id → EVE Ref API query param name.
+// Used to build the skill params for /api/true-cost → EVE Ref /v1/industry/cost.
+// Skills NOT in this map (Accounting=16622, Broker Relations=3446) are calculated locally.
+const SKILL_PARAM_MAP = {
+  3380:  'industry',
+  3388:  'advanced_industry',
+  3397:  'amarr_starship_engineering',
+  3396:  'caldari_starship_engineering',
+  3395:  'gallente_starship_engineering',
+  3394:  'minmatar_starship_engineering',
+  11452: 'electromagnetic_physics',
+  11453: 'electronic_engineering',
+  11454: 'graviton_physics',
+  11455: 'high_energy_physics',
+  11441: 'hydromagnetic_physics',
+  11443: 'laser_physics',
+  11442: 'mechanical_engineering',
+  11444: 'molecular_engineering',
+  11529: 'nanite_engineering',
+  11446: 'nuclear_physics',
+  11445: 'plasma_physics',
+  11448: 'quantum_physics',
+  11450: 'rocket_science',
+  20424: 'sleeper_technology',
+  28164: 'takmahl_technology',
+  3392:  'jury_rigging',
+  26224: 'capital_ship_construction',
+  3400:  'capital_components',
+  21790: 'drug_manufacturing',
+  3398:  'ammunition_manufacturing',
+  3399:  'drones',
+  3393:  'mechanics',
+  11395: 'frigate_construction',
+  11396: 'destroyer_construction',
+  11397: 'cruiser_construction',
+  11398: 'battlecruiser_construction',
+  11399: 'battleship_construction',
+  3401:  'outpost_construction',
+  11085: 'core_subsystem_technology',
+  11086: 'defensive_subsystem_technology',
+  11087: 'offensive_subsystem_technology',
+  11088: 'propulsion_subsystem_technology',
+  52307: 'triglavian_quantum_engineering',
+  53280: 'mutagenic_stabilization',
 };
 
 /**
@@ -2266,7 +2338,7 @@ app.post('/api/session-data',
   async (req, res) => {
     try {
       const characterId = req.characterId;
-      const { assets, blueprints, prices, wallet, jobs, skills } = req.body;
+      const { assets, blueprints, prices, wallet, jobs, skills, standings } = req.body;
 
       // Validate data exists
       if (!assets || !blueprints) {
@@ -2309,6 +2381,7 @@ app.post('/api/session-data',
         wallet: wallet || 0,
         jobs: jobs || [],
         skills: skills || [],
+        standings: standings || { factions: {}, corps: {} },
         accessibleStructures: Array.from(structureIds),
         cachedAt: new Date().toISOString()
       }, 7200000); // 2 hours
@@ -3468,6 +3541,287 @@ app.get('/health', async (req, res) => {
       items: jitaPricesCache ? Object.keys(jitaPricesCache).length : 0
     }
   });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v1.2.0 — INDUSTRY SETTINGS ENDPOINTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+// GET /api/industry-settings — fetch saved settings for the authed character
+app.get('/api/industry-settings', security.apiLimiter, security.verifyEveToken, async (req, res) => {
+  try {
+    const characterId = req.characterId;
+    const settings = await dbGet(
+      'SELECT * FROM character_industry_settings WHERE character_id = ?',
+      [characterId]
+    );
+    res.json(settings || {
+      system_id: null, system_name: null,
+      structure_type_id: null, rig_ids: '[]', facility_tax: 0,
+    });
+  } catch (err) {
+    console.error('Industry settings GET error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/industry-settings — save settings for the authed character
+app.post('/api/industry-settings', security.apiLimiter, security.verifyEveToken, async (req, res) => {
+  try {
+    const characterId = req.characterId;
+    const { system_id, system_name, structure_type_id, rig_ids, facility_tax } = req.body;
+
+    // Validate: facility_tax must be 0–100
+    const tax = Math.min(100, Math.max(0, parseFloat(facility_tax) || 0));
+
+    await dbRun(`
+      INSERT INTO character_industry_settings
+        (character_id, system_id, system_name, structure_type_id, rig_ids, facility_tax, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(character_id) DO UPDATE SET
+        system_id          = excluded.system_id,
+        system_name        = excluded.system_name,
+        structure_type_id  = excluded.structure_type_id,
+        rig_ids            = excluded.rig_ids,
+        facility_tax       = excluded.facility_tax,
+        updated_at         = excluded.updated_at
+    `, [
+      characterId, system_id || null, system_name || null,
+      structure_type_id || null,
+      JSON.stringify(Array.isArray(rig_ids) ? rig_ids : []),
+      tax,
+      new Date().toISOString(),
+    ]);
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Industry settings POST error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/system-search?q=<query> — autocomplete solar system names via ESI
+app.get('/api/system-search', security.apiLimiter, security.verifyEveToken, async (req, res) => {
+  try {
+    const q = (req.query.q || '').trim();
+    if (q.length < 2) return res.json([]);
+
+    const searchRes = await fetch(
+      `https://esi.evetech.net/latest/search/?categories=solar_system` +
+      `&search=${encodeURIComponent(q)}&strict=false&datasource=tranquility`
+    );
+    if (!searchRes.ok) return res.json([]);
+
+    const data = await searchRes.json();
+    const ids = (data.solar_system || []).slice(0, 10);
+    if (!ids.length) return res.json([]);
+
+    const namesRes = await fetch('https://esi.evetech.net/latest/universe/names/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(ids),
+    });
+    if (!namesRes.ok) return res.json([]);
+
+    const names = await namesRes.json();
+    res.json(
+      names
+        .filter(n => n.category === 'solar_system')
+        .map(n => ({ system_id: n.id, system_name: n.name }))
+    );
+  } catch (err) {
+    console.error('System search error:', err.message);
+    res.json([]);
+  }
+});
+
+// POST /api/true-cost — calculate full True Profit for an item with all fees
+// Body: { product_id, me, te, runs, regionId }
+// Reads character skills + standings from session cache.
+// Reads industry settings from DB.
+// Calls EVE Ref API for manufacturing job fee breakdown.
+// Calculates broker fee + transaction tax from character skills + standings.
+app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (req, res) => {
+  try {
+    const { product_id, me = 0, te = 0, runs = 1, regionId = 10000002 } = req.body;
+    const characterId = req.characterId;
+
+    if (!product_id) return res.status(400).json({ error: 'product_id required' });
+
+    // ── Load session data (skills + standings) ─────────────────────────────
+    const sessionKey = `session:${characterId}`;
+    const session    = getCached(sessionKey);
+    const skillsArr  = session?.skills || [];
+    const standings  = session?.standings || { factions: {}, corps: {} };
+
+    // Convert skills array → map for fast lookup: { skill_id: level }
+    const skillMap = {};
+    skillsArr.forEach(s => { skillMap[s.skill_id] = s.active_skill_level || 0; });
+
+    // ── Load industry settings from DB ─────────────────────────────────────
+    const settings = await dbGet(
+      'SELECT * FROM character_industry_settings WHERE character_id = ?',
+      [characterId]
+    );
+
+    // ── EVE Ref API call ───────────────────────────────────────────────────
+    const rigIds = JSON.parse(settings?.rig_ids || '[]');
+
+    const skillParams = Object.entries(SKILL_PARAM_MAP)
+      .filter(([id]) => skillMap[id] !== undefined)
+      .map(([id, name]) => `${name}=${skillMap[id]}`)
+      .join('&');
+
+    const rigParams = rigIds.map(id => `rig_id=${id}`).join('&');
+
+    const baseParams = new URLSearchParams({
+      product_id: String(product_id),
+      runs:       String(runs),
+      me:         String(me),
+      te:         String(te),
+    });
+
+    // Use saved system if available, otherwise fallback to Jita system
+    if (settings?.system_id) {
+      baseParams.set('system_id', String(settings.system_id));
+    } else {
+      baseParams.set('system_id', '30000142'); // Jita IV system — consistent default
+    }
+
+    if (settings?.structure_type_id) {
+      baseParams.set('structure_type_id', String(settings.structure_type_id));
+    }
+
+    // facility_tax is stored as a percentage (0–100); EVE Ref expects a decimal (0.0–1.0)
+    const facilityTaxDecimal = (settings?.facility_tax || 0) / 100;
+    baseParams.set('facility_tax', String(facilityTaxDecimal));
+
+    const eveRefUrl = `https://api.everef.net/v1/industry/cost?${baseParams}` +
+      (skillParams ? `&${skillParams}` : '') +
+      (rigParams   ? `&${rigParams}`   : '');
+
+    const eveRefRes  = await fetch(eveRefUrl, { headers: { Accept: 'application/json' } });
+    if (!eveRefRes.ok) {
+      const errText = await eveRefRes.text();
+      console.error(`EVE Ref API error ${eveRefRes.status}:`, errText);
+      return res.status(502).json({ error: `EVE Ref API unavailable (${eveRefRes.status})` });
+    }
+
+    const eveRefData = await eveRefRes.json();
+    const mfg = eveRefData.manufacturing?.[String(product_id)];
+    if (!mfg) {
+      return res.status(404).json({ error: 'No manufacturing data returned by EVE Ref for this product' });
+    }
+
+    // ── Sales fee calculation ──────────────────────────────────────────────
+    // Ensure the region's prices are in cache (fetch if needed)
+    let regionEntry = regionPriceCache.get(regionId);
+    if (!regionEntry || Date.now() >= regionEntry.expiry) {
+      const prices = await fetchRegionPrices(regionId);
+      regionPriceCache.set(regionId, { prices, expiry: Date.now() + 3600000 });
+      regionEntry = regionPriceCache.get(regionId);
+    }
+
+    const priceData  = regionEntry?.prices?.[product_id];
+    const unitSell   = priceData?.sell || 0;
+    const units      = mfg.units || 1;
+    const sellPrice  = unitSell * units;  // total revenue for all units in one run
+
+    const hub = HUB_STANDINGS[regionId];
+
+    // Broker Relations (skill 3446) and Accounting (skill 16622) are NOT passed
+    // to EVE Ref — they affect sell-order costs, not manufacturing costs.
+    const brokerRelations = skillMap[3446]  || 0;
+    const accounting      = skillMap[16622] || 0;
+
+    const factionStanding = standings.factions[hub?.faction_id] || 0;
+    const corpStanding    = standings.corps[hub?.corp_id]       || 0;
+
+    // Broker fee: max(1%, 3% − 0.3%×BR − 0.03%×max(0,faction) − 0.02%×max(0,corp))
+    const brokerFeeRate = Math.max(0.01,
+      0.03
+      - (0.003  * brokerRelations)
+      - (0.0003 * Math.max(0, factionStanding))
+      - (0.0002 * Math.max(0, corpStanding))
+    );
+
+    // Transaction tax: max(0%, 7.5% × (1 − 11%×Accounting))
+    const transactionTaxRate = Math.max(0, 0.075 * (1 - 0.11 * accounting));
+
+    const brokerFee      = sellPrice * brokerFeeRate;
+    const transactionTax = sellPrice * transactionTaxRate;
+    const totalSalesTax  = brokerFee + transactionTax;
+
+    // ── True profit ────────────────────────────────────────────────────────
+    const totalJobCost      = mfg.total_job_cost || 0;
+    const totalMaterialCost = mfg.total_material_cost || 0;
+
+    const trueProfit = sellPrice - brokerFee - transactionTax - totalMaterialCost - totalJobCost;
+    const trueMargin = sellPrice > 0 ? (trueProfit / sellPrice) * 100 : 0;
+
+    // Structure label for tooltip display
+    const STRUCTURE_LABELS = {
+      35825: 'Raitaru',
+      35826: 'Azbel',
+      35827: 'Sotiyo',
+    };
+    const structureLabel = settings?.structure_type_id
+      ? (STRUCTURE_LABELS[settings.structure_type_id] || 'Engineering Complex')
+      : 'NPC Station';
+
+    res.json({
+      product_id,
+      runs,
+      sell_price: sellPrice,
+
+      // Box 1 — materials
+      total_material_cost: totalMaterialCost,
+
+      // Box 2 — manufacturing fees (full breakdown for tooltip)
+      mfg_fees: {
+        total:                totalJobCost,
+        system_cost_index:    mfg.system_cost_index    || 0,
+        system_cost_bonuses:  mfg.system_cost_bonuses  || 0,
+        facility_tax:         mfg.facility_tax          || 0,
+        scc_surcharge:        mfg.scc_surcharge         || 0,
+        alpha_clone_tax:      mfg.alpha_clone_tax       || 0,
+        estimated_item_value: mfg.estimated_item_value  || 0,
+      },
+
+      // Box 3 — sales tax (full breakdown for tooltip)
+      sales_tax: {
+        total:                    totalSalesTax,
+        broker_fee:               brokerFee,
+        broker_fee_rate:          brokerFeeRate,
+        broker_relations_level:   brokerRelations,
+        faction_standing:         factionStanding,
+        corp_standing:            corpStanding,
+        transaction_tax:          transactionTax,
+        transaction_tax_rate:     transactionTaxRate,
+        accounting_level:         accounting,
+      },
+
+      // Box 4 — true profit
+      true_profit: trueProfit,
+      true_margin: trueMargin,
+
+      // Context
+      region_id:         regionId,
+      setup_configured:  !!(settings?.system_id),
+      manufacturing_setup: {
+        system_id:          settings?.system_id         || null,
+        system_name:        settings?.system_name       || 'Not configured',
+        structure_type_id:  settings?.structure_type_id || null,
+        structure_label:    structureLabel,
+        rig_ids:            rigIds,
+        facility_tax_pct:   settings?.facility_tax      || 0,
+      },
+    });
+
+  } catch (err) {
+    console.error('True cost error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // START SERVER

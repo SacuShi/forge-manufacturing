@@ -8,22 +8,25 @@ import type {
   TopProfitableResponse,
   AiChatResponse,
   Market,
+  IndustrySettings,
 } from './types';
 import { MARKETS } from './components/MarketSelector';
 import { useAuth }       from './hooks/useAuth';
 import { useItemDetail } from './hooks/useItemDetail';
 import { useItemNames }  from './hooks/useItemNames';
+import { useTrueCost }   from './hooks/useTrueCost';
 import { apiGet, apiPost } from './api/client';
 import { formatBuildTime }  from './utils/format';
 import { QUICK_PROMPTS }    from './data/mockData';
 
-import Header        from './components/Header';
-import LeftSidebar   from './components/LeftSidebar';
-import MainContent   from './components/MainContent';
-import RightSidebar  from './components/RightSidebar';
-import ChatPanel     from './components/ChatPanel';
-import LoginScreen   from './components/LoginScreen';
-import LoadingScreen from './components/LoadingScreen';
+import Header                from './components/Header';
+import LeftSidebar           from './components/LeftSidebar';
+import MainContent           from './components/MainContent';
+import RightSidebar          from './components/RightSidebar';
+import ChatPanel             from './components/ChatPanel';
+import LoginScreen           from './components/LoginScreen';
+import LoadingScreen         from './components/LoadingScreen';
+import IndustrySettingsModal from './components/IndustrySettings';
 
 function mapToMarketItems(
   results: TopProfitableResponse['results'],
@@ -98,14 +101,18 @@ const App: FC = () => {
   // Navigation stack — allows ← Back through chain drill-downs
   const [panelHistory, setPanelHistory] = useState<Array<{ typeId: number; name: string }>>([]);
 
-  const [sessionExpired, setSessionExpired] = useState(false);
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-  const [rawResults, setRawResults] = useState<TopProfitableResponse['results']>([]);
-  const [marketLoading, setMarketLoading] = useState(false);
+  const [sessionExpired,    setSessionExpired]    = useState(false);
+  const [chatMessages,      setChatMessages]      = useState<ChatMessage[]>([]);
+  const [rawResults,        setRawResults]        = useState<TopProfitableResponse['results']>([]);
+  const [marketLoading,     setMarketLoading]     = useState(false);
   const [marketLoadingMore, setMarketLoadingMore] = useState(false);
-  const [marketHasMore, setMarketHasMore] = useState(true);
-  const [marketError, setMarketError] = useState<string | null>(null);
-  const [selectedMarket, setSelectedMarket] = useState<Market>(MARKETS[0]);
+  const [marketHasMore,     setMarketHasMore]     = useState(true);
+  const [marketError,       setMarketError]       = useState<string | null>(null);
+  const [selectedMarket,    setSelectedMarket]    = useState<Market>(MARKETS[0]);
+
+  // v1.2.0 — Industry settings + settings modal
+  const [industrySettings, setIndustrySettings] = useState<IndustrySettings | null>(null);
+  const [settingsOpen,     setSettingsOpen]     = useState(false);
 
   // Derive marketItems from rawResults — all prices come from the precomputed table
   // which is now run per-region, so no client-side overlay needed.
@@ -119,6 +126,13 @@ const App: FC = () => {
     loading: detailLoading,
     error: detailError,
   } = useItemDetail(selectedTypeId, auth.assets, auth.blueprints, auth.token, selectedMarket.id);
+
+  // v1.2.0 — True Profit calculation (EVE Ref API via /api/true-cost)
+  const {
+    data:    trueCostData,
+    loading: trueCostLoading,
+    error:   trueCostError,
+  } = useTrueCost(selectedTypeId, selectedMarket.id, auth.blueprints, auth.token);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -135,6 +149,15 @@ const App: FC = () => {
   // Reset expiry flag once the user successfully logs in again
   useEffect(() => {
     if (auth.status === 'authed') setSessionExpired(false);
+  }, [auth.status]);
+
+  // v1.2.0 — Load saved industry settings on login
+  useEffect(() => {
+    if (auth.status !== 'authed' || !auth.token) return;
+    apiGet<IndustrySettings>('/api/industry-settings', auth.token)
+      .then(setIndustrySettings)
+      .catch(() => { /* non-fatal — settings remain null */ });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth.status]);
 
   useEffect(() => {
@@ -430,7 +453,20 @@ const App: FC = () => {
         onThemeToggle={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
         onLogout={auth.logout}
         onMarketChange={handleMarketChange}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
+
+      {/* Re-auth banner: shown if standings scope not yet granted */}
+      {!auth.hasStandingsScope && (
+        <div className="reauth-banner" role="alert">
+          FORGE needs one additional permission for accurate broker fees.
+          Please{' '}
+          <button type="button" onClick={auth.logout}>
+            log out and back in
+          </button>
+          {' '}to grant it. (Broker fee will use skill levels only until then.)
+        </div>
+      )}
 
       <div
         className="app-body"
@@ -498,7 +534,11 @@ const App: FC = () => {
           blueprints={auth.blueprints}
           itemNames={itemNames}
           selectedMarket={selectedMarket}
+          trueCostData={trueCostData}
+          trueCostLoading={trueCostLoading}
+          trueCostError={trueCostError}
           onClose={handleCloseDetail}
+          onOpenSettings={() => setSettingsOpen(true)}
           onSelectItem={handleSelectItem}
           onBack={handlePanelBack}
           canGoBack={panelHistory.length > 0}
@@ -514,6 +554,18 @@ const App: FC = () => {
           onClearHistory={handleClearHistory}
         />
       </div>
+
+      {/* v1.2.0 — Manufacturing Setup modal */}
+      <IndustrySettingsModal
+        open={settingsOpen}
+        token={auth.token}
+        initial={industrySettings}
+        onClose={() => setSettingsOpen(false)}
+        onSaved={(settings) => {
+          setIndustrySettings(settings);
+          setSettingsOpen(false);
+        }}
+      />
     </div>
   );
 };

@@ -31,6 +31,7 @@ interface HeaderProps {
   onThemeToggle: () => void;
   onLogout: () => void;
   onMarketChange: (market: Market) => void;
+  onOpenSettings: () => void;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -50,6 +51,7 @@ const Header: FC<HeaderProps> = ({
   onThemeToggle,
   onLogout,
   onMarketChange,
+  onOpenSettings,
 }) => {
   const portraitUrl = `${PORTRAIT_BASE}/${character.characterId}/portrait?size=32`;
 
@@ -121,6 +123,17 @@ const Header: FC<HeaderProps> = ({
           onMarketChange={onMarketChange}
           loading={regionLoading}
         />
+
+        {/* Manufacturing setup — opens IndustrySettings modal */}
+        <button
+          type="button"
+          className="settings-btn"
+          onClick={onOpenSettings}
+          title="Manufacturing Setup — configure system, structure, rigs and facility tax for True Profit"
+          aria-label="Open manufacturing setup"
+        >
+          ⚙
+        </button>
 
         {/* Theme toggle */}
         <button
