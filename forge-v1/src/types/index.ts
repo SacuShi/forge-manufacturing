@@ -313,5 +313,6 @@ export interface TrueCostResponse {
     structure_label:   string;
     rig_ids:           number[];
     facility_tax_pct:  number;
+    sci_raw:           number;   // raw system cost index (0–1) for display
   };
 }

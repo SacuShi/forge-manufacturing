@@ -129,10 +129,10 @@ const Header: FC<HeaderProps> = ({
           type="button"
           className="settings-btn"
           onClick={onOpenSettings}
-          title="Manufacturing Setup — configure system, structure, rigs and facility tax for True Profit"
+          title="Configure your manufacturing system, structure type, rigs and facility tax for accurate True Profit"
           aria-label="Open manufacturing setup"
         >
-          ⚙
+          ⚙ Mfg Setup
         </button>
 
         {/* Theme toggle */}

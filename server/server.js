@@ -507,9 +507,75 @@ const HUB_STANDINGS = {
   10000041: { corp_id: 1000462, faction_id: 500010 }, // Syndicate — Intaki Syndicate (null-sec, no faction bonus)
 };
 
+// ── ESI adjusted-price cache ───────────────────────────────────────────────────
+// ESI /markets/prices/ returns CCP's adjusted_price for every type_id.
+// Used to compute Estimated Item Value (EIV) for manufacturing job fees.
+// EIV = Σ(adjusted_price × ME-adjusted quantity) — does NOT use market prices.
+// Refreshed every 6 hours (ESI updates once daily; we just stay fresh).
+const adjustedPriceCache = { data: null, expiry: 0 };
+
+async function fetchAdjustedPrices() {
+  if (adjustedPriceCache.data && Date.now() < adjustedPriceCache.expiry) {
+    return adjustedPriceCache.data;
+  }
+  const ctrl = new AbortController();
+  const t    = setTimeout(() => ctrl.abort(), 30000);
+  try {
+    const res = await fetch(
+      'https://esi.evetech.net/latest/markets/prices/?datasource=tranquility',
+      { headers: { Accept: 'application/json' }, signal: ctrl.signal }
+    );
+    if (!res.ok) throw new Error(`ESI /markets/prices/ HTTP ${res.status}`);
+    const items = await res.json();
+    const map   = {};
+    for (const item of items) {
+      map[item.type_id] = item.adjusted_price ?? item.average_price ?? 0;
+    }
+    adjustedPriceCache.data   = map;
+    adjustedPriceCache.expiry = Date.now() + 6 * 3600000;
+    console.log(`✓ ESI adjusted prices cached — ${Object.keys(map).length} types`);
+    return map;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+// ── ESI manufacturing system cost-index cache ──────────────────────────────────
+// ESI /industry/systems/ returns the manufacturing SCI for every solar system.
+// SCI × EIV = the "System Job Cost Fee" component of a manufacturing job.
+// Refreshed every hour (CCP updates SCIs roughly every hour).
+const costIndexCache = { data: null, expiry: 0 };
+
+async function fetchCostIndices() {
+  if (costIndexCache.data && Date.now() < costIndexCache.expiry) {
+    return costIndexCache.data;
+  }
+  const ctrl = new AbortController();
+  const t    = setTimeout(() => ctrl.abort(), 30000);
+  try {
+    const res = await fetch(
+      'https://esi.evetech.net/latest/industry/systems/?datasource=tranquility',
+      { headers: { Accept: 'application/json' }, signal: ctrl.signal }
+    );
+    if (!res.ok) throw new Error(`ESI /industry/systems/ HTTP ${res.status}`);
+    const systems = await res.json();
+    const map     = {};
+    for (const sys of systems) {
+      const mfg = sys.cost_indices.find(c => c.activity === 'manufacturing');
+      if (mfg) map[sys.solar_system_id] = mfg.cost_index;
+    }
+    costIndexCache.data   = map;
+    costIndexCache.expiry = Date.now() + 3600000;
+    console.log(`✓ ESI cost indices cached — ${Object.keys(map).length} systems`);
+    return map;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 // Maps EVE skill_id → EVE Ref API query param name.
-// Used to build the skill params for /api/true-cost → EVE Ref /v1/industry/cost.
-// Skills NOT in this map (Accounting=16622, Broker Relations=3446) are calculated locally.
+// Kept for reference — skills affect manufacturing TIME, not job COST.
+// Broker Relations (3446) and Accounting (16622) DO affect sales fees (calculated locally).
 const SKILL_PARAM_MAP = {
   3380:  'industry',
   3388:  'advanced_industry',
@@ -3637,10 +3703,20 @@ app.get('/api/system-search', security.apiLimiter, security.verifyEveToken, asyn
 
 // POST /api/true-cost — calculate full True Profit for an item with all fees
 // Body: { product_id, me, te, runs, regionId }
-// Reads character skills + standings from session cache.
-// Reads industry settings from DB.
-// Calls EVE Ref API for manufacturing job fee breakdown.
-// Calculates broker fee + transaction tax from character skills + standings.
+//
+// Calculation is fully local — no external API calls during the request:
+//   • Material quantities  → blueprint_materials table (already in DB)
+//   • Adjusted prices      → ESI /markets/prices/ (cached 6 h, warmed on first use)
+//   • System Cost Index    → ESI /industry/systems/ (cached 1 h, warmed on first use)
+//   • Sell price           → regionPriceCache (populated by precompute job)
+//   • Sales fees           → character skills + standings (session cache)
+//
+// Job cost formula (EVE manufacturing):
+//   EIV             = Σ(adjusted_price[mat] × ME-adjusted qty) × runs
+//   System Job Cost = EIV × SCI
+//   SCC Surcharge   = EIV × 2%     (reduced from 4% in the Legion update)
+//   Facility Tax    = EIV × facility_tax_rate
+//   Total Job Cost  = System Job Cost + SCC Surcharge + Facility Tax
 app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (req, res) => {
   try {
     const { product_id, me = 0, te = 0, runs = 1, regionId = 10000002 } = req.body;
@@ -3648,113 +3724,84 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
 
     if (!product_id) return res.status(400).json({ error: 'product_id required' });
 
-    // ── Load session data (skills + standings) ─────────────────────────────
-    const sessionKey = `session:${characterId}`;
-    const session    = getCached(sessionKey);
-    const skillsArr  = session?.skills || [];
-    const standings  = session?.standings || { factions: {}, corps: {} };
+    // ── Session: skills + standings ────────────────────────────────────────
+    const session   = getCached(`session:${characterId}`);
+    const skillsArr = session?.skills   || [];
+    const standings = session?.standings || { factions: {}, corps: {} };
 
-    // Convert skills array → map for fast lookup: { skill_id: level }
-    // Use numeric keys to match SKILL_PARAM_MAP's numeric key lookups.
     const skillMap = {};
     skillsArr.forEach(s => { skillMap[Number(s.skill_id)] = s.active_skill_level || 0; });
 
-    // ── Load industry settings from DB ─────────────────────────────────────
+    // ── Industry settings (system, structure, rigs, facility tax) ──────────
     const settings = await dbGet(
       'SELECT * FROM character_industry_settings WHERE character_id = ?',
       [characterId]
     );
-
-    // ── EVE Ref API call ───────────────────────────────────────────────────
-    const rigIds = JSON.parse(settings?.rig_ids || '[]');
-
-    // SKILL_PARAM_MAP keys are numeric (e.g. 3380); skillMap keys are also numeric.
-    const skillParams = Object.entries(SKILL_PARAM_MAP)
-      .filter(([id]) => skillMap[Number(id)] !== undefined)
-      .map(([id, name]) => `${name}=${skillMap[Number(id)]}`)
-      .join('&');
-
-    const rigParams = rigIds.map(id => `rig_id=${id}`).join('&');
-
-    const baseParams = new URLSearchParams({
-      product_id: String(product_id),
-      runs:       String(runs),
-      me:         String(me),
-      te:         String(te),
-    });
-
-    // Use saved system if available, otherwise fallback to Jita system
-    if (settings?.system_id) {
-      baseParams.set('system_id', String(settings.system_id));
-    } else {
-      baseParams.set('system_id', '30000142'); // Jita IV system — consistent default
-    }
-
-    if (settings?.structure_type_id) {
-      baseParams.set('structure_type_id', String(settings.structure_type_id));
-    }
-
-    // facility_tax is stored as a percentage (0–100); EVE Ref expects a decimal (0.0–1.0)
+    const rigIds            = JSON.parse(settings?.rig_ids || '[]');
     const facilityTaxDecimal = (settings?.facility_tax || 0) / 100;
-    baseParams.set('facility_tax', String(facilityTaxDecimal));
+    const targetSystemId     = settings?.system_id || 30000142; // default: Jita IV
 
-    const eveRefUrl = `https://api.everef.net/v1/industry/cost?${baseParams}` +
-      (skillParams ? `&${skillParams}` : '') +
-      (rigParams   ? `&${rigParams}`   : '');
-
-    const eveRefController = new AbortController();
-    const eveRefTimeout    = setTimeout(() => eveRefController.abort(), 15000); // 15 s
-
-    let eveRefRes;
-    try {
-      eveRefRes = await fetch(eveRefUrl, {
-        headers: { Accept: 'application/json' },
-        signal:  eveRefController.signal,
-      });
-    } catch (fetchErr) {
-      clearTimeout(eveRefTimeout);
-      const msg = fetchErr.name === 'AbortError'
-        ? 'EVE Ref API timed out (>15s) — try again or check server connectivity'
-        : `EVE Ref API unreachable: ${fetchErr.message}`;
-      console.error('EVE Ref fetch failed:', msg);
-      return res.status(502).json({ error: msg });
+    // ── Blueprint materials from DB ────────────────────────────────────────
+    const blueprint = await dbGet(
+      'SELECT blueprint_id, product_quantity FROM blueprints WHERE product_id = ?',
+      [product_id]
+    );
+    if (!blueprint) {
+      return res.status(404).json({ error: `No blueprint found for product ${product_id}` });
     }
-    clearTimeout(eveRefTimeout);
+    const materials = await dbAll(
+      'SELECT material_id, quantity FROM blueprint_materials WHERE blueprint_id = ?',
+      [blueprint.blueprint_id]
+    );
 
-    if (!eveRefRes.ok) {
-      const errText = await eveRefRes.text();
-      console.error(`EVE Ref API error ${eveRefRes.status}:`, errText.slice(0, 200));
-      return res.status(502).json({ error: `EVE Ref API unavailable (${eveRefRes.status})` });
-    }
+    // ── Adjusted prices + cost indices (ESI, cached) ──────────────────────
+    // These calls return instantly when cache is warm; first call ~2–5 s each.
+    const [adjustedPrices, costIndices] = await Promise.all([
+      fetchAdjustedPrices(),
+      fetchCostIndices(),
+    ]);
 
-    const eveRefData = await eveRefRes.json();
-    const mfg = eveRefData.manufacturing?.[String(product_id)];
-    if (!mfg) {
-      return res.status(404).json({ error: 'No manufacturing data returned by EVE Ref for this product' });
+    // ── EIV (Estimated Item Value for job-fee calculation) ─────────────────
+    // ME reduces required quantity per material.
+    // Each material quantity is rounded UP (ceil), min 1.
+    const meFactor = Math.max(0, 1 - me / 100);
+    let eiv = 0;
+    for (const mat of materials) {
+      const adjPrice = adjustedPrices[mat.material_id] || 0;
+      const adjQty   = Math.max(1, Math.ceil(mat.quantity * meFactor)) * runs;
+      eiv += adjPrice * adjQty;
     }
 
-    // ── Sales fee calculation ──────────────────────────────────────────────
-    // Use only already-cached prices — never trigger a live fetch here.
-    // fetchRegionPrices takes 30–60s for busy regions (Jita). Calling it
-    // inline would push the request past Cloudflare's ~30s timeout → 502.
-    // The precompute job populates the cache within a few minutes of startup;
-    // once warm the cache stays valid for 1 h.  If the cache is still cold,
-    // we return sell_price = 0 and flag it so the UI can explain the gap.
-    const regionEntry = regionPriceCache.get(regionId);
-    const pricesWarm  = !!(regionEntry && Date.now() < regionEntry.expiry);
+    // ── Manufacturing job cost ─────────────────────────────────────────────
+    const sci            = costIndices[targetSystemId] || 0;
+    const systemJobCost  = eiv * sci;
+    const sccSurcharge   = eiv * 0.02;         // 2% SCC surcharge (Legion update)
+    const facilityTaxCost = eiv * facilityTaxDecimal;
+    const totalJobCost   = systemJobCost + sccSurcharge + facilityTaxCost;
 
-    const priceData  = pricesWarm ? regionEntry.prices[product_id] : null;
-    const unitSell   = priceData?.sell || 0;
-    const units      = mfg.units || 1;
-    const sellPrice  = unitSell * units;  // total revenue for all units in one run
+    // ── Material cost (market sell prices, Jita-sourced) ──────────────────
+    // Use region price cache. Jita is the sourcing market for materials regardless
+    // of where the player sells, so we always use region 10000002 for mat costs.
+    const jitaEntry  = regionPriceCache.get(10000002);
+    const jitaWarm   = !!(jitaEntry && Date.now() < jitaEntry.expiry);
+    let totalMaterialCost = 0;
+    for (const mat of materials) {
+      const matPrice = jitaWarm ? (jitaEntry.prices[mat.material_id]?.sell || 0) : 0;
+      const adjQty   = Math.max(1, Math.ceil(mat.quantity * meFactor)) * runs;
+      totalMaterialCost += matPrice * adjQty;
+    }
 
-    const hub = HUB_STANDINGS[regionId];
+    // ── Sell price (selected region) ───────────────────────────────────────
+    const regionEntry  = regionPriceCache.get(regionId);
+    const pricesWarm   = !!(regionEntry && Date.now() < regionEntry.expiry);
+    const unitSell     = pricesWarm ? (regionEntry.prices[product_id]?.sell || 0) : 0;
+    const productUnits = (blueprint.product_quantity || 1) * runs;
+    const sellPrice    = unitSell * productUnits;
 
-    // Broker Relations (skill 3446) and Accounting (skill 16622) are NOT passed
-    // to EVE Ref — they affect sell-order costs, not manufacturing costs.
+    // ── Sales fees ─────────────────────────────────────────────────────────
+    const hub             = HUB_STANDINGS[regionId];
     const brokerRelations = skillMap[3446]  || 0;
     const accounting      = skillMap[16622] || 0;
-
     const factionStanding = standings.factions[hub?.faction_id] || 0;
     const corpStanding    = standings.corps[hub?.corp_id]       || 0;
 
@@ -3765,7 +3812,6 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
       - (0.0003 * Math.max(0, factionStanding))
       - (0.0002 * Math.max(0, corpStanding))
     );
-
     // Transaction tax: max(0%, 7.5% × (1 − 11%×Accounting))
     const transactionTaxRate = Math.max(0, 0.075 * (1 - 0.11 * accounting));
 
@@ -3774,18 +3820,10 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
     const totalSalesTax  = brokerFee + transactionTax;
 
     // ── True profit ────────────────────────────────────────────────────────
-    const totalJobCost      = mfg.total_job_cost || 0;
-    const totalMaterialCost = mfg.total_material_cost || 0;
-
     const trueProfit = sellPrice - brokerFee - transactionTax - totalMaterialCost - totalJobCost;
     const trueMargin = sellPrice > 0 ? (trueProfit / sellPrice) * 100 : 0;
 
-    // Structure label for tooltip display
-    const STRUCTURE_LABELS = {
-      35825: 'Raitaru',
-      35826: 'Azbel',
-      35827: 'Sotiyo',
-    };
+    const STRUCTURE_LABELS = { 35825: 'Raitaru', 35826: 'Azbel', 35827: 'Sotiyo' };
     const structureLabel = settings?.structure_type_id
       ? (STRUCTURE_LABELS[settings.structure_type_id] || 'Engineering Complex')
       : 'NPC Station';
@@ -3795,21 +3833,21 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
       runs,
       sell_price: sellPrice,
 
-      // Box 1 — materials
+      // Box 1 — materials (Jita market sell price, ME-adjusted)
       total_material_cost: totalMaterialCost,
 
-      // Box 2 — manufacturing fees (full breakdown for tooltip)
+      // Box 2 — manufacturing fees
       mfg_fees: {
         total:                totalJobCost,
-        system_cost_index:    mfg.system_cost_index    || 0,
-        system_cost_bonuses:  mfg.system_cost_bonuses  || 0,
-        facility_tax:         mfg.facility_tax          || 0,
-        scc_surcharge:        mfg.scc_surcharge         || 0,
-        alpha_clone_tax:      mfg.alpha_clone_tax       || 0,
-        estimated_item_value: mfg.estimated_item_value  || 0,
+        system_cost_index:    systemJobCost,       // EIV × SCI
+        system_cost_bonuses:  0,                   // rig bonuses not yet category-matched
+        facility_tax:         facilityTaxCost,
+        scc_surcharge:        sccSurcharge,
+        alpha_clone_tax:      0,                   // Omega accounts only
+        estimated_item_value: eiv,
       },
 
-      // Box 3 — sales tax (full breakdown for tooltip)
+      // Box 3 — sales fees
       sales_tax: {
         total:                    totalSalesTax,
         broker_fee:               brokerFee,
@@ -3827,21 +3865,22 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
       true_margin: trueMargin,
 
       // Context
-      region_id:         regionId,
-      prices_warm:       pricesWarm,   // false = precompute still loading; sell/profit figures are 0
-      setup_configured:  !!(settings?.system_id),
+      region_id:        regionId,
+      prices_warm:      pricesWarm && jitaWarm,
+      setup_configured: !!(settings?.system_id),
       manufacturing_setup: {
         system_id:          settings?.system_id         || null,
-        system_name:        settings?.system_name       || 'Not configured',
+        system_name:        settings?.system_name       || 'Not configured — using Jita IV',
         structure_type_id:  settings?.structure_type_id || null,
         structure_label:    structureLabel,
         rig_ids:            rigIds,
         facility_tax_pct:   settings?.facility_tax      || 0,
+        sci_raw:            sci,
       },
     });
 
   } catch (err) {
-    console.error('True cost error:', err.message);
+    console.error('True cost error:', err.message, err.stack?.split('\n')[1]);
     res.status(500).json({ error: err.message });
   }
 });

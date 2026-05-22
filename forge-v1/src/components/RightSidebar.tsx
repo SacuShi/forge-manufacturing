@@ -668,15 +668,16 @@ const RightSidebar: FC<RightSidebarProps> = ({
                         <span>{formatISK(trueCostData.mfg_fees.estimated_item_value)}</span>
                       </div>
                       <div className="cost-tooltip-row">
-                        <span>System Cost</span>
+                        <span>
+                          System Cost
+                          {trueCostData.manufacturing_setup.sci_raw > 0 && (
+                            <span style={{ opacity: 0.65, fontSize: 10 }}>
+                              {' '}({(trueCostData.manufacturing_setup.sci_raw * 100).toFixed(2)}% SCI)
+                            </span>
+                          )}
+                        </span>
                         <span>{formatISK(trueCostData.mfg_fees.system_cost_index)}</span>
                       </div>
-                      {trueCostData.mfg_fees.system_cost_bonuses !== 0 && (
-                        <div className="cost-tooltip-row bonus">
-                          <span>Structure Bonus</span>
-                          <span>{formatISK(trueCostData.mfg_fees.system_cost_bonuses)}</span>
-                        </div>
-                      )}
                       <div className="cost-tooltip-row">
                         <span>Facility Tax</span>
                         <span>{formatISK(trueCostData.mfg_fees.facility_tax)}</span>
