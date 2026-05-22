@@ -3655,8 +3655,9 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
     const standings  = session?.standings || { factions: {}, corps: {} };
 
     // Convert skills array → map for fast lookup: { skill_id: level }
+    // Use numeric keys to match SKILL_PARAM_MAP's numeric key lookups.
     const skillMap = {};
-    skillsArr.forEach(s => { skillMap[s.skill_id] = s.active_skill_level || 0; });
+    skillsArr.forEach(s => { skillMap[Number(s.skill_id)] = s.active_skill_level || 0; });
 
     // ── Load industry settings from DB ─────────────────────────────────────
     const settings = await dbGet(
@@ -3667,9 +3668,10 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
     // ── EVE Ref API call ───────────────────────────────────────────────────
     const rigIds = JSON.parse(settings?.rig_ids || '[]');
 
+    // SKILL_PARAM_MAP keys are numeric (e.g. 3380); skillMap keys are also numeric.
     const skillParams = Object.entries(SKILL_PARAM_MAP)
-      .filter(([id]) => skillMap[id] !== undefined)
-      .map(([id, name]) => `${name}=${skillMap[id]}`)
+      .filter(([id]) => skillMap[Number(id)] !== undefined)
+      .map(([id, name]) => `${name}=${skillMap[Number(id)]}`)
       .join('&');
 
     const rigParams = rigIds.map(id => `rig_id=${id}`).join('&');
