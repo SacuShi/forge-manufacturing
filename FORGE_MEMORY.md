@@ -2,7 +2,7 @@
 
 > This file is the authoritative context document for Claude sessions working on this project.
 > Read this first. Update it whenever significant decisions, changes, or discoveries are made.
-> Last updated: v1.1 — multi-market support + cross-hub AI comparison
+> Last updated: v1.2.0 — True Profit with EVE Ref API, standings-aware fees, industry settings
 
 ---
 
@@ -17,12 +17,13 @@ An EVE Online manufacturing intelligence web application for the **UKC corporati
 - **Blueprints tab** — full ESI blueprint library with BPO/BPC detection, T2 highlighting, search/filter
 - **Assets tab** — inventory grouped by type with quantity sums
 - **Jobs tab** — active industry jobs with time remaining
-- **Right sidebar** — drill-down production chain for any item; prices shown for the currently selected hub
+- **Right sidebar** — drill-down production chain for any item; prices shown for the currently selected hub; **True Profit 4-box panel (v1.2.0)** showing material cost, mfg fees, sales tax, true profit
+- **Industry Settings modal** — configure manufacturing system, structure type, rigs, facility tax for accurate True Profit (⚙ button in header)
 - **AI chat panel (F.O.R.G.E. AI)** — Anthropic Claude advisor with live character context, 9 tools, history persistence, cross-hub comparison capability
 
 **Live domain:** https://forge-ukc.com  
 **GitHub:** https://github.com/SacuShi/forge-manufacturing.git  
-**Current version:** v1.1.1 (branch: `feature/v1.1-multimarket`, commit `05a99f9`)  
+**Current version:** v1.2.0 (branch: `feature/v1.2.0-true-profit`, commit `0780ef0`)  
 **Version scheme:** `major.feature.change.patch`
 
 ---
@@ -105,7 +106,8 @@ npm run build        # tsc -b && vite build → dist/
 | EVE ESI | https://esi.evetech.net | Character data (blueprints, assets, skills, jobs, wallet) + market prices |
 | EVE SSO | https://login.eveonline.com | OAuth authentication |
 | EVE Image Server | https://images.evetech.net | Item/character icons |
-| everef.net | https://data.everef.net/reference-data/reference-data-latest.tar.xz | SDE reference data |
+| everef.net (SDE) | https://data.everef.net/reference-data/reference-data-latest.tar.xz | SDE reference data |
+| everef.net (industry) | https://api.everef.net/v1/industry/cost | **NEW v1.2.0** — Manufacturing job fee calculator. No auth required. ~16ms response. Returns full fee breakdown incl. SCI, SCC, facility tax, structure bonuses, per-skill reductions |
 | Anthropic API | claude-sonnet-4-6 | AI advisor |
 
 ---
@@ -115,36 +117,38 @@ npm run build        # tsc -b && vite build → dist/
 ```
 forge-manufacturing/
 ├── server/
-│   ├── server.js           ← Express backend (v1.1)
+│   ├── server.js           ← Express backend (v1.2.0)
 │   ├── sde-import.js       ← SDE import script (v2)
 │   └── forge-security.js   ← Auth + rate limiting middleware
 ├── forge-v1/
 │   ├── src/
-│   │   ├── App.tsx             ← Root: auth states, market data, chat logic, market hub state
+│   │   ├── App.tsx             ← Root: auth states, market data, chat, industry settings
 │   │   ├── main.tsx
 │   │   ├── api/
-│   │   │   └── client.ts       ← apiGet / apiPost helpers
+│   │   │   └── client.ts       ← apiGet / apiPost helpers (dispatches session-expired event)
 │   │   ├── components/
-│   │   │   ├── Header.tsx      ← Top bar; contains MarketSelector + AI toggle
-│   │   │   ├── MarketSelector.tsx ← NEW v1.1: hub dropdown (6 trade hubs); MARKETS constant
+│   │   │   ├── Header.tsx      ← Top bar; MarketSelector + ⚙ settings cog + AI toggle
+│   │   │   ├── MarketSelector.tsx ← Hub dropdown (6 trade hubs); MARKETS constant
+│   │   │   ├── IndustrySettings.tsx ← NEW v1.2.0: modal for system/structure/rigs/tax
 │   │   │   ├── LeftSidebar.tsx ← Character card, nav tabs, quick prompts, jobs
 │   │   │   ├── MainContent.tsx ← Tabs: Market, Blueprints, Assets, Jobs
-│   │   │   ├── RightSidebar.tsx← Item detail panel, price chart (hub-aware since v1.1)
+│   │   │   ├── RightSidebar.tsx← Item detail panel + True Profit 4-box (v1.2.0)
 │   │   │   ├── ChatPanel.tsx   ← AI chat slide-in panel
 │   │   │   ├── ItemTable.tsx   ← Sortable market opportunities table
 │   │   │   ├── ItemLink.tsx    ← Clickable item token in chat messages
-│   │   │   ├── LoginScreen.tsx ← EVE SSO login page
+│   │   │   ├── LoginScreen.tsx ← EVE SSO login page (session-expired banner)
 │   │   │   └── LoadingScreen.tsx← Step-by-step data load progress log
 │   │   ├── hooks/
-│   │   │   ├── useAuth.ts      ← Token exchange, ESI data loading, session state
-│   │   │   ├── useItemDetail.ts← Item detail API calls (passes regionId since v1.1)
+│   │   │   ├── useAuth.ts      ← Token exchange, ESI data; hasStandingsScope (v1.2.0)
+│   │   │   ├── useItemDetail.ts← Item detail API calls (passes regionId)
+│   │   │   ├── useTrueCost.ts  ← NEW v1.2.0: calls /api/true-cost for True Profit data
 │   │   │   └── useItemNames.ts ← Item name lookups from DB
 │   │   ├── styles/
 │   │   │   ├── variables.css   ← CSS design tokens (dark/light mode)
 │   │   │   ├── global.css      ← Reset, app shell, scrollbars
-│   │   │   └── components.css  ← All component styles (market-selector styles added v1.1)
+│   │   │   └── components.css  ← All component styles (True Profit + modal styles v1.2.0)
 │   │   ├── types/
-│   │   │   └── index.ts        ← All shared TypeScript interfaces (Market, RegionalPrices added v1.1)
+│   │   │   └── index.ts        ← Shared TS interfaces (IndustrySettings, TrueCostResponse v1.2.0)
 │   │   ├── data/
 │   │   │   └── mockData.ts     ← QUICK_PROMPTS constant + any static data
 │   │   └── utils/
@@ -227,6 +231,17 @@ PRIMARY KEY (blueprint_id, region_id)   -- ← composite PK, was just blueprint_
 
 **Volume enrichment:** `avg_daily_volume`, `market_group_id`, `liquidity_risk` are populated from **Jita ESI history only** (Jita rows), then copied to all other region rows via correlated UPDATE. This means all hubs share Jita-sourced volume data, which is acceptable since Jita volume is the most reliable indicator of item liquidity.
 
+#### `character_industry_settings` ← NEW v1.2.0
+```sql
+character_id           INTEGER PRIMARY KEY
+system_id              INTEGER DEFAULT NULL       -- solar system where they build
+system_name            TEXT    DEFAULT NULL
+structure_type_id      INTEGER DEFAULT NULL       -- NULL=NPC, 35825=Raitaru, 35826=Azbel, 35827=Sotiyo
+rig_ids                TEXT    DEFAULT '[]'       -- JSON array of rig type_ids (max 3)
+facility_tax           REAL    DEFAULT 0.0        -- percentage 0–100 (converted to decimal for EVE Ref)
+updated_at             TEXT    NOT NULL DEFAULT ''
+```
+
 #### `precompute_runs`
 ```sql
 id                   INTEGER PRIMARY KEY
@@ -308,6 +323,14 @@ All endpoints require `Authorization: Bearer <eve_token>` unless noted. Rate lim
 | POST | `/api/save-message` | Persists one message |
 | DELETE | `/api/chat-history/:characterId` | Clears history |
 
+### Industry Settings (v1.2.0)
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/industry-settings` | Fetch saved settings for authed character |
+| POST | `/api/industry-settings` | Save settings (system_id, structure_type_id, rig_ids, facility_tax) |
+| GET | `/api/system-search?q=<query>` | Autocomplete solar system names via ESI search + universe/names |
+| POST | `/api/true-cost` | Calculate True Profit. Body: `{product_id, me, te, runs, regionId}`. Calls EVE Ref API, reads session cache for skills+standings, reads DB for industry settings. Returns 4-box breakdown. |
+
 ### Admin / Debug
 | Method | Path | Notes |
 |---|---|---|
@@ -338,21 +361,23 @@ idle → (EVE SSO redirect) → exchanging → loading → authed
                                                   ↘ error
 ```
 
-### State in `App.tsx` (v1.1)
+### State in `App.tsx` (v1.2.0)
 | State | Type | Purpose |
 |---|---|---|
 | `theme` | `'dark'|'light'` | Persisted to localStorage |
 | `chatOpen` | `boolean` | Chat panel visible |
 | `chatAutoOpened` | `boolean` | Was chat auto-opened (closes on outside click) |
 | `rawResults` | `TopProfitableResponse['results']` | Raw API results for all loaded pages |
-| `marketItems` | `MarketItem[]` | **useMemo** derived from `rawResults + auth.blueprints` (no overlay) |
+| `marketItems` | `MarketItem[]` | **useMemo** derived from `rawResults + auth.blueprints` |
 | `marketLoading` | `boolean` | Initial load OR market switch in progress |
 | `marketHasMore` | `boolean` | Whether more pages exist |
 | `marketLoadingMore` | `boolean` | "Load next 50" in-flight |
-| `selectedMarket` | `Market` | **NEW v1.1** — currently selected hub (default Jita) |
+| `selectedMarket` | `Market` | Currently selected hub (default Jita) |
 | `selectedTypeId` | `number|null` | Currently selected item |
 | `panelHistory` | `Array<{typeId,name}>` | Back-stack for chain drill-down |
 | `chatMessages` | `ChatMessage[]` | Full conversation history |
+| `industrySettings` | `IndustrySettings|null` | **NEW v1.2.0** — loaded from `/api/industry-settings` on login |
+| `settingsOpen` | `boolean` | **NEW v1.2.0** — IndustrySettings modal open |
 
 ### Market hub switching (`handleMarketChange`)
 ```typescript
@@ -456,6 +481,43 @@ const isBPC = bp.runs >= 0;     // Copy — limited runs
 3. `low_volume` — < 5 units/day average (WARNING level, not filtered by default)
 4. `no_buy_orders` / `suspicious_spread`
 
+### EVE Manufacturing Fees (v1.2.0) — DO NOT get these wrong
+
+**Broker fee (sell order placement):**
+```
+rate = max(1%, 3% − 0.3% × Broker_Relations − 0.03% × max(0, faction_standing) − 0.02% × max(0, corp_standing))
+fee = sell_revenue × rate
+```
+- Minimum 1% regardless of skills/standings
+- Connections and Diplomacy skills do NOT affect broker fee (only faction relations standing, unmodified)
+- The NPC corp and faction for each hub are in `HUB_STANDINGS` server-side
+
+**Transaction tax (trade completion):**
+```
+rate = max(0%, 7.5% × (1 − 11% × Accounting_level))
+fee = sell_revenue × rate
+```
+- At Accounting 5: 7.5% × (1 − 0.55) = 3.375%
+
+**Manufacturing job fee (via EVE Ref API, not calculated locally):**
+- `POST https://api.everef.net/v1/industry/cost` with product_id, runs, me, te, system_id, structure_type_id, rig_ids, facility_tax, skill params
+- Returns: `total_job_cost`, `total_material_cost`, `system_cost_index`, `facility_tax`, `scc_surcharge`, `alpha_clone_tax`, `estimated_item_value`, `units` (output qty)
+- SCC Surcharge: **2%** of EIV (reduced from 4% in Legion update, July 2025)
+- NPC station facility tax: **0.25%** of EIV (reduced from 10% in Viridian 2023)
+- System Cost Index (SCI): typically 5–24% in high-sec hubs; varies by manufacturing activity
+
+**Structure bonuses (informational — EVE Ref handles actual calc):**
+| Structure | type_id | ME bonus | TE bonus |
+|---|---|---|---|
+| Raitaru | 35825 | 1% | 15% |
+| Azbel | 35826 | 1% | 20% |
+| Sotiyo | 35827 | 1% | 25% |
+
+**True Profit formula:**
+```
+true_profit = sell_price - broker_fee - transaction_tax - total_material_cost - total_job_cost
+```
+
 ### Multi-market strategy (v1.1 insight)
 The most profitable EVE manufacturing strategy is almost always:
 - **Buy materials in Jita** (deepest liquidity, tightest spreads)
@@ -542,6 +604,60 @@ wallet, blueprints, assets, active jobs, trained skills.
 | `8729ad8` | AI button label; pulse glow animation; auto-open chat on login |
 | `1713c9e` | Quick prompt chips: remove 40-char truncation |
 | `7fb861a` | Load-more pagination: offset param; "Load next 50" button |
+
+### v1.2.0 (commit `0780ef0`) — branch: `feature/v1.2.0-true-profit`
+
+**True Profit feature — EVE Ref API integration, standings, industry settings**
+
+**Core concept:** Market Opportunities shows *estimated* profit (no fees). True Profit shows *real* profit after ALL costs: material cost + manufacturing job fee + sales tax (broker fee + transaction tax).
+
+**Backend changes:**
+
+- `character_industry_settings` table in `runMigrations()` — per-character manufacturing setup
+- `HUB_STANDINGS` map: `regionId → { corp_id, faction_id }` — which NPC corp/faction standings affect broker fees at each hub
+  - Jita: corp 1000035 (Caldari Navy), faction 500001 (Caldari State)
+  - Amarr: corp 1000082, faction 500003 | Dodixie: corp 1000049, faction 500004
+  - Hek/Rens: corp 1000070/1000006, faction 500002 (Minmatar)
+  - Syndicate: corp 1000462, faction 500010
+- `SKILL_PARAM_MAP`: skill_id → EVE Ref API param name (~30 manufacturing skills)
+- `/api/session-data` POST now accepts `standings: { factions: {}, corps: {} }` and stores in session cache
+- `GET /api/industry-settings` — fetch settings for authed character
+- `POST /api/industry-settings` — save settings (upsert by character_id); `facility_tax` stored as pct (0–100)
+- `GET /api/system-search?q=<>` — ESI solar system autocomplete
+- `POST /api/true-cost` — the main endpoint:
+  1. Reads session cache for skills + standings
+  2. Reads DB for industry settings (system, structure, rigs, facility_tax)
+  3. Converts `facility_tax` pct → decimal for EVE Ref; uses system_id 30000142 (Jita) if none configured
+  4. Calls `https://api.everef.net/v1/industry/cost` with product_id, runs, me, te, structure_type_id, rig_id×N, facility_tax, all skill params
+  5. Calculates broker fee: `max(1%, 3% − 0.3%×BR − 0.03%×max(0,faction) − 0.02%×max(0,corp))`
+  6. Calculates transaction tax: `max(0%, 7.5% × (1 − 11%×Accounting))`
+  7. Fetches hub prices from `regionPriceCache` (fetches if stale); uses `price.sell` (not `.sell_price`)
+  8. Returns full 4-box breakdown: material_cost, mfg_fees, sales_tax, true_profit
+
+**EVE Ref API corrections vs brief:**
+- Brief's `security='HIGH_SEC'` fallback → replaced with `system_id=30000142` (Jita system) for better accuracy
+- Brief's `priceData?.sell_price` → `priceData?.sell` (matches cache structure from `fetchRegionPrices`)
+- Brief's `sessionCache.get()` → `getCached('session:${characterId}')` (correct helper for this codebase)
+- Brief's Jita corp_id `10000035` → `1000035` (Caldari Navy; 10000035 is a region ID)
+- SCC surcharge rate: EVE Ref returns live rate (2% post-Legion July 2025); brief said 4% — self-corrects via EVE Ref
+
+**Frontend changes:**
+
+- `useAuth.ts`: `esi-characters.read_standings.v1` added to SCOPES; standings fetched in `loadCharacterData` (step 8, non-fatal — sets `hasStandingsScope`); standings included in `/api/session-data` POST; `hasStandingsScope: boolean` in AuthState and return value; `logout()` resets it
+- `useTrueCost.ts` (new hook): fetches `/api/true-cost` when `productTypeId`/`regionId`/`blueprints.length` changes; finds best blueprint (BPO preferred over BPC) to extract ME/TE; returns `{ data, loading, error }`
+- `IndustrySettings.tsx` (new component): modal with system autocomplete (300ms debounce, ESI-backed), structure type radio buttons, rigs accordion (max 3, grouped by category, greyed for NPC), facility tax %, Save button (disabled until system resolves)
+- `Header.tsx`: `onOpenSettings` prop added; ⚙ `settings-btn` next to MarketSelector
+- `RightSidebar.tsx`: `trueCostData`, `trueCostLoading`, `trueCostError`, `onOpenSettings` props; 4-box panel below existing build info; tooltip on Mfg Fees (EIV, SCI, facility tax, SCC) and Sales Tax (broker rate, standings, transaction tax)
+- `App.tsx`: `industrySettings` + `settingsOpen` state; loads settings on login; `useTrueCost` hook; re-auth banner if `!auth.hasStandingsScope`; IndustrySettingsModal render
+- `types/index.ts`: `SystemSearchResult`, `IndustrySettings`, `TrueCostResponse` interfaces
+- `components.css`: `.settings-btn`, `.reauth-banner`, `.cost-breakdown-row`, `.cost-box` family (4 colour variants), `.cost-tooltip` family, `.modal-overlay`/`.modal-panel` family, `.settings-*`, `.structure-*`, `.rig-*`, `.btn-primary`
+
+**Re-auth banner:**
+- Shows if `!auth.hasStandingsScope` (standings scope not granted on current token)
+- Tells user to log out and back in to grant it
+- Broker fee still calculates correctly (skills-only, no standings bonus) until re-auth
+
+**IMPORTANT: EVE Ref API is called server-side** — no browser CSP changes needed.
 
 ### v1.1.1 (commit `05a99f9`) — deployed ✓
 
