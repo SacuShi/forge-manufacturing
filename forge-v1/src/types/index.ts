@@ -15,6 +15,16 @@
 
 export type OwnedStatus = 'BPO' | 'BPC' | '—';
 
+export interface Market {
+  id: number;
+  name: string;
+  region: string;
+  type: 'hisec' | 'nullsec';
+}
+
+export type RegionalPriceEntry = { sell: number; buy: number; median: number };
+export type RegionalPrices = Record<number, RegionalPriceEntry>;
+
 export interface MarketItem {
   rank: number;
   typeId: number;
@@ -238,3 +248,74 @@ export interface ItemDetailApiResponse {
 // ══════════════════════════════════════════════════════════════════════════
 
 export type AuthStatus = 'idle' | 'exchanging' | 'loading' | 'authed' | 'error';
+
+// ══════════════════════════════════════════════════════════════════════════
+// 5. v1.2.0 — TRUE PROFIT TYPES
+// ══════════════════════════════════════════════════════════════════════════
+
+/** System autocomplete result from GET /api/system-search */
+export interface SystemSearchResult {
+  system_id:   number;
+  system_name: string;
+}
+
+/** Character manufacturing setup — stored in character_industry_settings */
+export interface IndustrySettings {
+  system_id:            number | null;
+  system_name:          string | null;
+  structure_type_id:    number | null;
+  /** JSON-encoded array of rig type_ids */
+  rig_ids:              string;
+  /** Stored as percentage 0–100 */
+  facility_tax:         number;
+  /** Region ID of the hub where materials are sourced (default 10000002 = Jita) */
+  material_region_id?:   number;
+  material_region_name?: string | null;
+}
+
+/** Full response from POST /api/true-cost */
+export interface TrueCostResponse {
+  product_id:          number;
+  runs:                number;
+  sell_price:          number;
+
+  total_material_cost: number;
+
+  mfg_fees: {
+    total:                number;
+    system_cost_index:    number;
+    system_cost_bonuses:  number;
+    facility_tax:         number;
+    scc_surcharge:        number;
+    alpha_clone_tax:      number;
+    estimated_item_value: number;
+  };
+
+  sales_tax: {
+    total:                  number;
+    broker_fee:             number;
+    broker_fee_rate:        number;
+    broker_relations_level: number;
+    faction_standing:       number;
+    corp_standing:          number;
+    transaction_tax:        number;
+    transaction_tax_rate:   number;
+    accounting_level:       number;
+  };
+
+  true_profit:  number;
+  true_margin:  number;
+  region_id:    number;
+  prices_warm:  boolean;   // false = precompute still loading; sell/profit are 0
+  setup_configured: boolean;
+
+  manufacturing_setup: {
+    system_id:         number | null;
+    system_name:       string;
+    structure_type_id: number | null;
+    structure_label:   string;
+    rig_ids:           number[];
+    facility_tax_pct:  number;
+    sci_raw:           number;   // raw system cost index (0–1) for display
+  };
+}

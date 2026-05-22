@@ -56,7 +56,11 @@ function initDatabase() {
         reject(err);
       } else {
         console.log('✓ Connected to SQLite database');
-        resolve();
+        // WAL mode: allows concurrent readers while a write is in progress.
+        // Without this, the precompute/volume-copy UPDATE locks every incoming request.
+        db.run('PRAGMA journal_mode=WAL', () => {
+          db.run('PRAGMA synchronous=NORMAL', () => resolve());
+        });
       }
     });
   });
@@ -185,6 +189,67 @@ async function runMigrations() {
   try {
     await dbRun(`ALTER TABLE precomputed_profits ADD COLUMN liquidity_risk TEXT DEFAULT NULL`);
   } catch (_) { /* column already exists */ }
+
+  // v1.1 migration: Multi-region precomputed profits
+  // Recreate table with composite PRIMARY KEY (blueprint_id, region_id).
+  // Data is ephemeral — the precompute job repopulates immediately after restart.
+  const hasRegionId = await dbGet(
+    `SELECT 1 FROM pragma_table_info('precomputed_profits') WHERE name = 'region_id'`
+  );
+  if (!hasRegionId) {
+    console.log('⟳ v1.1 migration: recreating precomputed_profits with multi-region schema...');
+    await dbRun('DROP TABLE IF EXISTS precomputed_profits');
+    await dbRun(`
+      CREATE TABLE precomputed_profits (
+        blueprint_id    INTEGER NOT NULL,
+        region_id       INTEGER NOT NULL DEFAULT 10000002,
+        product_id      INTEGER NOT NULL,
+        product_name    TEXT,
+        material_cost   REAL    DEFAULT 0,
+        sell_price      REAL    DEFAULT 0,
+        buy_price       REAL    DEFAULT 0,
+        profit          REAL    DEFAULT 0,
+        profit_margin   REAL    DEFAULT 0,
+        isk_per_hour    REAL    DEFAULT 0,
+        build_time      INTEGER DEFAULT 0,
+        material_count  INTEGER DEFAULT 0,
+        computed_at     TEXT    NOT NULL DEFAULT '',
+        price_source    TEXT    DEFAULT 'jita',
+        avg_daily_volume REAL   DEFAULT NULL,
+        market_group_id  INTEGER DEFAULT NULL,
+        liquidity_risk   TEXT   DEFAULT NULL,
+        activity_id      INTEGER DEFAULT 1,
+        PRIMARY KEY (blueprint_id, region_id)
+      )
+    `);
+    await dbRun(`CREATE INDEX IF NOT EXISTS idx_precomputed_profit  ON precomputed_profits (region_id, profit DESC)`);
+    await dbRun(`CREATE INDEX IF NOT EXISTS idx_precomputed_margin  ON precomputed_profits (region_id, profit_margin DESC)`);
+    await dbRun(`CREATE INDEX IF NOT EXISTS idx_precomputed_isk_hr  ON precomputed_profits (region_id, isk_per_hour DESC)`);
+    await dbRun(`CREATE INDEX IF NOT EXISTS idx_precomputed_product ON precomputed_profits (product_id)`);
+    console.log('✓ precomputed_profits migrated to multi-region schema');
+  }
+
+  // v1.2.0 migration: product_id index for fast volume copy
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_precomputed_product ON precomputed_profits (product_id)`);
+
+  // v1.2.0 migration: Industry settings per character
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS character_industry_settings (
+      character_id           INTEGER PRIMARY KEY,
+      system_id              INTEGER DEFAULT NULL,
+      system_name            TEXT    DEFAULT NULL,
+      structure_type_id      INTEGER DEFAULT NULL,   -- NULL = NPC station
+      rig_ids                TEXT    DEFAULT '[]',   -- JSON array of rig type_ids
+      facility_tax           REAL    DEFAULT 0.0,    -- 0.0–1.0 decimal (not %)
+      material_region_id     INTEGER DEFAULT 10000002, -- hub where materials are sourced (default Jita)
+      material_region_name   TEXT    DEFAULT 'Jita',
+      updated_at             TEXT    NOT NULL DEFAULT ''
+    )
+  `);
+
+  // v1.3.0 migration: material source hub columns (idempotent — ignored if already present)
+  try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN material_region_id   INTEGER DEFAULT 10000002`); } catch (_) {}
+  try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN material_region_name TEXT    DEFAULT 'Jita'`);    } catch (_) {}
 
   console.log('✓ Database migrations complete');
 }
@@ -339,6 +404,9 @@ app.post('/api/eve-token', security.authLimiter, async (req, res) => {
 // v0.9.4: Only Jita (10000002) is populated. v1.1 will populate multiple regions.
 const regionPriceCache = new Map();
 
+// Tracks which regions have a background price-warm in flight (avoid duplicate fetches)
+const regionWarmingSet = new Set();
+
 // Backwards-compatible accessor for existing code
 // jitaPricesCache points to the Jita entry in regionPriceCache
 let jitaPricesCacheExpiry = 0; // Keep this for now, used by existing code
@@ -370,36 +438,36 @@ Object.defineProperty(global, 'jitaPricesCache', {
  * blueprintId: blueprint_id from the blueprints table
  */
 async function canBuildBlueprint(characterSkills, blueprintId) {
+  // Inner try isolates a missing blueprint_skills table (returns true = allow through).
+  // Outer try catches unexpected DB errors (returns false = exclude conservatively).
   try {
-      let requirements = [];
+    let requirements = [];
     try {
       requirements = await dbAll(
         'SELECT skill_id, skill_level FROM blueprint_skills WHERE blueprint_id = ?',
         [blueprintId]
       );
-    } catch (skillErr) {
-      // Table missing — treat as no requirements (allow all blueprints through)
+    } catch (_skillErr) {
+      // blueprint_skills table missing — no requirements known, allow all through
       return true;
     }
 
-    if (!requirements || requirements.length === 0) return true;
+    if (!requirements.length) return true;
 
+    // Build a skill_id → trained_level map for O(1) lookup
     const skillMap = {};
-    characterSkills.forEach(s => {
+    for (const s of characterSkills) {
       skillMap[s.skill_id] = s.active_skill_level || 0;
-    });
+    }
 
     for (const req of requirements) {
-      const charLevel = skillMap[req.skill_id] || 0;
-      if (charLevel < req.skill_level) {
-        return false;
-      }
+      if ((skillMap[req.skill_id] || 0) < req.skill_level) return false;
     }
 
     return true;
   } catch (err) {
     console.error('Skill check error:', err.message);
-    return false;
+    return false; // conservative: exclude on unexpected error
   }
 }
 
@@ -421,6 +489,253 @@ app.get('/api/jita-prices', security.apiLimiter, async (req, res) => {
       return res.json({ prices: jitaPricesCache, stale: true });
     }
     res.status(500).json({ error: err.message, prices: {} });
+  }
+});
+
+const VALID_REGIONS = [
+  10000002, // Jita
+  10000043, // Amarr
+  10000032, // Dodixie
+  10000042, // Hek
+  10000030, // Rens
+  10000041  // Syndicate
+];
+
+// Human-readable names for the AI and formatting
+const REGION_HUB_NAMES = {
+  10000002: 'Jita',
+  10000043: 'Amarr',
+  10000032: 'Dodixie',
+  10000042: 'Hek',
+  10000030: 'Rens',
+  10000041: 'Syndicate',
+};
+
+// NPC corp + faction standings that affect broker fees at each trade hub.
+// Used by /api/true-cost to calculate the character-specific broker fee rate.
+// corp_id  = NPC corporation that owns the station
+// faction_id = NPC faction associated with that hub's space
+const HUB_STANDINGS = {
+  10000002: { corp_id: 1000035, faction_id: 500001 }, // Jita — Caldari Navy / Caldari State
+  10000043: { corp_id: 1000082, faction_id: 500003 }, // Amarr — Imperial Navy / Amarr Empire
+  10000032: { corp_id: 1000049, faction_id: 500004 }, // Dodixie — Federation Navy / Gallente Federation
+  10000042: { corp_id: 1000070, faction_id: 500002 }, // Hek — Brutor Tribe / Minmatar Republic
+  10000030: { corp_id: 1000006, faction_id: 500002 }, // Rens — Brutor Tribe / Minmatar Republic
+  10000041: { corp_id: 1000462, faction_id: 500010 }, // Syndicate — Intaki Syndicate (null-sec, no faction bonus)
+};
+
+// ── ESI adjusted-price cache ───────────────────────────────────────────────────
+// ESI /markets/prices/ returns CCP's adjusted_price for every type_id.
+// Used to compute Estimated Item Value (EIV) for manufacturing job fees.
+// EIV = Σ(adjusted_price × ME-adjusted quantity) — does NOT use market prices.
+// Refreshed every 6 hours (ESI updates once daily; we just stay fresh).
+const adjustedPriceCache = { data: null, expiry: 0 };
+
+async function fetchAdjustedPrices() {
+  if (adjustedPriceCache.data && Date.now() < adjustedPriceCache.expiry) {
+    return adjustedPriceCache.data;
+  }
+  const ctrl = new AbortController();
+  const t    = setTimeout(() => ctrl.abort(), 30000);
+  try {
+    const res = await fetch(
+      'https://esi.evetech.net/latest/markets/prices/?datasource=tranquility',
+      { headers: { Accept: 'application/json' }, signal: ctrl.signal }
+    );
+    if (!res.ok) throw new Error(`ESI /markets/prices/ HTTP ${res.status}`);
+    const items = await res.json();
+    const map   = {};
+    for (const item of items) {
+      map[item.type_id] = item.adjusted_price ?? item.average_price ?? 0;
+    }
+    adjustedPriceCache.data   = map;
+    adjustedPriceCache.expiry = Date.now() + 6 * 3600000;
+    console.log(`✓ ESI adjusted prices cached — ${Object.keys(map).length} types`);
+    return map;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+// ── ESI manufacturing system cost-index + name cache ──────────────────────────
+// ESI /industry/systems/ returns the manufacturing SCI for every solar system.
+// SCI × EIV = the "System Job Cost Fee" component of a manufacturing job.
+// We also fetch system names (via /universe/names/ bulk lookup) so that
+// /api/system-search can do instant local matching without calling ESI search.
+// Refreshed every hour (CCP updates SCIs roughly every hour).
+//
+// costIndexCache.sciMap  : Map<system_id, cost_index>
+// costIndexCache.nameMap : Map<name_lowercase, { system_id, system_name }>
+const costIndexCache = { sciMap: null, nameMap: null, expiry: 0 };
+
+async function fetchCostIndices() {
+  if (costIndexCache.sciMap && Date.now() < costIndexCache.expiry) {
+    return costIndexCache.sciMap;
+  }
+
+  const ctrl = new AbortController();
+  const t    = setTimeout(() => ctrl.abort(), 30000);
+  let systems;
+  try {
+    const res = await fetch(
+      'https://esi.evetech.net/latest/industry/systems/?datasource=tranquility',
+      { headers: { Accept: 'application/json' }, signal: ctrl.signal }
+    );
+    if (!res.ok) throw new Error(`ESI /industry/systems/ HTTP ${res.status}`);
+    systems = await res.json();
+  } finally {
+    clearTimeout(t);
+  }
+
+  // Build SCI map
+  const sciMap = {};
+  const systemIds = [];
+  for (const sys of systems) {
+    const mfg = sys.cost_indices.find(c => c.activity === 'manufacturing');
+    if (mfg) {
+      sciMap[sys.solar_system_id] = mfg.cost_index;
+      systemIds.push(sys.solar_system_id);
+    }
+  }
+
+  // Bulk-fetch system names in parallel batches of 1000 (ESI /universe/names/ limit).
+  // This runs once per hour and gives us a fully local search index.
+  const nameMap  = new Map(); // name_lower → { system_id, system_name }
+  const BATCH    = 1000;
+  const batches  = [];
+  for (let i = 0; i < systemIds.length; i += BATCH) {
+    batches.push(systemIds.slice(i, i + BATCH));
+  }
+  const nameResults = await Promise.all(
+    batches.map(async (batch) => {
+      try {
+        const r = await fetch('https://esi.evetech.net/latest/universe/names/', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body:    JSON.stringify(batch),
+        });
+        return r.ok ? await r.json() : [];
+      } catch { return []; }
+    })
+  );
+  for (const batch of nameResults) {
+    for (const item of batch) {
+      if (item.category === 'solar_system') {
+        nameMap.set(item.name.toLowerCase(), { system_id: item.id, system_name: item.name });
+      }
+    }
+  }
+
+  costIndexCache.sciMap  = sciMap;
+  costIndexCache.nameMap = nameMap;
+  costIndexCache.expiry  = Date.now() + 3600000;
+  console.log(`✓ ESI cost indices + names cached — ${systemIds.length} systems`);
+  return sciMap;
+}
+
+// Maps EVE skill_id → EVE Ref API query param name.
+// Kept for reference — skills affect manufacturing TIME, not job COST.
+// Broker Relations (3446) and Accounting (16622) DO affect sales fees (calculated locally).
+const SKILL_PARAM_MAP = {
+  3380:  'industry',
+  3388:  'advanced_industry',
+  3397:  'amarr_starship_engineering',
+  3396:  'caldari_starship_engineering',
+  3395:  'gallente_starship_engineering',
+  3394:  'minmatar_starship_engineering',
+  11452: 'electromagnetic_physics',
+  11453: 'electronic_engineering',
+  11454: 'graviton_physics',
+  11455: 'high_energy_physics',
+  11441: 'hydromagnetic_physics',
+  11443: 'laser_physics',
+  11442: 'mechanical_engineering',
+  11444: 'molecular_engineering',
+  11529: 'nanite_engineering',
+  11446: 'nuclear_physics',
+  11445: 'plasma_physics',
+  11448: 'quantum_physics',
+  11450: 'rocket_science',
+  20424: 'sleeper_technology',
+  28164: 'takmahl_technology',
+  3392:  'jury_rigging',
+  26224: 'capital_ship_construction',
+  3400:  'capital_components',
+  21790: 'drug_manufacturing',
+  3398:  'ammunition_manufacturing',
+  3399:  'drones',
+  3393:  'mechanics',
+  11395: 'frigate_construction',
+  11396: 'destroyer_construction',
+  11397: 'cruiser_construction',
+  11398: 'battlecruiser_construction',
+  11399: 'battleship_construction',
+  3401:  'outpost_construction',
+  11085: 'core_subsystem_technology',
+  11086: 'defensive_subsystem_technology',
+  11087: 'offensive_subsystem_technology',
+  11088: 'propulsion_subsystem_technology',
+  52307: 'triglavian_quantum_engineering',
+  53280: 'mutagenic_stabilization',
+};
+
+/**
+ * Returns live buy/sell prices for a single typeId across all 6 trade hubs.
+ * Uses regionPriceCache when fresh; fetches + caches if stale or missing.
+ * Used by the AI get_price_comparison tool.
+ */
+async function getItemPricesAllRegions(typeId) {
+  const results = [];
+
+  for (const regionId of VALID_REGIONS) {
+    let entry = regionPriceCache.get(regionId);
+    if (!entry || Date.now() >= entry.expiry) {
+      // fetchRegionPrices returns prices but doesn't cache — store explicitly
+      const prices = await fetchRegionPrices(regionId);
+      regionPriceCache.set(regionId, { prices, expiry: Date.now() + 3600000 });
+      entry = regionPriceCache.get(regionId);
+    }
+
+    if (!entry) continue;
+
+    const price = entry.prices[typeId];
+    if (price) {
+      results.push({
+        hub_name:          REGION_HUB_NAMES[regionId],
+        region_id:         regionId,
+        buy_price:         price.buy  || 0,
+        sell_price:        price.sell || 0,
+        median_price:      price.median || 0,
+        volume_available:  0,   // ESI order feed doesn't include volume per-hub
+      });
+    }
+  }
+
+  return results;
+}
+
+app.get('/api/prices/:regionId', security.apiLimiter, async (req, res) => {
+  try {
+    const regionId = parseInt(req.params.regionId);
+
+    if (!VALID_REGIONS.includes(regionId)) {
+      return res.status(400).json({ error: 'Invalid region ID' });
+    }
+
+    const entry = regionPriceCache.get(regionId);
+    if (entry && Date.now() < entry.expiry) {
+      console.log(`✓ Region ${regionId} prices (cached) — ${Object.keys(entry.prices).length} items`);
+      return res.json({ regionId, prices: entry.prices });
+    }
+
+    console.log(`⟳ Fetching region ${regionId} prices from ESI...`);
+    const prices = await fetchRegionPrices(regionId);
+    regionPriceCache.set(regionId, { prices, expiry: Date.now() + 3600000 });
+    res.json({ regionId, prices });
+
+  } catch (err) {
+    console.error(`Region ${req.params.regionId} prices error:`, err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -503,7 +818,7 @@ app.get('/api/blueprint-database', security.apiLimiter, async (req, res) => {
 
 // CALCULATE PROFITABILITY - Server-side pre-calculation
 // Returns only top N profitable items
-app.post('/api/calculate-profitability', async (req, res) => {
+app.post('/api/calculate-profitability', security.apiLimiter, async (req, res) => {
   try {
     const { ownedBlueprints, topN = 20 } = req.body;
     
@@ -513,9 +828,11 @@ app.post('/api/calculate-profitability', async (req, res) => {
 
     console.log(`⟳ Calculating profitability for ${ownedBlueprints.length} blueprints...`);
 
+    const regionId = req.body.regionId || 10000002;
     const blueprintIds = ownedBlueprints.map(bp => bp.type_id);
     const results = [];
-    const prices = jitaPricesCache || {};
+    const prices = regionPriceCache.get(regionId)?.prices || {};
+    console.log(`  Using region ${regionId} prices`);
 
     for (const bpId of blueprintIds) {
       const bp = await dbGet(`
@@ -604,7 +921,7 @@ async function calculateMaterialCost(materialId, quantity, prices) {
 }
 
 // PRODUCTION CHAIN - Full recursive build tree
-app.post('/api/production-chain', async (req, res) => {
+app.post('/api/production-chain', security.apiLimiter, async (req, res) => {
   try {
     const { itemName, ownedBlueprints } = req.body;
 
@@ -722,7 +1039,7 @@ async function buildMaterialChain(material, prices, ownedBpIds) {
 
 // GET JITA PRICE - Single item price lookup from cache
 // Used by AI tool to query prices on-demand
-app.post('/api/get-price', async (req, res) => {
+app.post('/api/get-price', security.apiLimiter, async (req, res) => {
   try {
     const { itemName, typeId } = req.body;
     
@@ -747,7 +1064,8 @@ app.post('/api/get-price', async (req, res) => {
     }
     
     // Get price from cache
-    const prices = jitaPricesCache || {};
+    const regionId = req.query.regionId || 10000002;
+    const prices = regionPriceCache.get(regionId)?.prices || {};
     const priceData = prices[targetTypeId];
     
     if (!priceData) {
@@ -777,7 +1095,7 @@ app.post('/api/get-price', async (req, res) => {
 
 // GET BLUEPRINT - Query any blueprint from database
 // Used by AI to get materials for any item
-app.post('/api/get-blueprint', async (req, res) => {
+app.post('/api/get-blueprint', security.apiLimiter, async (req, res) => {
   // Ensure JSON response even on catastrophic failure
   try {
     const { itemName, productId } = req.body;
@@ -861,8 +1179,8 @@ app.post('/api/get-blueprint', async (req, res) => {
           materialId: mat.material_id,
           name: matName,
           quantity: mat.quantity,
-          unitCost: matPrice ? matPrice.buy : 0,
-          totalCost: matPrice ? matPrice.buy * mat.quantity : 0
+          unitCost: matPrice ? (matPrice.sell || matPrice.buy || 0) : 0,
+          totalCost: matPrice ? (matPrice.sell || matPrice.buy || 0) * mat.quantity : 0
         };
       })
     );
@@ -895,9 +1213,16 @@ app.post('/api/get-blueprint', async (req, res) => {
 });
 
 // ITEM DETAILS - For right panel with build analysis
-app.post('/api/item-details', async (req, res) => {
+app.post('/api/item-details', security.apiLimiter, async (req, res) => {
   try {
-    const { typeId, assets, ownedBlueprints } = req.body;
+    const {
+      typeId,
+      assets,
+      ownedBlueprints,
+      regionId         = 10000002,  // sell hub — drives displayed current price
+      materialRegionId = regionId,  // source hub — drives material unit costs in build analysis
+    } = req.body;
+
     if (!typeId) {
       return res.status(400).json({ error: "Missing typeId" });
     }
@@ -938,15 +1263,21 @@ app.post('/api/item-details', async (req, res) => {
       }
     }
 
-    // Add current Jita prices from cache
-    const prices = jitaPricesCache || {};
-    if (prices[typeId]) {
+    // Sell-hub prices — used for the "Current Market" price display and profit calculation
+    const sellPrices = regionPriceCache.get(regionId)?.prices || jitaPricesCache || {};
+    if (sellPrices[typeId]) {
       itemDetails.currentPrice = {
-        sell: prices[typeId].sell,
-        buy: prices[typeId].buy,
-        median: prices[typeId].median
+        sell:   sellPrices[typeId].sell,
+        buy:    sellPrices[typeId].buy,
+        median: sellPrices[typeId].median,
       };
     }
+
+    // Source-hub prices — used for material unit costs in the build analysis.
+    // Falls back to sell prices when source == sell (or source cache is cold).
+    const matPrices = (materialRegionId !== regionId)
+      ? (regionPriceCache.get(materialRegionId)?.prices || sellPrices)
+      : sellPrices;
 
     // BUILD ANALYSIS (if assets and blueprints provided)
     if (assets && ownedBlueprints) {
@@ -1022,8 +1353,11 @@ app.post('/api/item-details', async (req, res) => {
             }
           }
 
-          const matPrice = prices[mat.material_id];
-          const unitCost = matPrice ? matPrice.buy : 0;
+          // Unit cost uses the source-hub SELL price (lowest ask) — the price a
+          // manufacturer actually pays to buy materials immediately from the market.
+          // Using .buy (highest bid) would understate costs; consistent with /api/true-cost.
+          const matPrice = matPrices[mat.material_id];
+          const unitCost = matPrice ? (matPrice.sell || matPrice.buy || 0) : 0;
           const itemCost = unitCost * needed;
           totalCost += itemCost;
 
@@ -1042,7 +1376,7 @@ app.post('/api/item-details', async (req, res) => {
           if (shortage > 0) canBuild = false;
         }
 
-        // Calculate potential profit
+        // Calculate potential profit — sell price from sell hub, material cost from source hub
         const sellPrice = itemDetails.currentPrice ? itemDetails.currentPrice.sell : 0;
         const productQuantity = blueprint.product_quantity || 1;
         const batchRevenue = sellPrice * productQuantity;
@@ -1075,7 +1409,7 @@ app.post('/api/item-details', async (req, res) => {
 
 // ANALYZE BLUEPRINTS - Calculate profitability/buildability for all user BPs
 // Used by AI to get top profitable/buildable items
-app.post('/api/analyze-blueprints', async (req, res) => {
+app.post('/api/analyze-blueprints', security.apiLimiter, async (req, res) => {
   try {
     const { ownedBlueprints, assets, sortBy = 'profit', limit = 20, buildableOnly = false } = req.body;
     
@@ -1167,7 +1501,7 @@ app.post('/api/analyze-blueprints', async (req, res) => {
         const shortage = Math.max(0, needed - userHas);
         
         const matPrice = jitaPricesCache ? jitaPricesCache[mat.material_id] : null;
-        const unitCost = matPrice ? matPrice.buy : 0;
+        const unitCost = matPrice ? (matPrice.sell || matPrice.buy || 0) : 0;
         totalCost += unitCost * needed;
         
         if (shortage > 0) canBuild = false;
@@ -1508,7 +1842,7 @@ app.post('/api/ai-chat',
       },
       {
         name: "get_precomputed",
-        description: "PREFERRED. Pre-computed profitability for mfg + reactions. Use FIRST for profit/market/ISK-hour questions. activity_id: 1=mfg, 9=reaction. Fall back to analyze_blueprints only for asset-specific buildability.",
+        description: "PREFERRED. Pre-computed profitability for mfg + reactions. Use FIRST for profit/market/ISK-hour questions. activity_id: 1=mfg, 9=reaction. Fall back to analyze_blueprints only for asset-specific buildability. Supports regionId for hub-specific queries.",
         input_schema: {
           type: "object",
           properties: {
@@ -1537,6 +1871,10 @@ app.post('/api/ai-chat',
               type: "string",
               enum: ["all", "manufacturing", "reaction"],
               description: "all | manufacturing | reaction"
+            },
+            regionId: {
+              type: "number",
+              description: "Market hub region ID (default 10000002 = Jita). Use for hub-specific profit questions: Jita=10000002, Amarr=10000043, Dodixie=10000032, Hek=10000042, Rens=10000030, Syndicate=10000041"
             }
           },
           required: ["sort"]
@@ -1559,6 +1897,34 @@ app.post('/api/ai-chat',
               description: "name | quantity"
             }
           }
+        }
+      },
+      {
+        name: "compare_markets",
+        description: "Compare manufacturing profit for a specific item across ALL trade hubs. Shows profit for two strategies per hub: (A) local materials + local sell, (B) Jita materials + hub sell price. Use when user asks: where should I sell this, which hub is best for X, compare Jita vs Amarr for X, should I buy materials in Jita and sell in Amarr, cross-hub strategy questions.",
+        input_schema: {
+          type: "object",
+          properties: {
+            query: {
+              type: "string",
+              description: "Product or blueprint name to compare across hubs (partial match supported, e.g. 'Rifter', 'Drake')"
+            }
+          },
+          required: ["query"]
+        }
+      },
+      {
+        name: "get_price_comparison",
+        description: "Compare buy and sell prices for ANY item across all 6 trade hubs (Jita, Amarr, Dodixie, Hek, Rens, Syndicate). Returns prices sorted cheapest-to-buy and highest-to-sell, plus arbitrage opportunity. Use proactively whenever the user asks about item prices, where to buy or sell anything (especially raw materials, minerals, loot, commodities), price differences between hubs, or trade opportunities. Unlike compare_markets (which is for manufactured goods), this works for any tradeable item.",
+        input_schema: {
+          type: "object",
+          properties: {
+            item_name: {
+              type: "string",
+              description: "Name of the item to price-check (e.g. 'Veldspaar', 'Tritanium', 'Morphite', 'Megacyte', 'Rifter')"
+            }
+          },
+          required: ["item_name"]
         }
       }
     ];
@@ -1719,6 +2085,11 @@ app.post('/api/ai-chat',
                 const pcSearch       = toolUse.input.search;
                 const pcIncludeRisky = toolUse.input.includeRisky || false;
                 const pcActivity     = toolUse.input.activityType || 'all';
+                // Allow AI to query a specific hub; default Jita
+                const pcRegionId     = VALID_REGIONS.includes(toolUse.input.regionId)
+                                       ? toolUse.input.regionId
+                                       : 10000002;
+                const pcHubName      = REGION_HUB_NAMES[pcRegionId] || 'Jita';
 
                 const allowedSorts = {
                   profit: 'profit DESC',
@@ -1738,8 +2109,8 @@ app.post('/api/ai-chat',
                 if (pcSearch) {
                   const sanitised = pcSearch.replace(/[^a-zA-Z0-9 '\-]/g, '').substring(0, 50);
 
-                  let whereConditions = ['product_name LIKE ?', 'profit > ?'];
-                  const params = [`%${sanitised}%`, pcMinProfit];
+                  let whereConditions = ['region_id = ?', 'product_name LIKE ?', 'profit > ?'];
+                  const params = [pcRegionId, `%${sanitised}%`, pcMinProfit];
                   if (activityFilter) whereConditions.push(activityFilter);
 
                   // Exclude CRITICAL risks only (not low_volume)
@@ -1762,8 +2133,8 @@ app.post('/api/ai-chat',
                     ORDER BY ${pcOrder} LIMIT ?
                   `, [...params, pcLimit]);
                 } else {
-                  let whereConditions = ['profit > ?', 'sell_price > 0'];
-                  const params = [pcMinProfit];
+                  let whereConditions = ['region_id = ?', 'profit > ?', 'sell_price > 0'];
+                  const params = [pcRegionId, pcMinProfit];
 
                   if (activityFilter) whereConditions.push(activityFilter);
 
@@ -1792,12 +2163,125 @@ app.post('/api/ai-chat',
                   results: pcResults,
                   count: pcResults.length,
                   sort: pcSort,
+                  hub: pcHubName,
+                  regionId: pcRegionId,
                   source: 'precomputed'
                 };
               } catch (pcErr) {
                 toolResult = { error: pcErr.message, results: [] };
               }
               break;
+
+            case "compare_markets": {
+              try {
+                const cmQuery = (toolUse.input.query || '').replace(/[^a-zA-Z0-9 '\-]/g, '').substring(0, 80);
+                if (!cmQuery) {
+                  toolResult = { error: 'query parameter is required' };
+                  break;
+                }
+
+                // Self-join: sell region × Jita (for Jita-materials strategy)
+                // qty is derived from the sell region's own coherent precomputed data
+                const rows = await dbAll(`
+                  SELECT
+                    sell.region_id,
+                    sell.product_id,
+                    sell.product_name,
+                    sell.sell_price,
+                    sell.buy_price,
+                    sell.material_cost   AS local_material_cost,
+                    sell.profit          AS local_profit,
+                    sell.profit_margin   AS local_margin,
+                    sell.isk_per_hour    AS local_isk_per_hour,
+                    sell.build_time,
+                    sell.avg_daily_volume,
+                    jita.material_cost   AS jita_material_cost,
+                    CAST(ROUND(
+                      (sell.profit + sell.material_cost) / NULLIF(sell.sell_price, 0)
+                    ) AS INTEGER)        AS product_qty
+                  FROM precomputed_profits sell
+                  JOIN precomputed_profits jita
+                    ON  jita.blueprint_id = sell.blueprint_id
+                    AND jita.region_id    = 10000002
+                  WHERE sell.product_name LIKE ?
+                  ORDER BY sell.region_id
+                `, [`%${cmQuery}%`]);
+
+                if (!rows.length) {
+                  toolResult = { error: `No precomputed data found for "${cmQuery}". Try a shorter or different name.` };
+                  break;
+                }
+
+                // Group by product (query might match multiple items)
+                const byProduct = {};
+                for (const row of rows) {
+                  const key = row.product_id;
+                  if (!byProduct[key]) byProduct[key] = { product_name: row.product_name, hubs: [] };
+                  const qty = Math.max(1, row.product_qty || 1);
+                  const buildHrs = (row.build_time || 0) / 3600;
+
+                  // Strategy B: Jita materials → this hub sell
+                  const jitaMatRevenue = row.sell_price * qty;
+                  const jitaMatProfit  = jitaMatRevenue - row.jita_material_cost;
+                  const jitaMatMargin  = jitaMatRevenue > 0 ? (jitaMatProfit / jitaMatRevenue) * 100 : 0;
+                  const jitaMatIskPH   = buildHrs > 0 ? jitaMatProfit / buildHrs : 0;
+
+                  byProduct[key].hubs.push({
+                    hub:          REGION_HUB_NAMES[row.region_id] || `Region ${row.region_id}`,
+                    regionId:     row.region_id,
+                    sellPrice:    row.sell_price,
+                    productQty:   qty,
+                    avgDailyVol:  row.avg_daily_volume,
+                    // Strategy A: buy materials locally, sell locally
+                    localMaterials: {
+                      materialCost: row.local_material_cost,
+                      profit:       row.local_profit,
+                      margin:       parseFloat(row.local_margin?.toFixed(1) ?? 0),
+                      iskPerHour:   row.local_isk_per_hour,
+                    },
+                    // Strategy B: buy materials in Jita, sell in this hub
+                    jitaMaterials: {
+                      materialCost: row.jita_material_cost,
+                      profit:       jitaMatProfit,
+                      margin:       parseFloat(jitaMatMargin.toFixed(1)),
+                      iskPerHour:   jitaMatIskPH,
+                    },
+                  });
+                }
+
+                // For each product, find the best hub for each strategy
+                const products = Object.values(byProduct).slice(0, 3); // cap at 3 matching items
+                for (const prod of products) {
+                  const bestJita  = prod.hubs.reduce((best, h) => h.jitaMaterials.profit  > best.jitaMaterials.profit  ? h : best, prod.hubs[0]);
+                  const bestLocal = prod.hubs.reduce((best, h) => h.localMaterials.profit > best.localMaterials.profit ? h : best, prod.hubs[0]);
+                  prod.recommendation = {
+                    bestJitaMaterialsStrategy: {
+                      sellHub:     bestJita.hub,
+                      profit:      bestJita.jitaMaterials.profit,
+                      margin:      bestJita.jitaMaterials.margin,
+                      iskPerHour:  bestJita.jitaMaterials.iskPerHour,
+                      summary:     `Buy materials in Jita, sell in ${bestJita.hub} — ${bestJita.jitaMaterials.margin.toFixed(1)}% margin`
+                    },
+                    bestLocalStrategy: {
+                      sellHub:     bestLocal.hub,
+                      profit:      bestLocal.localMaterials.profit,
+                      margin:      bestLocal.localMaterials.margin,
+                      iskPerHour:  bestLocal.localMaterials.iskPerHour,
+                      summary:     `Buy and sell locally in ${bestLocal.hub} — ${bestLocal.localMaterials.margin.toFixed(1)}% margin`
+                    }
+                  };
+                }
+
+                toolResult = {
+                  query: cmQuery,
+                  note: 'local_materials = buy and sell at same hub. jita_materials = buy inputs at Jita, sell finished goods at listed hub.',
+                  products,
+                };
+              } catch (cmErr) {
+                toolResult = { error: cmErr.message };
+              }
+              break;
+            }
 
             case "diagnose_blueprints": {
               try {
@@ -1870,6 +2354,73 @@ app.post('/api/ai-chat',
               break;
             }
 
+            case "get_price_comparison": {
+              try {
+                const itemName = (toolUse.input.item_name || '').trim();
+                if (!itemName) {
+                  toolResult = { error: 'item_name is required' };
+                  break;
+                }
+
+                // Case-insensitive exact lookup first, then partial match
+                let item = await dbGet(
+                  'SELECT type_id, name FROM items WHERE LOWER(name) = LOWER(?)',
+                  [itemName]
+                );
+                if (!item) {
+                  // Try partial match for common shorthand (e.g. "Trit" → "Tritanium")
+                  item = await dbGet(
+                    'SELECT type_id, name FROM items WHERE LOWER(name) LIKE LOWER(?) LIMIT 1',
+                    [`%${itemName}%`]
+                  );
+                }
+
+                if (!item) {
+                  toolResult = { error: `Item "${itemName}" not found. Check spelling or try a more specific name.` };
+                  break;
+                }
+
+                const priceData = await getItemPricesAllRegions(item.type_id);
+
+                if (priceData.length === 0) {
+                  toolResult = { error: `No live price data found for ${item.name} across any hub. It may not be actively traded.` };
+                  break;
+                }
+
+                // Sort: cheapest sell price first (best place to buy), highest buy price first (best place to sell)
+                const bySellPrice = [...priceData].sort((a, b) => a.sell_price - b.sell_price);
+                const byBuyPrice  = [...priceData].sort((a, b) => b.buy_price  - a.buy_price);
+
+                const bestToBuyAt  = bySellPrice[0];   // lowest ask = cheapest to buy from
+                const bestToSellAt = byBuyPrice[0];    // highest bid = best place to sell into
+
+                const arbitrage = bestToSellAt.buy_price - bestToBuyAt.sell_price;
+
+                toolResult = {
+                  item_name:   item.name,
+                  type_id:     item.type_id,
+                  note:        'buy_price = highest buy order (what you sell into). sell_price = lowest sell order (what you buy from).',
+                  all_hubs:    priceData,
+                  cheapest_to_buy_from: {
+                    hub:        bestToBuyAt.hub_name,
+                    sell_price: bestToBuyAt.sell_price,
+                    summary:    `Buy in ${bestToBuyAt.hub_name} at ${bestToBuyAt.sell_price.toLocaleString()} ISK`,
+                  },
+                  best_to_sell_into: {
+                    hub:       bestToSellAt.hub_name,
+                    buy_price: bestToSellAt.buy_price,
+                    summary:   `Sell in ${bestToSellAt.hub_name} at ${bestToSellAt.buy_price.toLocaleString()} ISK`,
+                  },
+                  arbitrage_opportunity: arbitrage > 0
+                    ? `Buy in ${bestToBuyAt.hub_name} (${bestToBuyAt.sell_price.toLocaleString()} ISK), sell in ${bestToSellAt.hub_name} (${bestToSellAt.buy_price.toLocaleString()} ISK) = +${arbitrage.toLocaleString()} ISK/unit margin`
+                    : 'No profitable arbitrage between hubs at current prices.',
+                };
+              } catch (pcErr) {
+                toolResult = { error: pcErr.message };
+              }
+              break;
+            }
+
             default:
               toolResult = { error: `Unknown tool: ${toolUse.name}` };
           }
@@ -1929,7 +2480,7 @@ app.post('/api/session-data',
   async (req, res) => {
     try {
       const characterId = req.characterId;
-      const { assets, blueprints, prices, wallet, jobs, skills } = req.body;
+      const { assets, blueprints, prices, wallet, jobs, skills, standings } = req.body;
 
       // Validate data exists
       if (!assets || !blueprints) {
@@ -1972,6 +2523,7 @@ app.post('/api/session-data',
         wallet: wallet || 0,
         jobs: jobs || [],
         skills: skills || [],
+        standings: standings || { factions: {}, corps: {} },
         accessibleStructures: Array.from(structureIds),
         cachedAt: new Date().toISOString()
       }, 7200000); // 2 hours
@@ -2159,10 +2711,7 @@ async function runPreCompute() {
     console.log('⟳ PRE-COMPUTE JOB STARTING');
     console.log('═══════════════════════════════════════════');
 
-    // Step 1: Ensure fresh prices
-    const prices = await ensureJitaPrices();
-
-    // Step 2: Load all blueprints and materials into memory (batch, not per-item)
+    // Step 1: Load all blueprints and materials into memory once (shared across all regions)
     const allBlueprints = await dbAll(`
       SELECT b.blueprint_id, b.product_id, b.product_quantity, b.build_time,
              COALESCE(b.activity_id, 1) AS activity_id, i.name AS product_name
@@ -2188,56 +2737,73 @@ async function runPreCompute() {
       bpByProduct[bp.product_id] = bp.blueprint_id;
     }
 
-    // Step 3: Calculate profitability for each blueprint
-    console.log(`⟳ Processing ${allBlueprints.length} blueprints...`);
+    console.log(`⟳ Processing ${allBlueprints.length} blueprints × ${VALID_REGIONS.length} regions...`);
 
-    // Begin transaction for bulk insert
-    await dbRun('BEGIN TRANSACTION');
-
-    // Clear old data
-    await dbRun('DELETE FROM precomputed_profits');
-
-    let processed = 0;
+    // Step 2: For each market region, fetch prices and compute profitability
+    let totalProcessed = 0;
     const computedAt = new Date().toISOString();
 
-    for (const bp of allBlueprints) {
-      const materials = materialsByBp[bp.blueprint_id] || [];
-      let totalMatCost = 0;
+    for (const regionId of VALID_REGIONS) {
+      console.log(`⟳ Region ${regionId}: fetching prices...`);
 
-      for (const mat of materials) {
-        totalMatCost += calculateMaterialCostSync(
-          mat.material_id, mat.quantity, prices, materialsByBp, bpByProduct
-        );
+      let prices;
+      try {
+        prices = await fetchRegionPrices(regionId);
+        regionPriceCache.set(regionId, { prices, expiry: Date.now() + 3600000 });
+        if (regionId === 10000002) {
+          jitaPricesCacheExpiry = Date.now() + 3600000; // keep compat accessor in sync
+        }
+      } catch (err) {
+        console.error(`⚠ Region ${regionId}: price fetch failed, skipping — ${err.message}`);
+        continue;
       }
 
-      const sellPrice = prices[bp.product_id]?.sell || 0;
-      const buyPrice = prices[bp.product_id]?.buy || 0;
-      const productQuantity = bp.product_quantity || 1;
-      const batchRevenue = sellPrice * productQuantity;
-      const profit = batchRevenue - totalMatCost;
-      const profitMargin = batchRevenue > 0 ? (profit / batchRevenue) * 100 : 0;
+      await dbRun('BEGIN TRANSACTION');
+      await dbRun('DELETE FROM precomputed_profits WHERE region_id = ?', [regionId]);
 
-      // ISK per hour (build_time is in seconds)
-      const buildTimeHours = (bp.build_time || 1) / 3600;
-      const iskPerHour = buildTimeHours > 0 ? profit / buildTimeHours : 0;
+      let regionProcessed = 0;
 
-      await dbRun(`
-        INSERT INTO precomputed_profits
-          (blueprint_id, product_id, product_name, material_cost, sell_price,
-           buy_price, profit, profit_margin, isk_per_hour, build_time,
-           material_count, computed_at, price_source, activity_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'jita', ?)
-      `, [
-        bp.blueprint_id, bp.product_id, bp.product_name || null,
-        totalMatCost, sellPrice, buyPrice, profit, profitMargin,
-        iskPerHour, bp.build_time || 0, materials.length, computedAt,
-        bp.activity_id || 1
-      ]);
+      for (const bp of allBlueprints) {
+        const materials = materialsByBp[bp.blueprint_id] || [];
+        let totalMatCost = 0;
 
-      processed++;
+        for (const mat of materials) {
+          totalMatCost += calculateMaterialCostSync(
+            mat.material_id, mat.quantity, prices, materialsByBp, bpByProduct
+          );
+        }
+
+        const sellPrice = prices[bp.product_id]?.sell || 0;
+        const buyPrice  = prices[bp.product_id]?.buy  || 0;
+        const productQuantity = bp.product_quantity || 1;
+        const batchRevenue = sellPrice * productQuantity;
+        const profit = batchRevenue - totalMatCost;
+        const profitMargin = batchRevenue > 0 ? (profit / batchRevenue) * 100 : 0;
+
+        const buildTimeHours = (bp.build_time || 1) / 3600;
+        const iskPerHour = buildTimeHours > 0 ? profit / buildTimeHours : 0;
+
+        await dbRun(`
+          INSERT INTO precomputed_profits
+            (blueprint_id, region_id, product_id, product_name, material_cost, sell_price,
+             buy_price, profit, profit_margin, isk_per_hour, build_time,
+             material_count, computed_at, price_source, activity_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [
+          bp.blueprint_id, regionId, bp.product_id, bp.product_name || null,
+          totalMatCost, sellPrice, buyPrice, profit, profitMargin,
+          iskPerHour, bp.build_time || 0, materials.length, computedAt,
+          regionId === 10000002 ? 'jita' : `region_${regionId}`,
+          bp.activity_id || 1
+        ]);
+
+        regionProcessed++;
+      }
+
+      await dbRun('COMMIT');
+      totalProcessed += regionProcessed;
+      console.log(`✓ Region ${regionId}: ${regionProcessed} blueprints processed`);
     }
-
-    await dbRun('COMMIT');
 
     const durationSec = (Date.now() - startTime) / 1000;
 
@@ -2249,16 +2815,16 @@ async function runPreCompute() {
           duration_seconds = ?,
           status = 'completed'
       WHERE id = ?
-    `, [processed, durationSec, runId]);
+    `, [totalProcessed, durationSec, runId]);
 
     console.log('═══════════════════════════════════════════');
     console.log(`✓ PRE-COMPUTE COMPLETE`);
-    console.log(`  Blueprints: ${processed}`);
+    console.log(`  Blueprints × Regions: ${totalProcessed}`);
     console.log(`  Duration: ${durationSec.toFixed(1)}s`);
     console.log('═══════════════════════════════════════════');
 
     preComputeRunning = false;
-    return { status: 'completed', processed, durationSec };
+    return { status: 'completed', processed: totalProcessed, durationSec };
 
   } catch (err) {
     // Rollback on failure
@@ -2324,11 +2890,13 @@ async function runVolumeEnrichment() {
 
     const JITA_REGION = 10000002;
     
-    // Get top 500 items that don't have volume data yet (or need refresh)
+    // Get top items from Jita that don't have volume data yet (or need refresh).
+    // Volume history comes from Jita ESI — enrich Jita rows, then copy to other regions.
     const itemsToEnrich = await dbAll(`
       SELECT product_id, product_name, sell_price, buy_price, material_cost
       FROM precomputed_profits
-      WHERE profit > 0 AND sell_price > 0
+      WHERE region_id = 10000002
+        AND profit > 0 AND sell_price > 0
         AND (avg_daily_volume IS NULL OR avg_daily_volume = 0)
       ORDER BY profit DESC
       LIMIT 2000
@@ -2405,13 +2973,13 @@ async function runVolumeEnrichment() {
           liquidityRisk = 'suspicious_spread'; // >90% spread is unusual
         }
 
-        // Update the record
+        // Update Jita row only — copy to other regions after the loop
         await dbRun(`
           UPDATE precomputed_profits
           SET avg_daily_volume = ?,
               market_group_id = ?,
               liquidity_risk = ?
-          WHERE product_id = ?
+          WHERE product_id = ? AND region_id = 10000002
         `, [avgVolume, marketGroupId, liquidityRisk, item.product_id]);
 
         enriched++;
@@ -2431,6 +2999,31 @@ async function runVolumeEnrichment() {
         console.error(`  ✗ Error enriching ${item.product_name}:`, err.message);
         errors++;
       }
+    }
+
+    // Copy volume/market data from Jita rows to all other region rows.
+    // avg_daily_volume and market_group_id are item properties, not region-specific.
+    if (enriched > 0) {
+      console.log('⟳ Copying volume data from Jita to other regions...');
+      // UPDATE ... FROM syntax (SQLite ≥3.33): computes Jita values once as a
+      // derived table, then does a single-pass join — O(n) instead of the old
+      // correlated-subquery approach which was O(n²) and held the write lock for
+      // many seconds, freezing the site during precompute.
+      await dbRun(`
+        UPDATE precomputed_profits
+        SET avg_daily_volume = jita.avg_daily_volume,
+            market_group_id  = jita.market_group_id,
+            liquidity_risk   = jita.liquidity_risk
+        FROM (
+          SELECT product_id, avg_daily_volume, market_group_id, liquidity_risk
+          FROM   precomputed_profits
+          WHERE  region_id = 10000002
+            AND  avg_daily_volume IS NOT NULL
+        ) AS jita
+        WHERE precomputed_profits.product_id = jita.product_id
+          AND precomputed_profits.region_id  != 10000002
+      `);
+      console.log('✓ Volume data copied to all regions');
     }
 
     const durationSec = (Date.now() - startTime) / 1000;
@@ -2462,55 +3055,119 @@ async function runVolumeEnrichment() {
 // Serves data from DB — zero AI tokens
 app.get('/api/top-profitable', security.apiLimiter, async (req, res) => {
   try {
-    const sort = req.query.sort || 'profit';
-    const limit = Math.min(parseInt(req.query.limit) || 20, 100);
-    const minProfit = parseFloat(req.query.minProfit) || 0;
-    const minVolume = parseFloat(req.query.minVolume) !== undefined ? parseFloat(req.query.minVolume) : 5;
+    const sort        = req.query.sort || 'profit';
+    const limit       = Math.min(parseInt(req.query.limit) || 20, 100);
+    const minProfit   = parseFloat(req.query.minProfit) || 0;
+    // parseFloat(undefined) returns NaN; NaN !== undefined is always true, so the
+    // ternary must check the raw query string, not the parsed float.
+    const minVolume   = req.query.minVolume !== undefined ? parseFloat(req.query.minVolume) : 5;
     const includeRisky = req.query.includeRisky === 'true';
+
+    // Sell hub — where finished goods are listed for sale
+    const regionId = VALID_REGIONS.includes(parseInt(req.query.regionId))
+      ? parseInt(req.query.regionId) : 10000002;
+
+    // Source hub — where raw materials are purchased.
+    // Defaults to the sell hub when not supplied (preserves existing behaviour).
+    const sourceRegionId = VALID_REGIONS.includes(parseInt(req.query.sourceRegionId))
+      ? parseInt(req.query.sourceRegionId) : regionId;
+
+    const isCrossHub = sourceRegionId !== regionId;
 
     // Validate sort column to prevent SQL injection
     const allowedSorts = {
-      profit: 'profit DESC',
-      margin: 'profit_margin DESC',
-      isk_per_hour: 'isk_per_hour DESC',
-      cost: 'material_cost ASC',
-      sell_price: 'sell_price DESC'
+      profit:      'profit DESC',
+      margin:      'profit_margin DESC',
+      isk_per_hour:'isk_per_hour DESC',
+      cost:        'material_cost ASC',
+      sell_price:  'sell_price DESC',
     };
-
     const orderClause = allowedSorts[sort] || allowedSorts.profit;
 
-    // Build WHERE clause with CRITICAL risk filtering only
-    // low_volume is a WARNING (shown to user), not CRITICAL (excluded)
-    let whereConditions = ['profit > ?', 'sell_price > 0'];
-    const params = [minProfit];
+    // Shared liquidity-risk filter (low_volume is a WARNING, not excluded)
+    const riskFilter = `(
+      liquidity_risk IS NULL
+      OR liquidity_risk = ""
+      OR liquidity_risk = "low_volume"
+    )`;
 
-    // Apply volume filter (skip if volume data not available yet)
-    if (minVolume > 0) {
-      whereConditions.push('(avg_daily_volume >= ? OR avg_daily_volume IS NULL)');
-      params.push(minVolume);
+    let results;
+
+    if (!isCrossHub) {
+      // ── Same-hub path (unchanged behaviour) ──────────────────────────────
+      let whereConditions = ['region_id = ?', 'profit > ?', 'sell_price > 0'];
+      const params = [regionId, minProfit];
+
+      if (minVolume > 0) {
+        whereConditions.push('(avg_daily_volume >= ? OR avg_daily_volume IS NULL)');
+        params.push(minVolume);
+      }
+      if (!includeRisky) whereConditions.push(riskFilter);
+
+      results = await dbAll(`
+        SELECT blueprint_id, product_id, product_name, material_cost,
+               sell_price, buy_price, profit, profit_margin, isk_per_hour,
+               build_time, material_count, computed_at,
+               avg_daily_volume, market_group_id, liquidity_risk
+        FROM precomputed_profits
+        WHERE ${whereConditions.join(' AND ')}
+        ORDER BY ${orderClause}
+        LIMIT ?
+      `, [...params, limit]);
+
+    } else {
+      // ── Cross-hub path: materials from sourceRegionId, sell in regionId ──
+      // Self-join precomputed_profits: sell-hub row for revenue/metadata,
+      // source-hub row for material cost.  Profit is recalculated in SQL so
+      // filtering and sorting are always on the true cross-hub figure.
+      let joinConditions = [
+        `sell.region_id = ?`,
+        `(sell.sell_price - src.material_cost) > ?`,
+        `sell.sell_price > 0`,
+      ];
+      const params = [regionId, minProfit];
+
+      if (minVolume > 0) {
+        joinConditions.push('(sell.avg_daily_volume >= ? OR sell.avg_daily_volume IS NULL)');
+        params.push(minVolume);
+      }
+      if (!includeRisky) {
+        joinConditions.push(riskFilter.replace(/liquidity_risk/g, 'sell.liquidity_risk'));
+      }
+
+      results = await dbAll(`
+        SELECT
+          sell.blueprint_id,
+          sell.product_id,
+          sell.product_name,
+          src.material_cost,
+          sell.sell_price,
+          sell.buy_price,
+          (sell.sell_price - src.material_cost)                              AS profit,
+          CASE WHEN sell.sell_price > 0
+            THEN (sell.sell_price - src.material_cost) / sell.sell_price * 100
+            ELSE 0 END                                                        AS profit_margin,
+          CASE WHEN sell.build_time > 0
+            THEN (sell.sell_price - src.material_cost) / (sell.build_time / 3600.0)
+            ELSE 0 END                                                        AS isk_per_hour,
+          sell.build_time,
+          sell.material_count,
+          sell.computed_at,
+          sell.avg_daily_volume,
+          sell.market_group_id,
+          sell.liquidity_risk,
+          COALESCE(sell.activity_id, 1) AS activity_id
+        FROM precomputed_profits sell
+        JOIN precomputed_profits src
+          ON  src.blueprint_id = sell.blueprint_id
+          AND src.region_id    = ?
+        WHERE ${joinConditions.join(' AND ')}
+        ORDER BY profit DESC
+        LIMIT ?
+      `,
+      // sourceRegionId FIRST — binds JOIN's src.region_id = ? which precedes WHERE in SQL text
+      [sourceRegionId, ...params, limit]);
     }
-
-    // Exclude CRITICAL risks only (not low_volume)
-    if (!includeRisky) {
-      whereConditions.push(`(
-        liquidity_risk IS NULL 
-        OR liquidity_risk = ""
-        OR liquidity_risk = "low_volume"
-      )`);
-    }
-
-    const whereClause = whereConditions.join(' AND ');
-
-    const results = await dbAll(`
-      SELECT blueprint_id, product_id, product_name, material_cost,
-             sell_price, buy_price, profit, profit_margin, isk_per_hour,
-             build_time, material_count, computed_at,
-             avg_daily_volume, market_group_id, liquidity_risk
-      FROM precomputed_profits
-      WHERE ${whereClause}
-      ORDER BY ${orderClause}
-      LIMIT ?
-    `, [...params, limit]);
 
     // Get last run info
     const lastRun = await dbGet(`
@@ -2528,8 +3185,8 @@ app.get('/api/top-profitable', security.apiLimiter, async (req, res) => {
         COUNT(CASE WHEN liquidity_risk = 'low_volume' THEN 1 END) as tier3_low_volume,
         COUNT(CASE WHEN liquidity_risk = 'no_buy_orders' THEN 1 END) as tier4_no_buy_orders,
         COUNT(CASE WHEN liquidity_risk = 'suspicious_spread' THEN 1 END) as tier4_suspicious_spread
-      FROM precomputed_profits WHERE profit > 0
-    `);
+      FROM precomputed_profits WHERE profit > 0 AND region_id = ?
+    `, [regionId]);
 
     res.json({
       results,
@@ -2555,81 +3212,176 @@ app.get('/api/top-profitable', security.apiLimiter, async (req, res) => {
 // For Market Opportunities tab — shows only blueprints user can build
 app.get('/api/top-profitable-by-skills', security.apiLimiter, security.verifyEveToken, async (req, res) => {
   try {
-    const characterId = req.characterId;
-    const sort = req.query.sort || 'profit';
-    const limit = Math.min(parseInt(req.query.limit) || 50, 200);
-    const offset = Math.max(parseInt(req.query.offset) || 0, 0);
-    const minProfit = parseFloat(req.query.minProfit) || 0;
-    const minVolume = parseFloat(req.query.minVolume) !== undefined ? parseFloat(req.query.minVolume) : 5;
+    const characterId  = req.characterId;
+    const sort         = req.query.sort || 'profit';
+    const limit        = Math.min(parseInt(req.query.limit) || 50, 200);
+    const offset       = Math.max(parseInt(req.query.offset) || 0, 0);
+    const minProfit    = parseFloat(req.query.minProfit) || 0;
+    // parseFloat(undefined) returns NaN; NaN !== undefined is always true, so the
+    // ternary must check the raw query string, not the parsed float.
+    const minVolume    = req.query.minVolume !== undefined ? parseFloat(req.query.minVolume) : 5;
     const includeRisky = req.query.includeRisky === 'true';
 
+    // Sell hub — where finished goods are listed for sale
+    const regionId = VALID_REGIONS.includes(parseInt(req.query.regionId))
+      ? parseInt(req.query.regionId) : 10000002;
+
+    // Source hub — where raw materials are purchased.
+    // Defaults to the sell hub when not supplied (preserves existing behaviour).
+    const sourceRegionId = VALID_REGIONS.includes(parseInt(req.query.sourceRegionId))
+      ? parseInt(req.query.sourceRegionId) : regionId;
+
+    const isCrossHub = sourceRegionId !== regionId;
+
+    // Shared liquidity-risk filter (low_volume is a WARNING, not excluded)
+    const riskFilter = `(
+      liquidity_risk IS NULL
+      OR liquidity_risk = ""
+      OR liquidity_risk = "low_volume"
+    )`;
+
     // Get user's skills from session cache
-    const sessionKey = `session:${characterId}`;
+    const sessionKey  = `session:${characterId}`;
     const sessionData = getCached(sessionKey);
 
     if (!sessionData || !sessionData.skills || sessionData.skills.length === 0) {
       console.warn(`⚠ Skills not in session for character ${characterId} — returning unfiltered top-profitable`);
 
-      // Build same query as /api/top-profitable so the tab isn't blank
-      const fbAllowedSorts = { profit: 'profit DESC', margin: 'profit_margin DESC', isk_per_hour: 'isk_per_hour DESC' };
-      const fbOrder = fbAllowedSorts[sort] || fbAllowedSorts.profit;
-      const fbWhere = ['profit > ?', 'sell_price > 0', `(liquidity_risk IS NULL OR liquidity_risk = "" OR liquidity_risk = "low_volume")`];
-      const fbParams = [minProfit];
+      // Fall back to the same cross-hub aware logic but without skill filtering
+      const fbWhere  = isCrossHub
+        ? [`sell.region_id = ?`, `(sell.sell_price - src.material_cost) > ?`, `sell.sell_price > 0`,
+           `(sell.liquidity_risk IS NULL OR sell.liquidity_risk = "" OR sell.liquidity_risk = "low_volume")`]
+        : [`region_id = ?`, `profit > ?`, `sell_price > 0`,
+           `(liquidity_risk IS NULL OR liquidity_risk = "" OR liquidity_risk = "low_volume")`];
+
+      const fbParams = [regionId, minProfit];
+
       const fbResults = await dbAll(
-        `SELECT blueprint_id, product_id, product_name, material_cost, sell_price, buy_price, profit, profit_margin, isk_per_hour, build_time, material_count, computed_at, avg_daily_volume, liquidity_risk, COALESCE(activity_id,1) as activity_id FROM precomputed_profits WHERE ${fbWhere.join(' AND ')} ORDER BY ${fbOrder} LIMIT ?`,
-        [...fbParams, limit]
+        isCrossHub
+          ? `SELECT sell.blueprint_id, sell.product_id, sell.product_name,
+                    src.material_cost, sell.sell_price, sell.buy_price,
+                    (sell.sell_price - src.material_cost) AS profit,
+                    CASE WHEN sell.sell_price > 0
+                      THEN (sell.sell_price - src.material_cost) / sell.sell_price * 100
+                      ELSE 0 END AS profit_margin,
+                    CASE WHEN sell.build_time > 0
+                      THEN (sell.sell_price - src.material_cost) / (sell.build_time / 3600.0)
+                      ELSE 0 END AS isk_per_hour,
+                    sell.build_time, sell.material_count, sell.computed_at,
+                    sell.avg_daily_volume, sell.liquidity_risk, COALESCE(sell.activity_id,1) AS activity_id
+             FROM precomputed_profits sell
+             JOIN precomputed_profits src ON src.blueprint_id = sell.blueprint_id AND src.region_id = ?
+             WHERE ${fbWhere.join(' AND ')}
+             ORDER BY profit DESC LIMIT ?`
+          : `SELECT blueprint_id, product_id, product_name, material_cost, sell_price, buy_price,
+                    profit, profit_margin, isk_per_hour, build_time, material_count, computed_at,
+                    avg_daily_volume, liquidity_risk, COALESCE(activity_id,1) AS activity_id
+             FROM precomputed_profits
+             WHERE ${fbWhere.join(' AND ')}
+             ORDER BY profit DESC LIMIT ?`,
+        // sourceRegionId must be FIRST — it binds the JOIN's src.region_id = ?
+        // which appears before the WHERE clause in the SQL text.
+        isCrossHub ? [sourceRegionId, ...fbParams, limit] : [...fbParams, limit]
       );
+
       const fbLastRun = await dbGet(`SELECT completed_at FROM precompute_runs ORDER BY id DESC LIMIT 1`);
       return res.json({
         results: fbResults,
-        meta: { count: fbResults.length, sort, filter: 'unfiltered_skills_unavailable', lastComputed: fbLastRun?.completed_at || null }
+        meta: { count: fbResults.length, sort, filter: 'unfiltered_skills_unavailable',
+                lastComputed: fbLastRun?.completed_at || null,
+                sourceRegionId, sellRegionId: regionId },
       });
     }
 
     const characterSkills = sessionData.skills || [];
 
-    // Validate sort column
+    // Validate sort column to prevent SQL injection
     const allowedSorts = {
-      profit: 'profit DESC',
-      margin: 'profit_margin DESC',
+      profit:       'profit DESC',
+      margin:       'profit_margin DESC',
       isk_per_hour: 'isk_per_hour DESC',
-      cost: 'material_cost ASC',
-      sell_price: 'sell_price DESC'
+      cost:         'material_cost ASC',
+      sell_price:   'sell_price DESC',
     };
-
     const orderClause = allowedSorts[sort] || allowedSorts.profit;
 
-    // Build WHERE clause
-    let whereConditions = ['profit > ?', 'sell_price > 0'];
-    const params = [minProfit];
+    // Build candidate query — fetches 3× the needed count to survive skill filtering
+    let candidates;
 
-    if (minVolume > 0) {
-      whereConditions.push('(avg_daily_volume >= ? OR avg_daily_volume IS NULL)');
-      params.push(minVolume);
+    if (!isCrossHub) {
+      // ── Same-hub path (unchanged behaviour) ────────────────────────────
+      let whereConditions = ['region_id = ?', 'profit > ?', 'sell_price > 0'];
+      const params = [regionId, minProfit];
+
+      if (minVolume > 0) {
+        whereConditions.push('(avg_daily_volume >= ? OR avg_daily_volume IS NULL)');
+        params.push(minVolume);
+      }
+      if (!includeRisky) whereConditions.push(riskFilter);
+
+      candidates = await dbAll(`
+        SELECT blueprint_id, product_id, product_name, material_cost,
+               sell_price, buy_price, profit, profit_margin, isk_per_hour,
+               build_time, material_count, computed_at,
+               avg_daily_volume, market_group_id, liquidity_risk,
+               COALESCE(activity_id, 1) AS activity_id
+        FROM precomputed_profits
+        WHERE ${whereConditions.join(' AND ')}
+        ORDER BY ${orderClause}
+        LIMIT ?
+      `, [...params, (offset + limit) * 3]);
+
+    } else {
+      // ── Cross-hub path: materials from sourceRegionId, sell in regionId ─
+      let joinConditions = [
+        `sell.region_id = ?`,
+        `(sell.sell_price - src.material_cost) > ?`,
+        `sell.sell_price > 0`,
+      ];
+      const params = [regionId, minProfit];
+
+      if (minVolume > 0) {
+        joinConditions.push('(sell.avg_daily_volume >= ? OR sell.avg_daily_volume IS NULL)');
+        params.push(minVolume);
+      }
+      if (!includeRisky) {
+        joinConditions.push(riskFilter.replace(/liquidity_risk/g, 'sell.liquidity_risk'));
+      }
+
+      candidates = await dbAll(`
+        SELECT
+          sell.blueprint_id,
+          sell.product_id,
+          sell.product_name,
+          src.material_cost,
+          sell.sell_price,
+          sell.buy_price,
+          (sell.sell_price - src.material_cost)                              AS profit,
+          CASE WHEN sell.sell_price > 0
+            THEN (sell.sell_price - src.material_cost) / sell.sell_price * 100
+            ELSE 0 END                                                        AS profit_margin,
+          CASE WHEN sell.build_time > 0
+            THEN (sell.sell_price - src.material_cost) / (sell.build_time / 3600.0)
+            ELSE 0 END                                                        AS isk_per_hour,
+          sell.build_time,
+          sell.material_count,
+          sell.computed_at,
+          sell.avg_daily_volume,
+          sell.market_group_id,
+          sell.liquidity_risk,
+          COALESCE(sell.activity_id, 1) AS activity_id
+        FROM precomputed_profits sell
+        JOIN precomputed_profits src
+          ON  src.blueprint_id = sell.blueprint_id
+          AND src.region_id    = ?
+        WHERE ${joinConditions.join(' AND ')}
+        ORDER BY profit DESC
+        LIMIT ?
+      `,
+      // sourceRegionId must be FIRST — it binds the JOIN's src.region_id = ?
+      // which appears before the WHERE clause in the SQL text.
+      [sourceRegionId, ...params, (offset + limit) * 3]);
     }
-
-    if (!includeRisky) {
-      whereConditions.push(`(
-        liquidity_risk IS NULL
-        OR liquidity_risk = ""
-        OR liquidity_risk = "low_volume"
-      )`);
-    }
-
-    const whereClause = whereConditions.join(' AND ');
-
-    // Get candidate items — 3× (offset + limit) to survive skill filtering
-    const candidates = await dbAll(`
-      SELECT blueprint_id, product_id, product_name, material_cost,
-             sell_price, buy_price, profit, profit_margin, isk_per_hour,
-             build_time, material_count, computed_at,
-             avg_daily_volume, market_group_id, liquidity_risk,
-             COALESCE(activity_id, 1) as activity_id
-      FROM precomputed_profits
-      WHERE ${whereClause}
-      ORDER BY ${orderClause}
-      LIMIT ?
-    `, [...params, (offset + limit) * 3]);
 
     // Filter by skill requirements, skipping the first `offset` qualified items
     const results = [];
@@ -2655,18 +3407,22 @@ app.get('/api/top-profitable-by-skills', security.apiLimiter, security.verifyEve
     res.json({
       results,
       meta: {
-        count: results.length,
+        count:         results.length,
         sort,
         minProfit,
         minVolume,
         includeRisky,
-        filter: 'by_skills',
-        skillsLoaded: characterSkills.length,
-        lastComputed: lastRun?.completed_at || null,
+        filter:        'by_skills',
+        skillsLoaded:  characterSkills.length,
+        lastComputed:  lastRun?.completed_at || null,
         lastRunStatus: lastRun?.status || 'never',
         offset,
-        hasMore: results.length >= limit,
-      }
+        hasMore:       results.length >= limit,
+        // Hub context — lets the client know which hubs produced these figures
+        sellRegionId:   regionId,
+        sourceRegionId: sourceRegionId,
+        isCrossHub:     isCrossHub,
+      },
     });
 
   } catch (err) {
@@ -2833,13 +3589,28 @@ You ONLY answer questions about EVE Online:
 Politely refuse ALL non-EVE questions: "I'm specialized for EVE manufacturing only."
 
 ══ TOOLS (use these to answer questions — do not guess from memory) ══
-1. get_precomputed(sort, limit, search, minProfit, includeRisky, activityType)
-   PREFERRED for profit/market questions. Pre-computed Jita data, fast, no cost.
+1. get_precomputed(sort, limit, search, minProfit, includeRisky, activityType, regionId?)
+   PREFERRED for profit/market questions. Pre-computed data per hub, fast, no cost.
    Use FIRST for: "what's profitable", "top items", "best ISK/hour", "best reactions", "top reactions to run".
    activityType: "all" (default) | "manufacturing" | "reaction"
    Results include activity_id: 1=manufacturing, 9=reaction.
+   regionId: omit for Jita (default). Use hub IDs for hub-specific top lists:
+     Jita=10000002 | Amarr=10000043 | Dodixie=10000032 | Hek=10000042 | Rens=10000030 | Syndicate=10000041
+   Example: "What's most profitable to sell in Amarr?" → get_precomputed({ sort:"profit", regionId:10000043 })
 
-2. analyze_blueprints(sortBy, limit, buildableOnly)
+2. compare_markets(query)
+   Cross-hub profit comparison for a SPECIFIC item across ALL 6 trade hubs.
+   Returns profit for two strategies per hub:
+     A) local_materials — buy inputs AND sell at the same hub
+     B) jita_materials  — buy inputs in Jita, sell finished goods at each hub
+   Use for: "where should I sell X", "Jita vs Amarr for X", "best hub to sell Drake",
+             "should I buy materials in Jita and sell in Amarr", "which market is best for X",
+             "compare markets for X".
+   PROACTIVELY use this whenever a user asks about a specific item AND mentions multiple hubs
+   or asks where to sell. Present jita_materials strategy as it is almost always the better option.
+   Always surface the recommendation.bestJitaMaterialsStrategy as your primary advice.
+
+3. analyze_blueprints(sortBy, limit, buildableOnly)
    Analyzes the player's OWN blueprints against their assets.
    sortBy options: profit | margin | cost | time | materials | completion
    Use "completion" sort for: "T2 chains closest to finishing", "what can I almost build",
@@ -2848,27 +3619,44 @@ Politely refuse ALL non-EVE questions: "I'm specialized for EVE manufacturing on
    Also returns skipped/skippedNames — blueprints not found in the SDE database.
    If skippedNames is non-empty, inform user: "Note: X blueprints weren't found in the database: [names]"
 
-3. get_blueprint(itemName or productId)
+4. get_blueprint(itemName or productId)
    Detailed materials + costs for any single blueprint.
    Use when user asks about a specific item. Resolve productName: null via productId.
 
-4. get_price(itemName)
+5. get_price(itemName)
    Live Jita price for any item not already in context.
 
-5. get_active_jobs(activityFilter?)
+6. get_active_jobs(activityFilter?)
    Returns the player's current industry job queue with time remaining.
    Use for: "what's building", "active jobs", "reactions running", "job queue".
 
-6. get_t2_blueprints(sort?)
+7. get_t2_blueprints(sort?)
    Returns ALL T2 blueprints owned by the player (BPOs and BPCs, meta_level=1).
    Use for: "list my T2 blueprints", "show all T2 copies", "what T2 do I own".
    Returns total count, owned type (BPO/BPC), and quantity.
 
-7. diagnose_blueprints()
+8. diagnose_blueprints()
    Checks which of the player's blueprints exist in the SDE database.
    Use when analyze_blueprints returns no T2 results, or user reports missing T2 data.
    Returns exact counts and names of T2 blueprints found vs missing from DB.
    If t2_missing > 0: explain the database gap clearly to the user and list the missing blueprint names.
+
+9. get_price_comparison(item_name)
+   Live buy/sell prices for ANY item across all 6 trade hubs.
+   Use for: minerals, moon goo, raw materials, loot, commodities — anything the user wants to buy or sell.
+   Unlike compare_markets (manufactured goods only), this works for any tradeable item.
+   Returns: all_hubs prices, cheapest_to_buy_from, best_to_sell_into, arbitrage_opportunity.
+
+   Triggers — use proactively, don't wait to be asked:
+   - "Where should I sell my [item]?" → call tool, lead with best_to_sell_into
+   - "Where can I buy [item]?" → call tool, lead with cheapest_to_buy_from + note sell_price is what you pay
+   - "Compare [item] prices across hubs" → call tool, show all_hubs breakdown
+   - "Is there arbitrage on [item]?" → call tool, show arbitrage_opportunity
+   - "Best place to source minerals / moon goo" → call tool once per item mentioned
+   - "What's Tritanium worth in Amarr?" → call tool, find Amarr entry in all_hubs
+
+   When answering: lead with the direct recommendation, mention arbitrage if meaningful (> ~5% margin),
+   call tool once per distinct item if multiple items are asked about.
 
 Never show raw type IDs ("Item #12345") — always resolve names first.
 
@@ -3052,6 +3840,374 @@ app.get('/health', async (req, res) => {
       items: jitaPricesCache ? Object.keys(jitaPricesCache).length : 0
     }
   });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v1.2.0 — INDUSTRY SETTINGS ENDPOINTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+// GET /api/industry-settings — fetch saved settings for the authed character
+app.get('/api/industry-settings', security.apiLimiter, security.verifyEveToken, async (req, res) => {
+  try {
+    const characterId = req.characterId;
+    const settings = await dbGet(
+      'SELECT * FROM character_industry_settings WHERE character_id = ?',
+      [characterId]
+    );
+    res.json(settings || {
+      system_id:            null,
+      system_name:          null,
+      structure_type_id:    null,
+      rig_ids:              '[]',
+      facility_tax:         0,
+      material_region_id:   10000002,   // default: Jita
+      material_region_name: 'Jita',
+    });
+  } catch (err) {
+    console.error('Industry settings GET error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/industry-settings — save settings for the authed character.
+// Accepts both manufacturing location fields (system, structure, rigs, tax) and
+// the material source hub (material_region_id / material_region_name).
+// Any subset of fields may be sent; omitted fields are preserved via ON CONFLICT DO UPDATE.
+app.post('/api/industry-settings', security.apiLimiter, security.verifyEveToken, async (req, res) => {
+  try {
+    const characterId = req.characterId;
+    const {
+      system_id, system_name,
+      structure_type_id, rig_ids, facility_tax,
+      material_region_id   = 10000002,
+      material_region_name = 'Jita',
+    } = req.body;
+
+    // Validate: facility_tax must be 0–100
+    const tax = Math.min(100, Math.max(0, parseFloat(facility_tax) || 0));
+
+    // Validate material_region_id against the known hub whitelist
+    const validMatRegion = VALID_REGIONS.includes(parseInt(material_region_id))
+      ? parseInt(material_region_id)
+      : 10000002;
+
+    await dbRun(`
+      INSERT INTO character_industry_settings
+        (character_id, system_id, system_name, structure_type_id,
+         rig_ids, facility_tax, material_region_id, material_region_name, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(character_id) DO UPDATE SET
+        system_id            = excluded.system_id,
+        system_name          = excluded.system_name,
+        structure_type_id    = excluded.structure_type_id,
+        rig_ids              = excluded.rig_ids,
+        facility_tax         = excluded.facility_tax,
+        material_region_id   = excluded.material_region_id,
+        material_region_name = excluded.material_region_name,
+        updated_at           = excluded.updated_at
+    `, [
+      characterId,
+      system_id         || null,
+      system_name       || null,
+      structure_type_id || null,
+      JSON.stringify(Array.isArray(rig_ids) ? rig_ids : []),
+      tax,
+      validMatRegion,
+      material_region_name || REGION_HUB_NAMES[validMatRegion] || 'Jita',
+      new Date().toISOString(),
+    ]);
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Industry settings POST error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/system-search?q=<query> — autocomplete solar system names (local index)
+// Uses the system name map built by fetchCostIndices() — no ESI search call needed.
+// Prefix matches are ranked first; falls back to substring matches.
+// Returns up to 10 results.
+app.get('/api/system-search', security.apiLimiter, security.verifyEveToken, async (req, res) => {
+  try {
+    const q = (req.query.q || '').trim().toLowerCase();
+    if (q.length < 2) return res.json([]);
+
+    // Warm the cache if needed (also triggers name lookup on first call)
+    await fetchCostIndices();
+
+    const nameMap = costIndexCache.nameMap;
+    if (!nameMap || nameMap.size === 0) return res.json([]);
+
+    const prefix    = [];
+    const substring = [];
+
+    for (const [nameLower, info] of nameMap) {
+      if (nameLower.startsWith(q)) {
+        prefix.push(info);
+      } else if (nameLower.includes(q)) {
+        substring.push(info);
+      }
+      // Early exit once we have enough results
+      if (prefix.length >= 10) break;
+    }
+
+    // Prefix matches first (sorted alphabetically), then substring matches
+    prefix.sort((a, b) => a.system_name.localeCompare(b.system_name));
+    substring.sort((a, b) => a.system_name.localeCompare(b.system_name));
+
+    const results = [...prefix, ...substring].slice(0, 10);
+    res.json(results);
+  } catch (err) {
+    console.error('System search error:', err.message);
+    res.json([]);
+  }
+});
+
+// POST /api/true-cost — calculate full True Profit for an item with all fees
+// Body: { product_id, me, te, runs, regionId, materialRegionId }
+//
+// Calculation is fully local — no external API calls during the request:
+//   • Material quantities  → blueprint_materials table (already in DB)
+//   • Adjusted prices      → ESI /markets/prices/ (cached 6 h, warmed on first use)
+//   • System Cost Index    → ESI /industry/systems/ (cached 1 h, warmed on first use)
+//   • Sell price           → regionPriceCache (populated by precompute job)
+//   • Sales fees           → character skills + standings (session cache)
+//
+// Job cost formula (EVE manufacturing):
+//   EIV             = Σ(adjusted_price[mat] × ME-adjusted qty) × runs
+//   System Job Cost = EIV × SCI
+//   SCC Surcharge   = EIV × 2%     (reduced from 4% in the Legion update)
+//   Facility Tax    = EIV × facility_tax_rate
+//   Total Job Cost  = System Job Cost + SCC Surcharge + Facility Tax
+app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (req, res) => {
+  try {
+    const {
+      product_id,
+      me             = 0,
+      te             = 0,
+      runs           = 1,
+      regionId       = 10000002,  // sell hub (backward-compat param name)
+      materialRegionId = regionId, // source hub — where materials are purchased
+    } = req.body;
+
+    // Validate both hub IDs against the known whitelist
+    const sellRegionId = VALID_REGIONS.includes(parseInt(regionId))
+      ? parseInt(regionId) : 10000002;
+    const matRegionId  = VALID_REGIONS.includes(parseInt(materialRegionId))
+      ? parseInt(materialRegionId) : sellRegionId;
+    const characterId = req.characterId;
+
+    if (!product_id) return res.status(400).json({ error: 'product_id required' });
+
+    // ── Session: skills + standings ────────────────────────────────────────
+    const session   = getCached(`session:${characterId}`);
+    const skillsArr = session?.skills   || [];
+    const standings = session?.standings || { factions: {}, corps: {} };
+
+    const skillMap = {};
+    skillsArr.forEach(s => { skillMap[Number(s.skill_id)] = s.active_skill_level || 0; });
+
+    // ── Industry settings (system, structure, rigs, facility tax) ──────────
+    const settings = await dbGet(
+      'SELECT * FROM character_industry_settings WHERE character_id = ?',
+      [characterId]
+    );
+    const rigIds            = JSON.parse(settings?.rig_ids || '[]');
+    const facilityTaxDecimal = (settings?.facility_tax || 0) / 100;
+    const targetSystemId     = settings?.system_id || 30000142; // default: Jita IV
+
+    // ── Blueprint materials from DB ────────────────────────────────────────
+    const blueprint = await dbGet(
+      'SELECT blueprint_id, product_quantity FROM blueprints WHERE product_id = ?',
+      [product_id]
+    );
+    if (!blueprint) {
+      return res.status(404).json({ error: `No blueprint found for product ${product_id}` });
+    }
+    const materials = await dbAll(
+      'SELECT material_id, quantity FROM blueprint_materials WHERE blueprint_id = ?',
+      [blueprint.blueprint_id]
+    );
+
+    // ── Adjusted prices + cost indices (ESI, cached) ──────────────────────
+    // These calls return instantly when cache is warm; first call ~2–5 s each.
+    const [adjustedPrices, costIndices] = await Promise.all([
+      fetchAdjustedPrices(),
+      fetchCostIndices(),
+    ]);
+
+    // ── EIV (Estimated Item Value for job-fee calculation) ─────────────────
+    // ME reduces required quantity per material.
+    // Each material quantity is rounded UP (ceil), min 1.
+    const meFactor = Math.max(0, 1 - me / 100);
+    let eiv = 0;
+    for (const mat of materials) {
+      const adjPrice = adjustedPrices[mat.material_id] || 0;
+      const adjQty   = Math.max(1, Math.ceil(mat.quantity * meFactor)) * runs;
+      eiv += adjPrice * adjQty;
+    }
+
+    // ── Manufacturing job cost ─────────────────────────────────────────────
+    const sci            = costIndices[targetSystemId] || 0;
+    const systemJobCost  = eiv * sci;
+    const sccSurcharge   = eiv * 0.02;         // 2% SCC surcharge (Legion update)
+    const facilityTaxCost = eiv * facilityTaxDecimal;
+    const totalJobCost   = systemJobCost + sccSurcharge + facilityTaxCost;
+
+    // ── Market prices: source hub for materials, sell hub for revenue ────
+    //
+    // Source hub  (matRegionId)  — where the player buys raw materials
+    // Sell hub    (sellRegionId) — where the finished goods are listed
+    //
+    // When both caches are warm, prices are exact.
+    // When either is cold (e.g. first request after a restart), we fall back
+    // to the precomputed DB row for that region (ME-scaled approximation) and
+    // kick off a background warm so the next request gets live prices.
+    const matEntry  = regionPriceCache.get(matRegionId);
+    const sellEntry = regionPriceCache.get(sellRegionId);
+    const matWarm   = !!(matEntry  && Date.now() < matEntry.expiry);
+    const sellWarm  = !!(sellEntry && Date.now() < sellEntry.expiry);
+    const pricesWarm = matWarm && sellWarm; // both must be warm for live flag
+
+    // ── Material cost ─────────────────────────────────────────────────────
+    let totalMaterialCost = 0;
+
+    if (matWarm) {
+      // Live source-hub prices — exact ME-adjusted quantities
+      for (const mat of materials) {
+        const matPrice = matEntry.prices[mat.material_id]?.sell || 0;
+        const adjQty   = Math.max(1, Math.ceil(mat.quantity * meFactor)) * runs;
+        totalMaterialCost += matPrice * adjQty;
+      }
+    } else {
+      // Cold — fall back to precomputed DB value (ME=0, scaled by meFactor)
+      const precompMat = await dbGet(
+        'SELECT material_cost FROM precomputed_profits WHERE product_id = ? AND region_id = ?',
+        [product_id, matRegionId]
+      );
+      totalMaterialCost = ((precompMat?.material_cost || 0) * meFactor * runs);
+      // Trigger background warm for source hub
+      if (!regionWarmingSet.has(matRegionId)) {
+        regionWarmingSet.add(matRegionId);
+        fetchRegionPrices(matRegionId)
+          .then(prices => regionPriceCache.set(matRegionId, { prices, expiry: Date.now() + 3600000 }))
+          .catch(() => {})
+          .finally(() => regionWarmingSet.delete(matRegionId));
+      }
+    }
+
+    // ── Sell price ────────────────────────────────────────────────────────
+    let unitSell = 0;
+
+    if (sellWarm) {
+      unitSell = sellEntry.prices[product_id]?.sell || 0;
+    } else {
+      // Cold — fall back to precomputed sell price for the sell hub
+      const precompSell = await dbGet(
+        'SELECT sell_price FROM precomputed_profits WHERE product_id = ? AND region_id = ?',
+        [product_id, sellRegionId]
+      );
+      unitSell = precompSell?.sell_price || 0;
+      // Trigger background warm for sell hub (if not already warming)
+      if (!regionWarmingSet.has(sellRegionId)) {
+        regionWarmingSet.add(sellRegionId);
+        fetchRegionPrices(sellRegionId)
+          .then(prices => regionPriceCache.set(sellRegionId, { prices, expiry: Date.now() + 3600000 }))
+          .catch(() => {})
+          .finally(() => regionWarmingSet.delete(sellRegionId));
+      }
+    }
+
+    const productUnits = (blueprint.product_quantity || 1) * runs;
+    const sellPrice    = unitSell * productUnits;
+
+    // ── Sales fees (broker fee + transaction tax) ─────────────────────────
+    // Standings are looked up by sell hub — that is where the order is placed.
+    const hub             = HUB_STANDINGS[sellRegionId];
+    const brokerRelations = skillMap[3446]  || 0;
+    const accounting      = skillMap[16622] || 0;
+    const factionStanding = standings.factions[hub?.faction_id] || 0;
+    const corpStanding    = standings.corps[hub?.corp_id]       || 0;
+
+    // Broker fee: max(1%, 3% − 0.3%×BR − 0.03%×max(0,faction) − 0.02%×max(0,corp))
+    const brokerFeeRate = Math.max(0.01,
+      0.03
+      - (0.003  * brokerRelations)
+      - (0.0003 * Math.max(0, factionStanding))
+      - (0.0002 * Math.max(0, corpStanding))
+    );
+    // Transaction tax: max(0%, 7.5% × (1 − 11%×Accounting))
+    const transactionTaxRate = Math.max(0, 0.075 * (1 - 0.11 * accounting));
+
+    const brokerFee      = sellPrice * brokerFeeRate;
+    const transactionTax = sellPrice * transactionTaxRate;
+    const totalSalesTax  = brokerFee + transactionTax;
+
+    // ── True profit ────────────────────────────────────────────────────────
+    const trueProfit = sellPrice - brokerFee - transactionTax - totalMaterialCost - totalJobCost;
+    const trueMargin = sellPrice > 0 ? (trueProfit / sellPrice) * 100 : 0;
+
+    const STRUCTURE_LABELS = { 35825: 'Raitaru', 35826: 'Azbel', 35827: 'Sotiyo' };
+    const structureLabel = settings?.structure_type_id
+      ? (STRUCTURE_LABELS[settings.structure_type_id] || 'Engineering Complex')
+      : 'NPC Station';
+
+    res.json({
+      product_id,
+      runs,
+      sell_price: sellPrice,
+
+      // Box 1 — materials (Jita market sell price, ME-adjusted)
+      total_material_cost: totalMaterialCost,
+
+      // Box 2 — manufacturing fees
+      mfg_fees: {
+        total:                totalJobCost,
+        system_cost_index:    systemJobCost,       // EIV × SCI
+        system_cost_bonuses:  0,                   // rig bonuses not yet category-matched
+        facility_tax:         facilityTaxCost,
+        scc_surcharge:        sccSurcharge,
+        alpha_clone_tax:      0,                   // Omega accounts only
+        estimated_item_value: eiv,
+      },
+
+      // Box 3 — sales fees
+      sales_tax: {
+        total:                    totalSalesTax,
+        broker_fee:               brokerFee,
+        broker_fee_rate:          brokerFeeRate,
+        broker_relations_level:   brokerRelations,
+        faction_standing:         factionStanding,
+        corp_standing:            corpStanding,
+        transaction_tax:          transactionTax,
+        transaction_tax_rate:     transactionTaxRate,
+        accounting_level:         accounting,
+      },
+
+      // Box 4 — true profit
+      true_profit: trueProfit,
+      true_margin: trueMargin,
+
+      // Context
+      region_id:        regionId,
+      prices_warm:      pricesWarm,   // true only when both sell and source hub caches are live
+      setup_configured: !!(settings?.system_id),
+      manufacturing_setup: {
+        system_id:          settings?.system_id         || null,
+        system_name:        settings?.system_name       || 'Not configured — using Jita IV',
+        structure_type_id:  settings?.structure_type_id || null,
+        structure_label:    structureLabel,
+        rig_ids:            rigIds,
+        facility_tax_pct:   settings?.facility_tax      || 0,
+        sci_raw:            sci,
+      },
+    });
+
+  } catch (err) {
+    console.error('True cost error:', err.message, err.stack?.split('\n')[1]);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // START SERVER

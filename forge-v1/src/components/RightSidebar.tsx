@@ -22,7 +22,7 @@
  */
 
 import { useMemo, type FC } from 'react';
-import type { ItemDetail, ItemDetailApiResponse, EsiBlueprint } from '../types';
+import type { ItemDetail, ItemDetailApiResponse, EsiBlueprint, Market, TrueCostResponse } from '../types';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -39,7 +39,15 @@ interface RightSidebarProps {
   blueprints:      EsiBlueprint[];
   /** Item name map (typeId → name) — used for product icon lookup + chain detection */
   itemNames:       Map<number, string>;
+  /** Currently selected market hub — drives price label and re-fetch */
+  selectedMarket:  Market;
+  /** True Profit breakdown from /api/true-cost */
+  trueCostData:    TrueCostResponse | null;
+  trueCostLoading: boolean;
+  trueCostError:   string | null;
   onClose:         () => void;
+  /** Open the manufacturing setup modal */
+  onOpenSettings:  () => void;
   /** Called when a material row or chain item is clicked — drills into that item */
   onSelectItem:    (typeId: number, name: string) => void;
   /** Navigate back one step in the drill-down history */
@@ -80,11 +88,18 @@ const RightSidebar: FC<RightSidebarProps> = ({
   detailOpen,
   blueprints,
   itemNames,
+  selectedMarket,
+  trueCostData,
+  trueCostLoading,
+  trueCostError,
   onClose,
+  onOpenSettings,
   onSelectItem,
   onBack,
   canGoBack = false,
 }) => {
+  const isJita       = selectedMarket.id === 10000002;
+  const marketLabel  = `${selectedMarket.name}${selectedMarket.type === 'nullsec' ? ' [NULLSEC]' : ''}`;
   const sidebarClass = `sidebar-right${detailOpen ? ' detail-open' : ''}`;
 
   // ── ALL hooks must be called before any early return ─────────────────────
@@ -111,7 +126,14 @@ const RightSidebar: FC<RightSidebarProps> = ({
       const productName = bpName.replace(/ Blueprint$/i, '').toLowerCase();
       const pid = nameToTypeId.get(productName);
       if (pid) {
-        ptbMap.set(pid, bp);
+        // Always prefer BPO (quantity === -1) over any BPC.
+        // Without this guard, the last entry in the ESI array wins —
+        // which is typically the BPC — so the panel showed BPC info
+        // even when the user clicked the BPO card.
+        const isBpo = bp.quantity === -1;
+        if (!ptbMap.has(pid) || isBpo) {
+          ptbMap.set(pid, bp);
+        }
         ownedSet.add(pid);
       }
     });
@@ -157,7 +179,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
 
         {/* ── Back button (shown when drill-down history exists) ───────────── */}
         {canGoBack && (
-          <div style={{ padding: '8px 12px 0' }}>
+          <div style={{ padding: '8px 0 10px' }}>
             <button
               type="button"
               className="btn"
@@ -317,7 +339,15 @@ const RightSidebar: FC<RightSidebarProps> = ({
               const latest = prices[prices.length - 1];
               return (
                 <div className="detail-section">
-                  <div className="detail-section-heading">Jita Price (90 Days)</div>
+                  <div className="detail-section-heading">
+                    Jita Price (90 Days)
+                    {!isJita && (
+                      <span style={{ float: 'right', fontSize: 10, fontWeight: 400,
+                        color: 'var(--color-text-tertiary)', letterSpacing: 0 }}>
+                        history always Jita
+                      </span>
+                    )}
+                  </div>
                   <div style={{ color: 'var(--color-success)', fontSize: 15, fontWeight: 500, marginBottom: 8 }}>
                     {formatISK(latest)}
                   </div>
@@ -340,7 +370,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
             {/* Current market prices */}
             {apiDetail.currentPrice && (
               <div className="detail-section">
-                <div className="detail-section-heading">Current Jita Market</div>
+                <div className="detail-section-heading">Current {marketLabel} Market</div>
                 <div className="price-grid">
                   <div>
                     <div className="price-cell-label">LOWEST SELL</div>
@@ -569,6 +599,183 @@ const RightSidebar: FC<RightSidebarProps> = ({
             textAlign: 'center' }}>
             No market data for this blueprint.
             <br />Select an item from the Market tab for full analysis.
+          </div>
+        )}
+
+        {/* ── True Profit — 4-box breakdown ──────────────────────────────── */}
+        {selectedTypeId && (
+          <div className="detail-section">
+            <div className="detail-section-heading">
+              True Profit
+              <span style={{ float: 'right', fontSize: 10, fontWeight: 400,
+                color: 'var(--color-text-tertiary)', letterSpacing: 0 }}>
+                incl. all fees &amp; taxes
+              </span>
+            </div>
+
+            {trueCostLoading && (
+              <div style={{ textAlign: 'center', padding: '12px 0',
+                color: 'var(--color-text-tertiary)', fontSize: 11 }}>
+                <div className="loading-spinner"
+                  style={{ width: 16, height: 16, margin: '0 auto 6px' }} />
+                Calculating…
+              </div>
+            )}
+
+            {trueCostError && !trueCostLoading && (
+              <div style={{ color: 'var(--color-danger)', fontSize: 11,
+                padding: '8px 0', textAlign: 'center' }}>
+                ⚠ {trueCostError}
+              </div>
+            )}
+
+            {trueCostData && !trueCostLoading && !trueCostData.prices_warm && (
+              <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', padding: '4px 0 2px',
+                            display: 'flex', alignItems: 'center', gap: 5 }}>
+                <span style={{ color: 'var(--color-accent-primary)' }}>⟳</span>
+                Using cached estimates — live prices updating in background.
+              </div>
+            )}
+
+            {trueCostData && !trueCostLoading && (
+              <div className="cost-breakdown-row">
+
+                {/* Box 1 — Material Cost */}
+                <div className="cost-box material">
+                  <span className="cost-box-label">Materials</span>
+                  <span className="cost-box-value">
+                    {formatISK(trueCostData.total_material_cost)}
+                  </span>
+                </div>
+
+                {/* Box 2 — Manufacturing Fees (with tooltip) */}
+                <div className={`cost-box mfg-fees${trueCostData.setup_configured ? '' : ' unconfigured'}`}>
+                  <span className="cost-box-label">Mfg Fees</span>
+                  {trueCostData.setup_configured ? (
+                    <span className="cost-box-value">
+                      {formatISK(trueCostData.mfg_fees.total)}
+                    </span>
+                  ) : (
+                    <span className="cost-box-value cost-box-unknown">
+                      ?{' '}
+                      <button
+                        type="button"
+                        className="cost-configure-link"
+                        onClick={onOpenSettings}
+                      >
+                        Configure
+                      </button>
+                    </span>
+                  )}
+                  {/* Tooltip */}
+                  {trueCostData.setup_configured && (
+                    <div className="cost-tooltip">
+                      <div className="cost-tooltip-row">
+                        <span>Est. Item Value</span>
+                        <span>{formatISK(trueCostData.mfg_fees.estimated_item_value)}</span>
+                      </div>
+                      <div className="cost-tooltip-row">
+                        <span>
+                          System Cost
+                          {trueCostData.manufacturing_setup.sci_raw > 0 && (
+                            <span style={{ opacity: 0.65, fontSize: 10 }}>
+                              {' '}({(trueCostData.manufacturing_setup.sci_raw * 100).toFixed(2)}% SCI)
+                            </span>
+                          )}
+                        </span>
+                        <span>{formatISK(trueCostData.mfg_fees.system_cost_index)}</span>
+                      </div>
+                      <div className="cost-tooltip-row">
+                        <span>Facility Tax</span>
+                        <span>{formatISK(trueCostData.mfg_fees.facility_tax)}</span>
+                      </div>
+                      <div className="cost-tooltip-row">
+                        <span>SCC Surcharge</span>
+                        <span>{formatISK(trueCostData.mfg_fees.scc_surcharge)}</span>
+                      </div>
+                      {trueCostData.mfg_fees.alpha_clone_tax > 0 && (
+                        <div className="cost-tooltip-row">
+                          <span>Alpha Tax</span>
+                          <span>{formatISK(trueCostData.mfg_fees.alpha_clone_tax)}</span>
+                        </div>
+                      )}
+                      <div className="cost-tooltip-divider" />
+                      <div className="cost-tooltip-row total">
+                        <span>Total</span>
+                        <span>{formatISK(trueCostData.mfg_fees.total)}</span>
+                      </div>
+                      <div className="cost-tooltip-setup">
+                        {trueCostData.manufacturing_setup.system_name}
+                        {' · '}
+                        {trueCostData.manufacturing_setup.structure_label}
+                        {' · '}
+                        {trueCostData.manufacturing_setup.facility_tax_pct}% tax
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Box 3 — Sales Tax (with tooltip) */}
+                <div className="cost-box sales-tax">
+                  <span className="cost-box-label">Sales Tax</span>
+                  <span className="cost-box-value">
+                    {formatISK(trueCostData.sales_tax.total)}
+                  </span>
+                  {/* Tooltip */}
+                  <div className="cost-tooltip">
+                    <div className="cost-tooltip-row">
+                      <span>
+                        Broker Fee
+                        ({(trueCostData.sales_tax.broker_fee_rate * 100).toFixed(2)}%)
+                      </span>
+                      <span>{formatISK(trueCostData.sales_tax.broker_fee)}</span>
+                    </div>
+                    <div className="cost-tooltip-sub">
+                      Broker Relations {trueCostData.sales_tax.broker_relations_level}
+                    </div>
+                    <div className="cost-tooltip-sub">
+                      Faction standing: {trueCostData.sales_tax.faction_standing.toFixed(2)}
+                    </div>
+                    <div className="cost-tooltip-sub">
+                      Corp standing: {trueCostData.sales_tax.corp_standing.toFixed(2)}
+                    </div>
+                    <div className="cost-tooltip-row">
+                      <span>
+                        Transaction Tax
+                        ({(trueCostData.sales_tax.transaction_tax_rate * 100).toFixed(2)}%)
+                      </span>
+                      <span>{formatISK(trueCostData.sales_tax.transaction_tax)}</span>
+                    </div>
+                    <div className="cost-tooltip-sub">
+                      Accounting {trueCostData.sales_tax.accounting_level}
+                    </div>
+                    <div className="cost-tooltip-divider" />
+                    <div className="cost-tooltip-row total">
+                      <span>Total</span>
+                      <span>{formatISK(trueCostData.sales_tax.total)}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Box 4 — True Profit */}
+                <div className={`cost-box true-profit${trueCostData.true_profit >= 0 ? ' positive' : ' negative'}`}>
+                  <span className="cost-box-label">True Profit</span>
+                  <span className="cost-box-value">
+                    {formatISK(trueCostData.true_profit)}
+                  </span>
+                  <span className="cost-box-margin">
+                    {trueCostData.true_margin.toFixed(1)}%
+                  </span>
+                </div>
+
+              </div>
+            )}
+
+            {!trueCostData && !trueCostLoading && !trueCostError && (
+              <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', padding: '6px 0' }}>
+                Select an item to see True Profit.
+              </div>
+            )}
           </div>
         )}
 

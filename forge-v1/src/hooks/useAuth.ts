@@ -47,7 +47,8 @@ const SCOPES =
   'esi-assets.read_assets.v1 esi-characters.read_blueprints.v1 ' +
   'esi-wallet.read_character_wallet.v1 esi-industry.read_character_jobs.v1 ' +
   'esi-skills.read_skills.v1 ' +
-  'esi-markets.structure_markets.v1';
+  'esi-markets.structure_markets.v1 ' +
+  'esi-characters.read_standings.v1';
 
 const SESSION_TOKEN_KEY = 'forge_token';
 const SESSION_STATE_KEY = 'forge_oauth_state';
@@ -72,6 +73,9 @@ export interface AuthState {
   assets: EsiAsset[];
   /** Character trained skills (skill_id + active_skill_level) — for blueprint filtering */
   skills: Array<{ skill_id: number; active_skill_level: number }>;
+  /** True if esi-characters.read_standings.v1 was granted on this login.
+   *  False means broker fee is calculated without standings bonus — user should re-log. */
+  hasStandingsScope: boolean;
   error: string | null;
   /** Current loading step label (shown on LoadingScreen) */
   loadStep: string;
@@ -126,15 +130,16 @@ export function useAuth(): AuthState & {
   login:  () => void;
   logout: () => void;
 } {
-  const [status,     setStatus]     = useState<AuthStatus>('idle');
-  const [token,      setToken]      = useState<string | null>(null);
-  const [character,  setCharacter]  = useState<CharacterInfo | null>(null);
-  const [blueprints, setBlueprints] = useState<EsiBlueprint[]>([]);
-  const [assets,     setAssets]     = useState<EsiAsset[]>([]);
-  const [skills,     setSkills]     = useState<Array<{ skill_id: number; active_skill_level: number }>>([]);
-  const [error,      setError]      = useState<string | null>(null);
-  const [loadStep,   setLoadStep]   = useState('');
-  const [dataLog,    setDataLog]    = useState<LoadStep[]>([]);
+  const [status,            setStatus]            = useState<AuthStatus>('idle');
+  const [token,             setToken]             = useState<string | null>(null);
+  const [character,         setCharacter]         = useState<CharacterInfo | null>(null);
+  const [blueprints,        setBlueprints]        = useState<EsiBlueprint[]>([]);
+  const [assets,            setAssets]            = useState<EsiAsset[]>([]);
+  const [skills,            setSkills]            = useState<Array<{ skill_id: number; active_skill_level: number }>>([]);
+  const [hasStandingsScope, setHasStandingsScope] = useState(false);
+  const [error,             setError]             = useState<string | null>(null);
+  const [loadStep,          setLoadStep]          = useState('');
+  const [dataLog,           setDataLog]           = useState<LoadStep[]>([]);
 
   // ── loadCharacterData ──────────────────────────────────────────────────────
 
@@ -249,10 +254,32 @@ export function useAuth(): AuthState & {
         addLog('Skills', 'err', (e as Error).message);
       }
 
-      // ── 8. Count BPOs vs BPCs ──────────────────────────────────────────────
+      // ── 8. Character standings (for broker fee accuracy) ──────────────────
+      // Non-fatal: if the scope wasn't granted, we fall back to skills-only broker calc.
+      setLoadStep('Loading standings…');
+      let standingsData: { factions: Record<number, number>; corps: Record<number, number> } =
+        { factions: {}, corps: {} };
+      let standingsScopeGranted = false;
+      try {
+        type EsiStanding = { from_id: number; from_type: string; standing: number };
+        const rawStandings = await esiGet<EsiStanding[]>(`/characters/${cid}/standings/`, acc);
+        for (const s of rawStandings) {
+          if (s.from_type === 'faction')   standingsData.factions[s.from_id] = s.standing;
+          if (s.from_type === 'npc_corp')  standingsData.corps[s.from_id]    = s.standing;
+        }
+        standingsScopeGranted = true;
+        setHasStandingsScope(true);
+        addLog('Standings', 'ok', `${rawStandings.length} entries`);
+      } catch (e) {
+        // 403 = scope not granted; warn but continue
+        addLog('Standings', 'warn', 'Scope not granted — broker fee uses skills only');
+        setHasStandingsScope(false);
+      }
+
+      // ── Count BPOs vs BPCs ──────────────────────────────────────────────────
       const bpoCount = bData.filter((bp) => bp.quantity === -1).length;
 
-      // ── 9. Build CharacterInfo ─────────────────────────────────────────────
+      // ── Build CharacterInfo ──────────────────────────────────────────────────
       const charInfoResult: CharacterInfo = {
         characterId:    cid,
         name:           charInfo.name,
@@ -274,6 +301,7 @@ export function useAuth(): AuthState & {
           wallet,
           jobs:      activeJobs,
           skills:    skillData,
+          standings: standingsScopeGranted ? standingsData : null,
         }, acc);
         addLog('Session', 'ok', 'Cached on server (2hr expiry)');
       } catch (e) {
@@ -375,10 +403,21 @@ export function useAuth(): AuthState & {
     setBlueprints([]);
     setAssets([]);
     setSkills([]);
+    setHasStandingsScope(false);
     setError(null);
     setDataLog([]);
     setStatus('idle');
   }, []);
+
+  // ── session-expired event listener ────────────────────────────────────────
+  // Fired by apiGet/apiPost in client.ts when a 401 is received.
+  // Calls logout() so the app returns to the login screen immediately.
+
+  useEffect(() => {
+    const handleExpiry = () => logout();
+    window.addEventListener('forge:session-expired', handleExpiry);
+    return () => window.removeEventListener('forge:session-expired', handleExpiry);
+  }, [logout]);
 
   return {
     status,
@@ -387,6 +426,7 @@ export function useAuth(): AuthState & {
     blueprints,
     assets,
     skills,
+    hasStandingsScope,
     error,
     loadStep,
     dataLog,

@@ -7,7 +7,11 @@
  *     [☰ menu btn (mobile only)]  [◈ FORGE logo]  [F.O.R.G.E. AI toggle]
  *
  *   RIGHT:
- *     [◎ Jita 4-4 teaser]  [☀/🌙 theme]  [Character pill]  [Logout]
+ *     [Source: ◎ <hub>]  [Market: ◎ <hub>]  [⚙ Mfg Setup]  [☀/🌙]  [Character pill]  [Logout]
+ *
+ * v1.3.0: Two MarketSelector dropdowns — Source (material purchase hub) and
+ * Market (sell hub). They are independent: Source defaults to Jita and is
+ * persisted in localStorage; Market drives the Market Opportunities table.
  *
  * Security:
  *   - Portrait URL uses numeric characterId only.
@@ -15,18 +19,33 @@
  */
 
 import type { FC } from 'react';
-import type { CharacterInfo } from '../types';
+import type { CharacterInfo, Market } from '../types';
+import { MarketSelector } from './MarketSelector';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
 interface HeaderProps {
-  character: CharacterInfo;
-  chatOpen: boolean;
-  theme: string;
-  onToggleChat: () => void;
-  onMenuToggle: () => void;
-  onThemeToggle: () => void;
-  onLogout: () => void;
+  character:             CharacterInfo;
+  chatOpen:              boolean;
+  theme:                 string;
+  /** Sell hub — drives Market Opportunities table and sell-price calculations */
+  selectedMarket:        Market;
+  regionLoading:         boolean;
+  /** Source hub — where raw materials are purchased */
+  selectedSourceMarket:  Market;
+  /**
+   * Name of the manufacturing solar system saved in Industry Settings.
+   * Null when the user hasn't configured a system yet.
+   * Displayed read-only in the header bar so the active setup is always visible.
+   */
+  mfgSystemName:         string | null;
+  onToggleChat:          () => void;
+  onMenuToggle:          () => void;
+  onThemeToggle:         () => void;
+  onLogout:              () => void;
+  onMarketChange:        (market: Market) => void;
+  onSourceMarketChange:  (market: Market) => void;
+  onOpenSettings:        () => void;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -39,10 +58,17 @@ const Header: FC<HeaderProps> = ({
   character,
   chatOpen,
   theme,
+  selectedMarket,
+  regionLoading,
+  selectedSourceMarket,
+  mfgSystemName,
   onToggleChat,
   onMenuToggle,
   onThemeToggle,
   onLogout,
+  onMarketChange,
+  onSourceMarketChange,
+  onOpenSettings,
 }) => {
   const portraitUrl = `${PORTRAIT_BASE}/${character.characterId}/portrait?size=32`;
 
@@ -108,10 +134,54 @@ const Header: FC<HeaderProps> = ({
       {/* ── Right group ─────────────────────────────────────────────────────── */}
       <div className="header-right">
 
-        {/* Market region teaser */}
-        <span className="market-teaser" role="note" aria-label="Market: Jita 4-4">
-          ◎ Jita 4-4 ▾
-        </span>
+        {/* ── Hub selectors ───────────────────────────────────────────────
+             Source = where materials are purchased (default Jita)
+             Market = where finished goods are sold (drives the table)      */}
+        <div className="market-selector-group"
+             title="Source: where you buy materials · Market: where you sell finished goods">
+          <MarketSelector
+            label="Source"
+            ariaLabel="Material source hub"
+            selectedMarket={selectedSourceMarket}
+            onMarketChange={onSourceMarketChange}
+          />
+          <MarketSelector
+            label="Market"
+            ariaLabel="Sell market hub"
+            selectedMarket={selectedMarket}
+            onMarketChange={onMarketChange}
+            loading={regionLoading}
+          />
+        </div>
+
+        {/* ── Manufacturing location display ──────────────────────────────
+             Read-only indicator of the system saved in Industry Settings.
+             Clicking the adjacent ⚙ Mfg Setup button lets the user change it. */}
+        <div
+          className="mfg-location-display"
+          title={mfgSystemName
+            ? `Manufacturing location: ${mfgSystemName} — click ⚙ Mfg Setup to change`
+            : 'No manufacturing system configured — click ⚙ Mfg Setup to set one'}
+          aria-label={mfgSystemName
+            ? `Manufacturing location: ${mfgSystemName}`
+            : 'Manufacturing location: not configured'}
+        >
+          <span className="mfg-location-label">Mfg Location:</span>
+          <span className={`mfg-location-value${mfgSystemName ? '' : ' mfg-location-unset'}`}>
+            {mfgSystemName ?? 'Not set'}
+          </span>
+        </div>
+
+        {/* Manufacturing setup — opens IndustrySettings modal */}
+        <button
+          type="button"
+          className="settings-btn"
+          onClick={onOpenSettings}
+          title="Configure your manufacturing system, structure type, rigs and facility tax for accurate True Profit"
+          aria-label="Open manufacturing setup"
+        >
+          ⚙ Mfg Setup
+        </button>
 
         {/* Theme toggle */}
         <button

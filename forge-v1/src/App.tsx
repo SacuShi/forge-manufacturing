@@ -1,27 +1,32 @@
 // FORGE v1.0 — App root. Auth states: idle/exchanging/loading → authed | error
 
-import { useState, useEffect, useCallback, type FC } from 'react';
+import { useState, useEffect, useCallback, useMemo, type FC } from 'react';
 import type {
   ChatMessage,
   MarketItem,
   ItemDetail,
   TopProfitableResponse,
   AiChatResponse,
+  Market,
+  IndustrySettings,
 } from './types';
+import { MARKETS } from './components/MarketSelector';
 import { useAuth }       from './hooks/useAuth';
 import { useItemDetail } from './hooks/useItemDetail';
 import { useItemNames }  from './hooks/useItemNames';
+import { useTrueCost }   from './hooks/useTrueCost';
 import { apiGet, apiPost } from './api/client';
 import { formatBuildTime }  from './utils/format';
 import { QUICK_PROMPTS }    from './data/mockData';
 
-import Header        from './components/Header';
-import LeftSidebar   from './components/LeftSidebar';
-import MainContent   from './components/MainContent';
-import RightSidebar  from './components/RightSidebar';
-import ChatPanel     from './components/ChatPanel';
-import LoginScreen   from './components/LoginScreen';
-import LoadingScreen from './components/LoadingScreen';
+import Header                from './components/Header';
+import LeftSidebar           from './components/LeftSidebar';
+import MainContent           from './components/MainContent';
+import RightSidebar          from './components/RightSidebar';
+import ChatPanel             from './components/ChatPanel';
+import LoginScreen           from './components/LoginScreen';
+import LoadingScreen         from './components/LoadingScreen';
+import IndustrySettingsModal from './components/IndustrySettings';
 
 function mapToMarketItems(
   results: TopProfitableResponse['results'],
@@ -96,34 +101,123 @@ const App: FC = () => {
   // Navigation stack — allows ← Back through chain drill-downs
   const [panelHistory, setPanelHistory] = useState<Array<{ typeId: number; name: string }>>([]);
 
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-  const [marketItems, setMarketItems] = useState<MarketItem[]>([]);
-  const [rawResults, setRawResults] = useState<TopProfitableResponse['results']>([]);
-  const [marketLoading, setMarketLoading] = useState(false);
+  const [sessionExpired,    setSessionExpired]    = useState(false);
+  const [chatMessages,      setChatMessages]      = useState<ChatMessage[]>([]);
+  const [rawResults,        setRawResults]        = useState<TopProfitableResponse['results']>([]);
+  const [marketLoading,     setMarketLoading]     = useState(false);
   const [marketLoadingMore, setMarketLoadingMore] = useState(false);
-  const [marketHasMore, setMarketHasMore] = useState(true);
-  const [marketError, setMarketError] = useState<string | null>(null);
+  const [marketHasMore,     setMarketHasMore]     = useState(true);
+  const [marketError,       setMarketError]       = useState<string | null>(null);
+  const [selectedMarket,    setSelectedMarket]    = useState<Market>(MARKETS[0]);
+  // v1.3.0 — Source hub: where materials are purchased. Persisted across sessions.
+  const [selectedSourceMarket, setSelectedSourceMarket] = useState<Market>(() => {
+    const saved = localStorage.getItem('forge-source-market');
+    if (saved) {
+      const found = MARKETS.find((m) => m.id === parseInt(saved, 10));
+      if (found) return found;
+    }
+    return MARKETS[0]; // default: Jita
+  });
+
+  // v1.2.0 — Industry settings + settings modal
+  const [industrySettings, setIndustrySettings] = useState<IndustrySettings | null>(null);
+  const [settingsOpen,     setSettingsOpen]     = useState(false);
+
+  // Derive marketItems from rawResults — all prices come from the precomputed table
+  // which is now run per-region, so no client-side overlay needed.
+  const marketItems = useMemo<MarketItem[]>(() => {
+    if (!rawResults.length) return [];
+    return mapToMarketItems(rawResults, auth.blueprints);
+  }, [rawResults, auth.blueprints]);
 
   const {
     detail: apiDetail,
     loading: detailLoading,
     error: detailError,
-  } = useItemDetail(selectedTypeId, auth.assets, auth.blueprints, auth.token);
+  } = useItemDetail(
+    selectedTypeId, auth.assets, auth.blueprints, auth.token,
+    selectedMarket.id,        // sell hub — drives "Current Market" price box
+    selectedSourceMarket.id,  // source hub — drives material unit costs in build analysis
+  );
+
+  // v1.2.0 — Resolve the character's best blueprint ME/TE for the selected product.
+  //
+  // ESI blueprint type_ids differ from product type_ids, so we match by name:
+  //   itemNames.get(bp.type_id) === productName + " Blueprint"
+  // BPO (quantity === -1) is preferred over any BPC when both exist.
+  const { selectedBlueprintME, selectedBlueprintTE } = useMemo(() => {
+    if (!selectedTypeId || !itemNames.size || !auth.blueprints.length) {
+      return { selectedBlueprintME: 0, selectedBlueprintTE: 0 };
+    }
+    const productName = itemNames.get(selectedTypeId);
+    if (!productName) return { selectedBlueprintME: 0, selectedBlueprintTE: 0 };
+    const bpNameTarget = (productName + ' Blueprint').toLowerCase();
+
+    let best: (typeof auth.blueprints)[0] | null = null;
+    for (const bp of auth.blueprints) {
+      const bpName = itemNames.get(bp.type_id);
+      if (!bpName || bpName.toLowerCase() !== bpNameTarget) continue;
+      // Prefer BPO (quantity === -1); among BPCs pick any
+      if (!best || bp.quantity === -1) best = bp;
+    }
+    return {
+      selectedBlueprintME: best?.material_efficiency ?? 0,
+      selectedBlueprintTE: best?.time_efficiency     ?? 0,
+    };
+  }, [selectedTypeId, auth.blueprints, itemNames]);
+
+  // v1.2.0 — True Profit calculation via /api/true-cost (local ESI calc, no external API)
+  const {
+    data:    trueCostData,
+    loading: trueCostLoading,
+    error:   trueCostError,
+  } = useTrueCost(
+    selectedTypeId,
+    selectedMarket.id,        // sell hub
+    selectedSourceMarket.id,  // source hub — determines material purchase prices
+    selectedBlueprintME,
+    selectedBlueprintTE,
+    auth.token,
+  );
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('forge-theme', theme);
   }, [theme]);
 
+  // Listen for 401 events fired by apiGet/apiPost — show expiry message on login screen
+  useEffect(() => {
+    const handleExpiry = () => setSessionExpired(true);
+    window.addEventListener('forge:session-expired', handleExpiry);
+    return () => window.removeEventListener('forge:session-expired', handleExpiry);
+  }, []);
+
+  // Reset expiry flag once the user successfully logs in again
+  useEffect(() => {
+    if (auth.status === 'authed') setSessionExpired(false);
+  }, [auth.status]);
+
+  // v1.2.0 — Load saved industry settings on login
+  useEffect(() => {
+    if (auth.status !== 'authed' || !auth.token) return;
+    apiGet<IndustrySettings>('/api/industry-settings', auth.token)
+      .then(setIndustrySettings)
+      .catch(() => { /* non-fatal — settings remain null */ });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auth.status]);
+
   useEffect(() => {
     if (auth.status !== 'authed') return;
 
     setMarketLoading(true);
-    // Use skills-filtered endpoint: shows only blueprints user can build based on trained skills
-    apiGet<TopProfitableResponse>('/api/top-profitable-by-skills?limit=50', auth.token ?? '')
+    // Use skills-filtered endpoint; pass both hubs so the table reflects the user's
+    // persisted source/sell combination from the first load.
+    apiGet<TopProfitableResponse>(
+      `/api/top-profitable-by-skills?limit=50&regionId=${selectedMarket.id}&sourceRegionId=${selectedSourceMarket.id}`,
+      auth.token ?? ''
+    )
       .then((data) => {
         setRawResults(data.results);
-        setMarketItems(mapToMarketItems(data.results, auth.blueprints));
         setMarketHasMore(data.meta.hasMore ?? data.results.length >= 50);
 
         const lastComputed = data.meta.lastComputed
@@ -196,21 +290,17 @@ const App: FC = () => {
     try {
       const nextOffset = rawResults.length;
       const data = await apiGet<TopProfitableResponse>(
-        `/api/top-profitable-by-skills?limit=50&offset=${nextOffset}`,
+        `/api/top-profitable-by-skills?limit=50&offset=${nextOffset}&regionId=${selectedMarket.id}&sourceRegionId=${selectedSourceMarket.id}`,
         auth.token
       );
       setRawResults((prev) => [...prev, ...data.results]);
-      setMarketItems((prev) => [
-        ...prev,
-        ...mapToMarketItems(data.results, auth.blueprints, prev.length),
-      ]);
       setMarketHasMore(data.meta.hasMore ?? data.results.length >= 50);
     } catch (e) {
       console.error('Load more market items failed:', e);
     } finally {
       setMarketLoadingMore(false);
     }
-  }, [marketLoadingMore, marketHasMore, auth.token, auth.blueprints, rawResults.length]);
+  }, [marketLoadingMore, marketHasMore, auth.token, rawResults.length, selectedMarket.id, selectedSourceMarket.id]);
 
   const handleToggleChat = () => {
     setChatOpen((p) => !p);
@@ -261,6 +351,55 @@ const App: FC = () => {
     setDetailOpen(false);
     setPanelHistory([]);   // clear back-stack on explicit close
   }, []);
+
+  const handleMarketChange = useCallback(async (market: Market) => {
+    setSelectedMarket(market);
+    setRawResults([]);
+    setMarketHasMore(true);
+    setMarketError(null);
+    setMarketLoading(true);
+    try {
+      const data = await apiGet<TopProfitableResponse>(
+        `/api/top-profitable-by-skills?limit=50&regionId=${market.id}&sourceRegionId=${selectedSourceMarket.id}`,
+        auth.token ?? ''
+      );
+      setRawResults(data.results);
+      setMarketHasMore(data.meta.hasMore ?? data.results.length >= 50);
+    } catch (e) {
+      console.error('Failed to load market for region:', e);
+      setMarketError((e as Error).message);
+      setSelectedMarket(MARKETS[0]);
+    } finally {
+      setMarketLoading(false);
+    }
+  }, [auth.token, selectedSourceMarket.id]);
+
+  // v1.3.0 — Source hub change: persist selection, then reload the market table
+  // so profit/margin/ISK-per-hour all reflect the new material purchase costs.
+  const handleSourceMarketChange = useCallback(async (market: Market) => {
+    setSelectedSourceMarket(market);
+    localStorage.setItem('forge-source-market', String(market.id));
+    setRawResults([]);
+    setMarketHasMore(true);
+    setMarketError(null);
+    setMarketLoading(true);
+    try {
+      const data = await apiGet<TopProfitableResponse>(
+        `/api/top-profitable-by-skills?limit=50&regionId=${selectedMarket.id}&sourceRegionId=${market.id}`,
+        auth.token ?? ''
+      );
+      setRawResults(data.results);
+      setMarketHasMore(data.meta.hasMore ?? data.results.length >= 50);
+    } catch (e) {
+      console.error('Failed to load market with new source region:', e);
+      setMarketError((e as Error).message);
+      // Revert source on error so the selector doesn't show a hub whose prices failed
+      setSelectedSourceMarket(MARKETS[0]);
+      localStorage.setItem('forge-source-market', String(MARKETS[0].id));
+    } finally {
+      setMarketLoading(false);
+    }
+  }, [auth.token, selectedMarket.id]);
 
   const handleSendMessage = useCallback(async (text: string) => {
     const now    = Date.now();
@@ -362,7 +501,7 @@ const App: FC = () => {
   if (auth.status === 'idle' || auth.status === 'error') {
     return (
       <div className="app" data-theme={theme} style={{ alignItems: 'center', justifyContent: 'center' }}>
-        <LoginScreen onLogin={auth.login} error={auth.error} />
+        <LoginScreen onLogin={auth.login} error={auth.error} sessionExpired={sessionExpired} />
       </div>
     );
   }
@@ -383,11 +522,30 @@ const App: FC = () => {
         character={character}
         chatOpen={chatOpen}
         theme={theme}
+        selectedMarket={selectedMarket}
+        selectedSourceMarket={selectedSourceMarket}
+        regionLoading={marketLoading}
+        mfgSystemName={industrySettings?.system_name ?? null}
         onToggleChat={handleToggleChat}
         onMenuToggle={() => setDrawerOpen((o) => !o)}
         onThemeToggle={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
         onLogout={auth.logout}
+        onMarketChange={handleMarketChange}
+        onSourceMarketChange={handleSourceMarketChange}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
+
+      {/* Re-auth banner: shown if standings scope not yet granted */}
+      {!auth.hasStandingsScope && (
+        <div className="reauth-banner" role="alert">
+          FORGE needs one additional permission for accurate broker fees.
+          Please{' '}
+          <button type="button" onClick={auth.logout}>
+            log out and back in
+          </button>
+          {' '}to grant it. (Broker fee will use skill levels only until then.)
+        </div>
+      )}
 
       <div
         className="app-body"
@@ -454,7 +612,12 @@ const App: FC = () => {
           detailOpen={detailOpen}
           blueprints={auth.blueprints}
           itemNames={itemNames}
+          selectedMarket={selectedMarket}
+          trueCostData={trueCostData}
+          trueCostLoading={trueCostLoading}
+          trueCostError={trueCostError}
           onClose={handleCloseDetail}
+          onOpenSettings={() => setSettingsOpen(true)}
           onSelectItem={handleSelectItem}
           onBack={handlePanelBack}
           canGoBack={panelHistory.length > 0}
@@ -470,6 +633,18 @@ const App: FC = () => {
           onClearHistory={handleClearHistory}
         />
       </div>
+
+      {/* v1.2.0 — Manufacturing Setup modal */}
+      <IndustrySettingsModal
+        open={settingsOpen}
+        token={auth.token}
+        initial={industrySettings}
+        onClose={() => setSettingsOpen(false)}
+        onSaved={(settings) => {
+          setIndustrySettings(settings);
+          setSettingsOpen(false);
+        }}
+      />
     </div>
   );
 };

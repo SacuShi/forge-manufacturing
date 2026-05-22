@@ -58,6 +58,10 @@ export async function apiGet<T>(path: string, token?: string): Promise<T> {
   if (token) headers['Authorization'] = `Bearer ${token}`;
 
   const res = await fetch(path, { headers });
+  if (res.status === 401) {
+    window.dispatchEvent(new CustomEvent('forge:session-expired'));
+    throw new Error('SESSION_EXPIRED');
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText);
     throw new Error(`API ${res.status} ${path}: ${text}`);
@@ -79,6 +83,10 @@ export async function apiPost<T>(
     headers,
     body:    JSON.stringify(body),
   });
+  if (res.status === 401) {
+    window.dispatchEvent(new CustomEvent('forge:session-expired'));
+    throw new Error('SESSION_EXPIRED');
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText);
     throw new Error(`API ${res.status} ${path}: ${text}`);
