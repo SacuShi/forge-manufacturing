@@ -321,6 +321,7 @@ async function runMigrations() {
       job_id              INTEGER PRIMARY KEY,  -- ESI job_id
       corp_id             INTEGER NOT NULL,
       installer_id        INTEGER,
+      installer_name      TEXT,                 -- resolved via ESI /universe/names/ at refresh time
       blueprint_id        INTEGER,
       blueprint_type_id   INTEGER,
       product_type_id     INTEGER,
@@ -334,6 +335,8 @@ async function runMigrations() {
       fetched_at          TEXT    NOT NULL DEFAULT (datetime('now'))
     )
   `);
+  // v1.4.0 patch: add installer_name if table already existed without it (idempotent)
+  try { await dbRun(`ALTER TABLE corp_jobs ADD COLUMN installer_name TEXT`); } catch (_) {}
 
   await dbRun(`CREATE INDEX IF NOT EXISTS idx_corp_jobs_corp ON corp_jobs (corp_id)`);
 
@@ -593,17 +596,57 @@ async function refreshCorpData(corpId) {
       `/latest/corporations/${corpId}/industry/jobs/?include_completed=false`,
       accessToken
     );
+
+    // Resolve installer character names via ESI /universe/names/ (bulk POST, max 1000 IDs).
+    // installer_id is a CHARACTER ID — it cannot be resolved from the items table.
+    // ESI returns [{ id, name, category }]; we only keep category === 'character'.
+    const installerIds = [...new Set(
+      jobs.map(j => j.installer_id).filter(Boolean)
+    )];
+    const installerNames = {};  // { characterId: name }
+
+    if (installerIds.length) {
+      // ESI /universe/names/ accepts up to 1000 IDs per request
+      const BATCH = 1000;
+      for (let i = 0; i < installerIds.length; i += BATCH) {
+        const batch = installerIds.slice(i, i + BATCH);
+        try {
+          const r = await fetch('https://esi.evetech.net/latest/universe/names/?datasource=tranquility', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify(batch),
+          });
+          if (r.ok) {
+            const names = await r.json();
+            for (const entry of names) {
+              if (entry.category === 'character') {
+                installerNames[entry.id] = entry.name;
+              }
+            }
+          } else {
+            console.warn(`  ⚠ Corp ${corpId}: /universe/names/ returned ${r.status} for installer IDs`);
+          }
+        } catch (nameErr) {
+          // Non-fatal — jobs still get stored, installer_name will be null
+          console.warn(`  ⚠ Corp ${corpId}: installer name lookup failed — ${nameErr.message}`);
+        }
+      }
+      console.log(`  ✓ Corp ${corpId}: resolved ${Object.keys(installerNames).length}/${installerIds.length} installer names`);
+    }
+
     await dbRun('DELETE FROM corp_jobs WHERE corp_id = ?', [corpId]);
     for (const job of jobs) {
       await dbRun(
         `INSERT OR REPLACE INTO corp_jobs
-           (job_id, corp_id, installer_id, blueprint_id, blueprint_type_id, product_type_id,
+           (job_id, corp_id, installer_id, installer_name,
+            blueprint_id, blueprint_type_id, product_type_id,
             activity_id, runs, status, start_date, end_date, duration,
             output_location_id, fetched_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
         [
           job.job_id,              corpId,
           job.installer_id        ?? null,
+          job.installer_id ? (installerNames[job.installer_id] ?? null) : null,
           job.blueprint_id        ?? null,
           job.blueprint_type_id   ?? null,
           job.product_type_id     ?? null,
@@ -5038,19 +5081,21 @@ app.get('/api/corp/jobs',
       if (!config) return res.status(404).json({ error: 'Corp not configured' });
 
       const jobs = await dbAll(
+        // installer_id is a CHARACTER ID — cannot be joined against items (which holds type_ids).
+        // installer_name is stored directly at refresh time via ESI /universe/names/ lookup.
+        // product/blueprint names use items table correctly (type_id → type_id).
         `SELECT
            cj.job_id, cj.installer_id, cj.blueprint_id,
            cj.blueprint_type_id, cj.product_type_id,
            cj.activity_id, cj.runs, cj.status,
            cj.start_date, cj.end_date, cj.duration,
            cj.output_location_id, cj.fetched_at,
-           COALESCE(prod.name,  'Item #' || cj.product_type_id)   AS product_name,
-           COALESCE(bp.name,    'BP #'   || cj.blueprint_type_id) AS blueprint_name,
-           COALESCE(inst.name,  'Char #' || cj.installer_id)      AS installer_name
+           COALESCE(prod.name, 'Item #' || cj.product_type_id)   AS product_name,
+           COALESCE(bp.name,   'BP #'   || cj.blueprint_type_id) AS blueprint_name,
+           COALESCE(cj.installer_name, 'Char #' || cj.installer_id) AS installer_name
          FROM corp_jobs cj
          LEFT JOIN items prod ON prod.type_id = cj.product_type_id
          LEFT JOIN items bp   ON bp.type_id   = cj.blueprint_type_id
-         LEFT JOIN items inst ON inst.type_id  = cj.installer_id
          WHERE cj.corp_id = ?
          ORDER BY cj.end_date ASC`,
         [config.corp_id]
