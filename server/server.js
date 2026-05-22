@@ -56,7 +56,11 @@ function initDatabase() {
         reject(err);
       } else {
         console.log('✓ Connected to SQLite database');
-        resolve();
+        // WAL mode: allows concurrent readers while a write is in progress.
+        // Without this, the precompute/volume-copy UPDATE locks every incoming request.
+        db.run('PRAGMA journal_mode=WAL', () => {
+          db.run('PRAGMA synchronous=NORMAL', () => resolve());
+        });
       }
     });
   });
@@ -221,8 +225,12 @@ async function runMigrations() {
     await dbRun(`CREATE INDEX IF NOT EXISTS idx_precomputed_profit  ON precomputed_profits (region_id, profit DESC)`);
     await dbRun(`CREATE INDEX IF NOT EXISTS idx_precomputed_margin  ON precomputed_profits (region_id, profit_margin DESC)`);
     await dbRun(`CREATE INDEX IF NOT EXISTS idx_precomputed_isk_hr  ON precomputed_profits (region_id, isk_per_hour DESC)`);
+    await dbRun(`CREATE INDEX IF NOT EXISTS idx_precomputed_product ON precomputed_profits (product_id)`);
     console.log('✓ precomputed_profits migrated to multi-region schema');
   }
+
+  // v1.2.0 migration: product_id index for fast volume copy
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_precomputed_product ON precomputed_profits (product_id)`);
 
   // v1.2.0 migration: Industry settings per character
   await dbRun(`
@@ -2972,27 +2980,23 @@ async function runVolumeEnrichment() {
     // avg_daily_volume and market_group_id are item properties, not region-specific.
     if (enriched > 0) {
       console.log('⟳ Copying volume data from Jita to other regions...');
+      // UPDATE ... FROM syntax (SQLite ≥3.33): computes Jita values once as a
+      // derived table, then does a single-pass join — O(n) instead of the old
+      // correlated-subquery approach which was O(n²) and held the write lock for
+      // many seconds, freezing the site during precompute.
       await dbRun(`
-        UPDATE precomputed_profits AS target
-        SET avg_daily_volume = (
-              SELECT p.avg_daily_volume FROM precomputed_profits p
-              WHERE p.product_id = target.product_id AND p.region_id = 10000002
-            ),
-            market_group_id = (
-              SELECT p.market_group_id FROM precomputed_profits p
-              WHERE p.product_id = target.product_id AND p.region_id = 10000002
-            ),
-            liquidity_risk = (
-              SELECT p.liquidity_risk FROM precomputed_profits p
-              WHERE p.product_id = target.product_id AND p.region_id = 10000002
-            )
-        WHERE target.region_id != 10000002
-          AND EXISTS (
-            SELECT 1 FROM precomputed_profits p
-            WHERE p.product_id = target.product_id
-              AND p.region_id = 10000002
-              AND p.avg_daily_volume IS NOT NULL
-          )
+        UPDATE precomputed_profits
+        SET avg_daily_volume = jita.avg_daily_volume,
+            market_group_id  = jita.market_group_id,
+            liquidity_risk   = jita.liquidity_risk
+        FROM (
+          SELECT product_id, avg_daily_volume, market_group_id, liquidity_risk
+          FROM   precomputed_profits
+          WHERE  region_id = 10000002
+            AND  avg_daily_volume IS NOT NULL
+        ) AS jita
+        WHERE precomputed_profits.product_id = jita.product_id
+          AND precomputed_profits.region_id  != 10000002
       `);
       console.log('✓ Volume data copied to all regions');
     }
