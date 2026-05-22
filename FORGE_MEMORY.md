@@ -2,7 +2,7 @@
 
 > This file is the authoritative context document for Claude sessions working on this project.
 > Read this first. Update it whenever significant decisions, changes, or discoveries are made.
-> Last updated: v1.2.0 — True Profit with EVE Ref API, standings-aware fees, industry settings
+> Last updated: v1.2.0 — True Profit with local ESI calculation, standings-aware fees, industry settings
 
 ---
 
@@ -23,7 +23,7 @@ An EVE Online manufacturing intelligence web application for the **UKC corporati
 
 **Live domain:** https://forge-ukc.com  
 **GitHub:** https://github.com/SacuShi/forge-manufacturing.git  
-**Current version:** v1.2.0 (branch: `feature/v1.2.0-true-profit`, commit `0780ef0`)  
+**Current version:** v1.2.0 (branch: `feature/v1.2.0-true-profit`, commit `b1bf051`)  
 **Version scheme:** `major.feature.change.patch`
 
 ---
@@ -107,7 +107,8 @@ npm run build        # tsc -b && vite build → dist/
 | EVE SSO | https://login.eveonline.com | OAuth authentication |
 | EVE Image Server | https://images.evetech.net | Item/character icons |
 | everef.net (SDE) | https://data.everef.net/reference-data/reference-data-latest.tar.xz | SDE reference data |
-| everef.net (industry) | https://api.everef.net/v1/industry/cost | **NEW v1.2.0** — Manufacturing job fee calculator. No auth required. ~16ms response. Returns full fee breakdown incl. SCI, SCC, facility tax, structure bonuses, per-skill reductions |
+| EVE ESI (industry) | https://esi.evetech.net/latest/industry/systems/ | **v1.2.0** — System Cost Index data. Fetched every 1hr, cached in `costIndexCache`. Also builds local solar-system name map (via `/universe/names/` bulk POST) for system autocomplete |
+| EVE ESI (market prices) | https://esi.evetech.net/latest/markets/prices/ | **v1.2.0** — Adjusted prices for EIV calculation. Fetched every 6hr, cached in `adjustedPriceCache`. |
 | Anthropic API | claude-sonnet-4-6 | AI advisor |
 
 ---
@@ -328,8 +329,8 @@ All endpoints require `Authorization: Bearer <eve_token>` unless noted. Rate lim
 |---|---|---|
 | GET | `/api/industry-settings` | Fetch saved settings for authed character |
 | POST | `/api/industry-settings` | Save settings (system_id, structure_type_id, rig_ids, facility_tax) |
-| GET | `/api/system-search?q=<query>` | Autocomplete solar system names via ESI search + universe/names |
-| POST | `/api/true-cost` | Calculate True Profit. Body: `{product_id, me, te, runs, regionId}`. Calls EVE Ref API, reads session cache for skills+standings, reads DB for industry settings. Returns 4-box breakdown. |
+| GET | `/api/system-search?q=<query>` | Autocomplete solar system names via **local name index** built from `costIndexCache.nameMap` (no ESI search call — deprecated). Returns up to 10 prefix-then-substring matches. |
+| POST | `/api/true-cost` | Calculate True Profit. Body: `{product_id, me, te, runs, regionId}`. **No EVE Ref** — calculates locally: EIV from `blueprint_materials` + `adjustedPriceCache`, job cost from `costIndexCache` SCI, sales fees from session skills/standings. Returns 4-box breakdown. Returns `prices_warm: false` when region price cache is cold (never blocks on fetch). |
 
 ### Admin / Debug
 | Method | Path | Notes |
@@ -454,7 +455,9 @@ Dark mode is default (`:root`). Light mode via `[data-theme='light']`.
 ```typescript
 const isBPO = bp.runs === -1;   // Original — infinite runs
 const isBPC = bp.runs >= 0;     // Copy — limited runs
-// WRONG: quantity === -1 is singleton flag, NOT BPO indicator
+// WRONG: quantity === -1 is singleton flag (asset location), NOT BPO indicator
+// NOTE: blueprint type_id ≠ product type_id — always match by name:
+//   productName + " Blueprint" → blueprint name lookup in itemNames Map
 ```
 
 ### activity_id values
@@ -499,12 +502,18 @@ fee = sell_revenue × rate
 ```
 - At Accounting 5: 7.5% × (1 − 0.55) = 3.375%
 
-**Manufacturing job fee (via EVE Ref API, not calculated locally):**
-- `POST https://api.everef.net/v1/industry/cost` with product_id, runs, me, te, system_id, structure_type_id, rig_ids, facility_tax, skill params
-- Returns: `total_job_cost`, `total_material_cost`, `system_cost_index`, `facility_tax`, `scc_surcharge`, `alpha_clone_tax`, `estimated_item_value`, `units` (output qty)
+**Manufacturing job fee (calculated locally — no EVE Ref):**
+```
+EIV = Σ( adjustedPrice[material] × ceil(qty × (1 − ME/100)) × runs )
+Job Cost = EIV × SCI + EIV × 0.02 (SCC) + EIV × facilityTax_decimal
+```
+- `adjustedPrices` from ESI `/markets/prices/` (6hr cache → `adjustedPriceCache`)
+- `SCI` from ESI `/industry/systems/` (1hr cache → `costIndexCache.sciMap[systemId]`)
+- `facility_tax` stored 0–100 in DB, converted to decimal (÷100) before calculation
 - SCC Surcharge: **2%** of EIV (reduced from 4% in Legion update, July 2025)
-- NPC station facility tax: **0.25%** of EIV (reduced from 10% in Viridian 2023)
+- NPC station: use `structure_type_id = null`, user typically sets facility_tax = 0
 - System Cost Index (SCI): typically 5–24% in high-sec hubs; varies by manufacturing activity
+- ESI `/search/` endpoint is **deprecated** — system search uses local name index instead
 
 **Structure bonuses (informational — EVE Ref handles actual calc):**
 | Structure | type_id | ME bonus | TE bonus |
@@ -605,9 +614,9 @@ wallet, blueprints, assets, active jobs, trained skills.
 | `1713c9e` | Quick prompt chips: remove 40-char truncation |
 | `7fb861a` | Load-more pagination: offset param; "Load next 50" button |
 
-### v1.2.0 (commit `0780ef0`) — branch: `feature/v1.2.0-true-profit`
+### v1.2.0 (latest commit `b1bf051`) — branch: `feature/v1.2.0-true-profit`
 
-**True Profit feature — EVE Ref API integration, standings, industry settings**
+**True Profit feature — local ESI calculation, standings-aware fees, industry settings**
 
 **Core concept:** Market Opportunities shows *estimated* profit (no fees). True Profit shows *real* profit after ALL costs: material cost + manufacturing job fee + sales tax (broker fee + transaction tax).
 
@@ -619,37 +628,35 @@ wallet, blueprints, assets, active jobs, trained skills.
   - Amarr: corp 1000082, faction 500003 | Dodixie: corp 1000049, faction 500004
   - Hek/Rens: corp 1000070/1000006, faction 500002 (Minmatar)
   - Syndicate: corp 1000462, faction 500010
-- `SKILL_PARAM_MAP`: skill_id → EVE Ref API param name (~30 manufacturing skills)
-- `/api/session-data` POST now accepts `standings: { factions: {}, corps: {} }` and stores in session cache
+- `adjustedPriceCache` + `fetchAdjustedPrices()` — ESI `/markets/prices/` fetched every 6hr; returns `Map<type_id, adjusted_price>`
+- `costIndexCache` + `fetchCostIndices()` — ESI `/industry/systems/` every 1hr; builds:
+  - `sciMap`: `Map<system_id, sci_for_manufacturing>`
+  - `nameMap`: `Map<name_lower, { system_id, system_name }>` — built via bulk `/universe/names/` POSTs in parallel batches of 1000 IDs (ESI `/search/` is deprecated)
+- `/api/session-data` POST accepts `standings: { factions: {}, corps: {} }` and stores in session cache
 - `GET /api/industry-settings` — fetch settings for authed character
 - `POST /api/industry-settings` — save settings (upsert by character_id); `facility_tax` stored as pct (0–100)
-- `GET /api/system-search?q=<>` — ESI solar system autocomplete
-- `POST /api/true-cost` — the main endpoint:
-  1. Reads session cache for skills + standings
+- `GET /api/system-search?q=<>` — instant local prefix+substring matching against `costIndexCache.nameMap`; returns up to 10 results; warms cache on first call
+- `POST /api/true-cost` — main endpoint, **never blocks on slow fetches** (returns `prices_warm: false` when cold):
+  1. Reads session cache via `getCached('session:${characterId}')` for skills + standings
   2. Reads DB for industry settings (system, structure, rigs, facility_tax)
-  3. Converts `facility_tax` pct → decimal for EVE Ref; uses system_id 30000142 (Jita) if none configured
-  4. Calls `https://api.everef.net/v1/industry/cost` with product_id, runs, me, te, structure_type_id, rig_id×N, facility_tax, all skill params
-  5. Calculates broker fee: `max(1%, 3% − 0.3%×BR − 0.03%×max(0,faction) − 0.02%×max(0,corp))`
-  6. Calculates transaction tax: `max(0%, 7.5% × (1 − 11%×Accounting))`
-  7. Fetches hub prices from `regionPriceCache` (fetches if stale); uses `price.sell` (not `.sell_price`)
-  8. Returns full 4-box breakdown: material_cost, mfg_fees, sales_tax, true_profit
-
-**EVE Ref API corrections vs brief:**
-- Brief's `security='HIGH_SEC'` fallback → replaced with `system_id=30000142` (Jita system) for better accuracy
-- Brief's `priceData?.sell_price` → `priceData?.sell` (matches cache structure from `fetchRegionPrices`)
-- Brief's `sessionCache.get()` → `getCached('session:${characterId}')` (correct helper for this codebase)
-- Brief's Jita corp_id `10000035` → `1000035` (Caldari Navy; 10000035 is a region ID)
-- SCC surcharge rate: EVE Ref returns live rate (2% post-Legion July 2025); brief said 4% — self-corrects via EVE Ref
+  3. Fetches `adjustedPrices` and `costIndices` (both cached — instant after warmup)
+  4. Calculates EIV: `Σ(adjustedPrice[mat] × ceil(qty × meFactor) × runs)`
+  5. Calculates job cost: `EIV × SCI + EIV × 0.02 (SCC) + EIV × (facilityTax/100)`
+  6. Calculates broker fee: `max(1%, 3% − 0.3%×BR − 0.03%×max(0,faction) − 0.02%×max(0,corp))`
+  7. Calculates transaction tax: `max(0%, 7.5% × (1 − 11%×Accounting))`
+  8. Reads hub sell price from `regionPriceCache` (returns `prices_warm: false` if cold — **never** calls `fetchRegionPrices()` inline)
+  9. Returns full breakdown: `{ total_material_cost, mfg_fees, sales_tax, true_profit, true_margin, prices_warm, manufacturing_setup }`
 
 **Frontend changes:**
 
 - `useAuth.ts`: `esi-characters.read_standings.v1` added to SCOPES; standings fetched in `loadCharacterData` (step 8, non-fatal — sets `hasStandingsScope`); standings included in `/api/session-data` POST; `hasStandingsScope: boolean` in AuthState and return value; `logout()` resets it
-- `useTrueCost.ts` (new hook): fetches `/api/true-cost` when `productTypeId`/`regionId`/`blueprints.length` changes; finds best blueprint (BPO preferred over BPC) to extract ME/TE; returns `{ data, loading, error }`
-- `IndustrySettings.tsx` (new component): modal with system autocomplete (300ms debounce, ESI-backed), structure type radio buttons, rigs accordion (max 3, grouped by category, greyed for NPC), facility tax %, Save button (disabled until system resolves)
-- `Header.tsx`: `onOpenSettings` prop added; ⚙ `settings-btn` next to MarketSelector
-- `RightSidebar.tsx`: `trueCostData`, `trueCostLoading`, `trueCostError`, `onOpenSettings` props; 4-box panel below existing build info; tooltip on Mfg Fees (EIV, SCI, facility tax, SCC) and Sales Tax (broker rate, standings, transaction tax)
+- `useTrueCost.ts` (new hook): accepts `(productTypeId, regionId, me, te, token)` directly — **no blueprint array**. ME/TE resolved in App.tsx via name-based matching (`productName + " Blueprint"`). Returns `{ data, loading, error }`
+- `App.tsx`: `selectedBlueprintME/TE` useMemo resolves from `itemNames` map (name match, prefers BPO over BPC); passes to `useTrueCost`
+- `IndustrySettings.tsx` (new component): modal with system autocomplete (300ms debounce, local-index-backed), structure type radio buttons, rigs accordion (max 3, grouped by category, greyed for NPC), facility tax %, Save button (disabled until system resolves). Button label: `⚙ Mfg Setup`
+- `Header.tsx`: `onOpenSettings` prop added; ⚙ `settings-btn` (`⚙ Mfg Setup` text) next to MarketSelector
+- `RightSidebar.tsx`: `trueCostData`, `trueCostLoading`, `trueCostError`, `onOpenSettings` props; 4-box panel below existing build info; `prices_warm: false` shows loading note; tooltip on Mfg Fees (EIV, raw SCI%, facility tax, SCC) and Sales Tax (broker rate, standings, transaction tax); BPO preference fix in `productToBlueprintMap` (`if (!ptbMap.has(pid) || isBpo)`)
 - `App.tsx`: `industrySettings` + `settingsOpen` state; loads settings on login; `useTrueCost` hook; re-auth banner if `!auth.hasStandingsScope`; IndustrySettingsModal render
-- `types/index.ts`: `SystemSearchResult`, `IndustrySettings`, `TrueCostResponse` interfaces
+- `types/index.ts`: `SystemSearchResult`, `IndustrySettings`, `TrueCostResponse` (with `prices_warm`, `manufacturing_setup.sci_raw`) interfaces
 - `components.css`: `.settings-btn`, `.reauth-banner`, `.cost-breakdown-row`, `.cost-box` family (4 colour variants), `.cost-tooltip` family, `.modal-overlay`/`.modal-panel` family, `.settings-*`, `.structure-*`, `.rig-*`, `.btn-primary`
 
 **Re-auth banner:**
@@ -657,7 +664,12 @@ wallet, blueprints, assets, active jobs, trained skills.
 - Tells user to log out and back in to grant it
 - Broker fee still calculates correctly (skills-only, no standings bonus) until re-auth
 
-**IMPORTANT: EVE Ref API is called server-side** — no browser CSP changes needed.
+**Key bug fixes applied during development:**
+- EVE Ref replaced: was giving 400 errors and 30s+ timeouts; replaced with local ESI calculation
+- `fetchRegionPrices()` removed from `/api/true-cost` critical path (was causing Cloudflare 502 on cold cache)
+- ESI `/search/` deprecated — system search now uses local `nameMap` built from `/universe/names/` bulk lookup
+- BPO showing as BPC: fixed in both `productToBlueprintMap` (prefer BPO) and ME/TE resolution (moved to App.tsx, name-based match)
+- Settings button invisible: changed from bare `⚙` glyph to `⚙ Mfg Setup` text button
 
 ### v1.1.1 (commit `05a99f9`) — deployed ✓
 
