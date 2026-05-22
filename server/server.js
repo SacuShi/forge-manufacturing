@@ -3734,15 +3734,16 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
     }
 
     // ── Sales fee calculation ──────────────────────────────────────────────
-    // Ensure the region's prices are in cache (fetch if needed)
-    let regionEntry = regionPriceCache.get(regionId);
-    if (!regionEntry || Date.now() >= regionEntry.expiry) {
-      const prices = await fetchRegionPrices(regionId);
-      regionPriceCache.set(regionId, { prices, expiry: Date.now() + 3600000 });
-      regionEntry = regionPriceCache.get(regionId);
-    }
+    // Use only already-cached prices — never trigger a live fetch here.
+    // fetchRegionPrices takes 30–60s for busy regions (Jita). Calling it
+    // inline would push the request past Cloudflare's ~30s timeout → 502.
+    // The precompute job populates the cache within a few minutes of startup;
+    // once warm the cache stays valid for 1 h.  If the cache is still cold,
+    // we return sell_price = 0 and flag it so the UI can explain the gap.
+    const regionEntry = regionPriceCache.get(regionId);
+    const pricesWarm  = !!(regionEntry && Date.now() < regionEntry.expiry);
 
-    const priceData  = regionEntry?.prices?.[product_id];
+    const priceData  = pricesWarm ? regionEntry.prices[product_id] : null;
     const unitSell   = priceData?.sell || 0;
     const units      = mfg.units || 1;
     const sellPrice  = unitSell * units;  // total revenue for all units in one run
@@ -3827,6 +3828,7 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
 
       // Context
       region_id:         regionId,
+      prices_warm:       pricesWarm,   // false = precompute still loading; sell/profit figures are 0
       setup_configured:  !!(settings?.system_id),
       manufacturing_setup: {
         system_id:          settings?.system_id         || null,

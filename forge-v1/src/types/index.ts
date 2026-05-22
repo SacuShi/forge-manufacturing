@@ -303,6 +303,7 @@ export interface TrueCostResponse {
   true_profit:  number;
   true_margin:  number;
   region_id:    number;
+  prices_warm:  boolean;   // false = precompute still loading; sell/profit are 0
   setup_configured: boolean;
 
   manufacturing_setup: {

@@ -622,6 +622,14 @@ const RightSidebar: FC<RightSidebarProps> = ({
               </div>
             )}
 
+            {trueCostData && !trueCostLoading && !trueCostData.prices_warm && (
+              <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', padding: '4px 0 2px',
+                            display: 'flex', alignItems: 'center', gap: 5 }}>
+                <span style={{ color: 'var(--color-accent-primary)' }}>⟳</span>
+                Market prices loading — sell price &amp; profit will update automatically.
+              </div>
+            )}
+
             {trueCostData && !trueCostLoading && (
               <div className="cost-breakdown-row">
 
