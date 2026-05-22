@@ -438,36 +438,36 @@ Object.defineProperty(global, 'jitaPricesCache', {
  * blueprintId: blueprint_id from the blueprints table
  */
 async function canBuildBlueprint(characterSkills, blueprintId) {
+  // Inner try isolates a missing blueprint_skills table (returns true = allow through).
+  // Outer try catches unexpected DB errors (returns false = exclude conservatively).
   try {
-      let requirements = [];
+    let requirements = [];
     try {
       requirements = await dbAll(
         'SELECT skill_id, skill_level FROM blueprint_skills WHERE blueprint_id = ?',
         [blueprintId]
       );
-    } catch (skillErr) {
-      // Table missing — treat as no requirements (allow all blueprints through)
+    } catch (_skillErr) {
+      // blueprint_skills table missing — no requirements known, allow all through
       return true;
     }
 
-    if (!requirements || requirements.length === 0) return true;
+    if (!requirements.length) return true;
 
+    // Build a skill_id → trained_level map for O(1) lookup
     const skillMap = {};
-    characterSkills.forEach(s => {
+    for (const s of characterSkills) {
       skillMap[s.skill_id] = s.active_skill_level || 0;
-    });
+    }
 
     for (const req of requirements) {
-      const charLevel = skillMap[req.skill_id] || 0;
-      if (charLevel < req.skill_level) {
-        return false;
-      }
+      if ((skillMap[req.skill_id] || 0) < req.skill_level) return false;
     }
 
     return true;
   } catch (err) {
     console.error('Skill check error:', err.message);
-    return false;
+    return false; // conservative: exclude on unexpected error
   }
 }
 
@@ -818,7 +818,7 @@ app.get('/api/blueprint-database', security.apiLimiter, async (req, res) => {
 
 // CALCULATE PROFITABILITY - Server-side pre-calculation
 // Returns only top N profitable items
-app.post('/api/calculate-profitability', async (req, res) => {
+app.post('/api/calculate-profitability', security.apiLimiter, async (req, res) => {
   try {
     const { ownedBlueprints, topN = 20 } = req.body;
     
@@ -921,7 +921,7 @@ async function calculateMaterialCost(materialId, quantity, prices) {
 }
 
 // PRODUCTION CHAIN - Full recursive build tree
-app.post('/api/production-chain', async (req, res) => {
+app.post('/api/production-chain', security.apiLimiter, async (req, res) => {
   try {
     const { itemName, ownedBlueprints } = req.body;
 
@@ -1039,7 +1039,7 @@ async function buildMaterialChain(material, prices, ownedBpIds) {
 
 // GET JITA PRICE - Single item price lookup from cache
 // Used by AI tool to query prices on-demand
-app.post('/api/get-price', async (req, res) => {
+app.post('/api/get-price', security.apiLimiter, async (req, res) => {
   try {
     const { itemName, typeId } = req.body;
     
@@ -1095,7 +1095,7 @@ app.post('/api/get-price', async (req, res) => {
 
 // GET BLUEPRINT - Query any blueprint from database
 // Used by AI to get materials for any item
-app.post('/api/get-blueprint', async (req, res) => {
+app.post('/api/get-blueprint', security.apiLimiter, async (req, res) => {
   // Ensure JSON response even on catastrophic failure
   try {
     const { itemName, productId } = req.body;
@@ -1179,8 +1179,8 @@ app.post('/api/get-blueprint', async (req, res) => {
           materialId: mat.material_id,
           name: matName,
           quantity: mat.quantity,
-          unitCost: matPrice ? matPrice.buy : 0,
-          totalCost: matPrice ? matPrice.buy * mat.quantity : 0
+          unitCost: matPrice ? (matPrice.sell || matPrice.buy || 0) : 0,
+          totalCost: matPrice ? (matPrice.sell || matPrice.buy || 0) * mat.quantity : 0
         };
       })
     );
@@ -1213,7 +1213,7 @@ app.post('/api/get-blueprint', async (req, res) => {
 });
 
 // ITEM DETAILS - For right panel with build analysis
-app.post('/api/item-details', async (req, res) => {
+app.post('/api/item-details', security.apiLimiter, async (req, res) => {
   try {
     const {
       typeId,
@@ -1353,10 +1353,11 @@ app.post('/api/item-details', async (req, res) => {
             }
           }
 
-          // Unit cost uses the source-hub price (matPrices), which may differ
-          // from the sell-hub if the user has selected separate Source/Market hubs.
+          // Unit cost uses the source-hub SELL price (lowest ask) — the price a
+          // manufacturer actually pays to buy materials immediately from the market.
+          // Using .buy (highest bid) would understate costs; consistent with /api/true-cost.
           const matPrice = matPrices[mat.material_id];
-          const unitCost = matPrice ? matPrice.buy : 0;
+          const unitCost = matPrice ? (matPrice.sell || matPrice.buy || 0) : 0;
           const itemCost = unitCost * needed;
           totalCost += itemCost;
 
@@ -1408,7 +1409,7 @@ app.post('/api/item-details', async (req, res) => {
 
 // ANALYZE BLUEPRINTS - Calculate profitability/buildability for all user BPs
 // Used by AI to get top profitable/buildable items
-app.post('/api/analyze-blueprints', async (req, res) => {
+app.post('/api/analyze-blueprints', security.apiLimiter, async (req, res) => {
   try {
     const { ownedBlueprints, assets, sortBy = 'profit', limit = 20, buildableOnly = false } = req.body;
     
@@ -1500,7 +1501,7 @@ app.post('/api/analyze-blueprints', async (req, res) => {
         const shortage = Math.max(0, needed - userHas);
         
         const matPrice = jitaPricesCache ? jitaPricesCache[mat.material_id] : null;
-        const unitCost = matPrice ? matPrice.buy : 0;
+        const unitCost = matPrice ? (matPrice.sell || matPrice.buy || 0) : 0;
         totalCost += unitCost * needed;
         
         if (shortage > 0) canBuild = false;
@@ -3057,7 +3058,9 @@ app.get('/api/top-profitable', security.apiLimiter, async (req, res) => {
     const sort        = req.query.sort || 'profit';
     const limit       = Math.min(parseInt(req.query.limit) || 20, 100);
     const minProfit   = parseFloat(req.query.minProfit) || 0;
-    const minVolume   = parseFloat(req.query.minVolume) !== undefined ? parseFloat(req.query.minVolume) : 5;
+    // parseFloat(undefined) returns NaN; NaN !== undefined is always true, so the
+    // ternary must check the raw query string, not the parsed float.
+    const minVolume   = req.query.minVolume !== undefined ? parseFloat(req.query.minVolume) : 5;
     const includeRisky = req.query.includeRisky === 'true';
 
     // Sell hub — where finished goods are listed for sale
@@ -3152,7 +3155,8 @@ app.get('/api/top-profitable', security.apiLimiter, async (req, res) => {
           sell.computed_at,
           sell.avg_daily_volume,
           sell.market_group_id,
-          sell.liquidity_risk
+          sell.liquidity_risk,
+          COALESCE(sell.activity_id, 1) AS activity_id
         FROM precomputed_profits sell
         JOIN precomputed_profits src
           ON  src.blueprint_id = sell.blueprint_id
@@ -3160,7 +3164,9 @@ app.get('/api/top-profitable', security.apiLimiter, async (req, res) => {
         WHERE ${joinConditions.join(' AND ')}
         ORDER BY profit DESC
         LIMIT ?
-      `, [...params, sourceRegionId, limit]);
+      `,
+      // sourceRegionId FIRST — binds JOIN's src.region_id = ? which precedes WHERE in SQL text
+      [sourceRegionId, ...params, limit]);
     }
 
     // Get last run info
@@ -3211,7 +3217,9 @@ app.get('/api/top-profitable-by-skills', security.apiLimiter, security.verifyEve
     const limit        = Math.min(parseInt(req.query.limit) || 50, 200);
     const offset       = Math.max(parseInt(req.query.offset) || 0, 0);
     const minProfit    = parseFloat(req.query.minProfit) || 0;
-    const minVolume    = parseFloat(req.query.minVolume) !== undefined ? parseFloat(req.query.minVolume) : 5;
+    // parseFloat(undefined) returns NaN; NaN !== undefined is always true, so the
+    // ternary must check the raw query string, not the parsed float.
+    const minVolume    = req.query.minVolume !== undefined ? parseFloat(req.query.minVolume) : 5;
     const includeRisky = req.query.includeRisky === 'true';
 
     // Sell hub — where finished goods are listed for sale
@@ -3957,7 +3965,7 @@ app.get('/api/system-search', security.apiLimiter, security.verifyEveToken, asyn
 });
 
 // POST /api/true-cost — calculate full True Profit for an item with all fees
-// Body: { product_id, me, te, runs, regionId }
+// Body: { product_id, me, te, runs, regionId, materialRegionId }
 //
 // Calculation is fully local — no external API calls during the request:
 //   • Material quantities  → blueprint_materials table (already in DB)
