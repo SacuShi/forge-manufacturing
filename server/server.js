@@ -398,6 +398,9 @@ app.post('/api/eve-token', security.authLimiter, async (req, res) => {
 // v0.9.4: Only Jita (10000002) is populated. v1.1 will populate multiple regions.
 const regionPriceCache = new Map();
 
+// Tracks which regions have a background price-warm in flight (avoid duplicate fetches)
+const regionWarmingSet = new Set();
+
 // Backwards-compatible accessor for existing code
 // jitaPricesCache points to the Jita entry in regionPriceCache
 let jitaPricesCacheExpiry = 0; // Keep this for now, used by existing code
@@ -3831,22 +3834,47 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
     const facilityTaxCost = eiv * facilityTaxDecimal;
     const totalJobCost   = systemJobCost + sccSurcharge + facilityTaxCost;
 
-    // ── Material cost (market sell prices, Jita-sourced) ──────────────────
-    // Use region price cache. Jita is the sourcing market for materials regardless
-    // of where the player sells, so we always use region 10000002 for mat costs.
-    const jitaEntry  = regionPriceCache.get(10000002);
-    const jitaWarm   = !!(jitaEntry && Date.now() < jitaEntry.expiry);
+    // ── Market prices: materials + sell price (selected hub) ─────────────
+    // Both material sourcing and selling use the hub the user has selected.
+    // If the live price cache is cold (e.g. after a server restart before
+    // precompute finishes), fall back to the precomputed DB row for this
+    // product+region and kick off a background cache warm so the next
+    // request gets live prices. Never block the response on a slow ESI fetch.
+    const regionEntry = regionPriceCache.get(regionId);
+    const pricesWarm  = !!(regionEntry && Date.now() < regionEntry.expiry);
+
     let totalMaterialCost = 0;
-    for (const mat of materials) {
-      const matPrice = jitaWarm ? (jitaEntry.prices[mat.material_id]?.sell || 0) : 0;
-      const adjQty   = Math.max(1, Math.ceil(mat.quantity * meFactor)) * runs;
-      totalMaterialCost += matPrice * adjQty;
+    let unitSell          = 0;
+
+    if (pricesWarm) {
+      // ── Live prices: calculate exactly with ME-adjusted quantities ──────
+      for (const mat of materials) {
+        const matPrice = regionEntry.prices[mat.material_id]?.sell || 0;
+        const adjQty   = Math.max(1, Math.ceil(mat.quantity * meFactor)) * runs;
+        totalMaterialCost += matPrice * adjQty;
+      }
+      unitSell = regionEntry.prices[product_id]?.sell || 0;
+    } else {
+      // ── Cache cold: use precomputed DB row as best-available fallback ───
+      // precomputed material_cost is at ME=0; scale by meFactor as approximation.
+      const precomp = await dbGet(
+        'SELECT material_cost, sell_price FROM precomputed_profits WHERE product_id = ? AND region_id = ?',
+        [product_id, regionId]
+      );
+      if (precomp) {
+        totalMaterialCost = (precomp.material_cost || 0) * meFactor * runs;
+        unitSell          = precomp.sell_price || 0;
+      }
+      // Trigger background warm — next request will get live prices
+      if (!regionWarmingSet.has(regionId)) {
+        regionWarmingSet.add(regionId);
+        fetchRegionPrices(regionId)
+          .then(prices => regionPriceCache.set(regionId, { prices, expiry: Date.now() + 3600000 }))
+          .catch(() => {})
+          .finally(() => regionWarmingSet.delete(regionId));
+      }
     }
 
-    // ── Sell price (selected region) ───────────────────────────────────────
-    const regionEntry  = regionPriceCache.get(regionId);
-    const pricesWarm   = !!(regionEntry && Date.now() < regionEntry.expiry);
-    const unitSell     = pricesWarm ? (regionEntry.prices[product_id]?.sell || 0) : 0;
     const productUnits = (blueprint.product_quantity || 1) * runs;
     const sellPrice    = unitSell * productUnits;
 
