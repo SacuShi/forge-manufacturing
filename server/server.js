@@ -9,6 +9,7 @@ const fetch = require('node-fetch');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const helmet = require('helmet');
+const crypto = require('crypto');  // built-in — AES-256-GCM token encryption + scrypt PIN hashing
 const security = require('./forge-security');
 require('dotenv').config();
 
@@ -251,6 +252,109 @@ async function runMigrations() {
   try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN material_region_id   INTEGER DEFAULT 10000002`); } catch (_) {}
   try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN material_region_name TEXT    DEFAULT 'Jita'`);    } catch (_) {}
 
+  // ── v1.4.0 Corp Feature migrations ─────────────────────────────────────────
+  //
+  // corp_config         — one row per corporation; stores encrypted director refresh token + PIN hash
+  // corp_blueprints     — ESI corp blueprint cache (refreshed via director token)
+  // corp_assets         — ESI corp asset cache
+  // corp_jobs           — ESI corp industry job cache
+  // corp_pin_sessions   — tracks which characters have successfully verified the PIN (24hr expiry)
+  // corp_admin_access   — admin-whitelist: characters that bypass PIN entirely (dev/testing)
+  //
+  // Token encryption:  AES-256-GCM via Node built-in crypto (no extra dependencies)
+  // PIN hashing:       crypto.scrypt (Node built-in; memory-hard; no extra dependencies)
+
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS corp_config (
+      corp_id              INTEGER PRIMARY KEY,
+      corp_name            TEXT    NOT NULL DEFAULT '',
+      director_char_id     INTEGER NOT NULL,
+      director_char_name   TEXT    NOT NULL DEFAULT '',
+      enc_refresh_token    TEXT    NOT NULL,  -- AES-256-GCM ciphertext, base64
+      token_iv             TEXT    NOT NULL,  -- 12-byte IV, hex
+      token_tag            TEXT    NOT NULL,  -- 16-byte auth tag, hex
+      pin_hash             TEXT    NOT NULL,  -- scrypt hash of 6-digit PIN, base64
+      pin_salt             TEXT    NOT NULL,  -- 32-byte salt, hex
+      last_refresh_at      TEXT    DEFAULT NULL,
+      last_refresh_status  TEXT    DEFAULT NULL,
+      created_at           TEXT    NOT NULL DEFAULT (datetime('now')),
+      updated_at           TEXT    NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS corp_blueprints (
+      item_id              INTEGER PRIMARY KEY,  -- ESI unique item_id for this blueprint instance
+      corp_id              INTEGER NOT NULL,
+      type_id              INTEGER NOT NULL,
+      quantity             INTEGER DEFAULT 0,    -- -1 = singleton
+      runs                 INTEGER DEFAULT -1,   -- -1 = BPO (infinite), ≥ 0 = BPC
+      material_efficiency  INTEGER DEFAULT 0,
+      time_efficiency      INTEGER DEFAULT 0,
+      location_id          INTEGER,
+      location_flag        TEXT,
+      fetched_at           TEXT    NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_corp_bp_corp   ON corp_blueprints (corp_id)`);
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_corp_bp_type   ON corp_blueprints (type_id)`);
+
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS corp_assets (
+      item_id       INTEGER PRIMARY KEY,  -- ESI unique item_id
+      corp_id       INTEGER NOT NULL,
+      type_id       INTEGER NOT NULL,
+      quantity      INTEGER DEFAULT 1,
+      location_id   INTEGER,
+      location_flag TEXT,
+      is_singleton  INTEGER DEFAULT 0,
+      fetched_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_corp_assets_corp ON corp_assets (corp_id)`);
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_corp_assets_type ON corp_assets (type_id)`);
+
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS corp_jobs (
+      job_id              INTEGER PRIMARY KEY,  -- ESI job_id
+      corp_id             INTEGER NOT NULL,
+      installer_id        INTEGER,
+      blueprint_id        INTEGER,
+      blueprint_type_id   INTEGER,
+      product_type_id     INTEGER,
+      activity_id         INTEGER,
+      runs                INTEGER,
+      status              TEXT,
+      start_date          TEXT,
+      end_date            TEXT,
+      duration            INTEGER,
+      output_location_id  INTEGER,
+      fetched_at          TEXT    NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_corp_jobs_corp ON corp_jobs (corp_id)`);
+
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS corp_pin_sessions (
+      character_id INTEGER PRIMARY KEY,  -- character who verified the PIN
+      corp_id      INTEGER NOT NULL,
+      verified_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+      expires_at   TEXT    NOT NULL       -- 24hr from verified_at
+    )
+  `);
+
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS corp_admin_access (
+      character_id INTEGER PRIMARY KEY,  -- character bypasses PIN check entirely
+      corp_id      INTEGER,              -- NULL = access all corps
+      note         TEXT,                 -- admin note (e.g. "developer testing")
+      added_at     TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+
   console.log('✓ Database migrations complete');
 }
 
@@ -269,6 +373,313 @@ const getCached = (key) => {
 const setCached = (key, data, ttl = 3600000) => {
   cache.set(key, { data, expiry: Date.now() + ttl });
 };
+
+// ── CORP CRYPTO HELPERS (v1.4.0) ────────────────────────────────────────────
+//
+// Token encryption: AES-256-GCM with a 32-byte key derived from FORGE_CORP_KEY
+// (which must be at least 32 hex chars / 16 bytes raw; padded/hashed here).
+// The 32-byte key is derived once at startup and reused — never sent over the wire.
+//
+// PIN hashing: crypto.scrypt — memory-hard, no extra npm packages needed.
+//   N=16384, r=8, p=1, keylen=32 — appropriate for a 6-digit PIN with server-side
+//   rate limiting as the primary anti-brute-force defence.
+
+const CORP_ENCRYPTION_KEY = (() => {
+  // Derive a fixed 32-byte key from FORGE_CORP_KEY (env var) via SHA-256.
+  // If the env var is not set, the server still boots but corp setup will fail
+  // loudly — this is intentional (don't silently use a predictable key).
+  const raw = process.env.FORGE_CORP_KEY || '';
+  if (!raw) {
+    console.warn('⚠ FORGE_CORP_KEY not set — corp token encryption disabled. Set this env var before using corp features.');
+    return null;
+  }
+  return crypto.createHash('sha256').update(raw).digest(); // 32-byte Buffer
+})();
+
+/**
+ * Encrypt a plaintext string with AES-256-GCM.
+ * Returns { ciphertext (base64), iv (hex), tag (hex) }.
+ */
+function encryptToken(plaintext) {
+  if (!CORP_ENCRYPTION_KEY) throw new Error('FORGE_CORP_KEY not configured');
+  const iv = crypto.randomBytes(12);   // 96-bit IV — recommended for GCM
+  const cipher = crypto.createCipheriv('aes-256-gcm', CORP_ENCRYPTION_KEY, iv);
+  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  return {
+    ciphertext: encrypted.toString('base64'),
+    iv:         iv.toString('hex'),
+    tag:        cipher.getAuthTag().toString('hex'),
+  };
+}
+
+/**
+ * Decrypt a ciphertext string encrypted by encryptToken().
+ * Throws if the auth tag doesn't match (tampered/corrupted data).
+ */
+function decryptToken(ciphertext, ivHex, tagHex) {
+  if (!CORP_ENCRYPTION_KEY) throw new Error('FORGE_CORP_KEY not configured');
+  const decipher = crypto.createDecipheriv(
+    'aes-256-gcm',
+    CORP_ENCRYPTION_KEY,
+    Buffer.from(ivHex, 'hex')
+  );
+  decipher.setAuthTag(Buffer.from(tagHex, 'hex'));
+  const decrypted = Buffer.concat([
+    decipher.update(Buffer.from(ciphertext, 'base64')),
+    decipher.final(),
+  ]);
+  return decrypted.toString('utf8');
+}
+
+/**
+ * Hash a 6-digit PIN with scrypt.
+ * Returns { hash (base64), salt (hex) }.
+ */
+function hashPin(pin) {
+  const salt = crypto.randomBytes(32);
+  const hash = crypto.scryptSync(String(pin), salt, 32, { N: 16384, r: 8, p: 1 });
+  return { hash: hash.toString('base64'), salt: salt.toString('hex') };
+}
+
+/**
+ * Verify a PIN against a stored hash+salt.
+ * Returns true if the PIN matches.
+ */
+function verifyPin(pin, hashBase64, saltHex) {
+  const salt = Buffer.from(saltHex, 'hex');
+  const stored = Buffer.from(hashBase64, 'base64');
+  const derived = crypto.scryptSync(String(pin), salt, 32, { N: 16384, r: 8, p: 1 });
+  // timingSafeEqual prevents timing attacks even against a short PIN
+  return crypto.timingSafeEqual(derived, stored);
+}
+
+// ── CORP ESI HELPERS (v1.4.0) ────────────────────────────────────────────────
+
+/**
+ * Refresh the director's EVE access token using the stored encrypted refresh token.
+ * Returns the new short-lived access_token string.
+ * Updates corp_config with the new refresh token if one is issued (token rotation).
+ */
+async function refreshCorpAccessToken(corpId) {
+  const config = await dbGet('SELECT * FROM corp_config WHERE corp_id = ?', [corpId]);
+  if (!config) throw new Error(`No corp config for corp_id ${corpId}`);
+
+  const refreshToken = decryptToken(
+    config.enc_refresh_token,
+    config.token_iv,
+    config.token_tag
+  );
+
+  const clientId     = process.env.EVE_CLIENT_ID;
+  const clientSecret = process.env.EVE_CLIENT_SECRET;
+  const authHeader   = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+
+  const res = await fetch('https://login.eveonline.com/v2/oauth/token', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Basic ${authHeader}`,
+      'Content-Type':  'application/x-www-form-urlencoded',
+      'Host':          'login.eveonline.com',
+    },
+    body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(refreshToken)}`,
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(`Token refresh failed: ${data.error_description || data.error || res.status}`);
+  }
+
+  // If EVE issues a new refresh token (token rotation), encrypt and store it
+  if (data.refresh_token && data.refresh_token !== refreshToken) {
+    const enc = encryptToken(data.refresh_token);
+    await dbRun(
+      `UPDATE corp_config
+         SET enc_refresh_token = ?, token_iv = ?, token_tag = ?, updated_at = datetime('now')
+       WHERE corp_id = ?`,
+      [enc.ciphertext, enc.iv, enc.tag, corpId]
+    );
+    console.log(`✓ Corp ${corpId}: refresh token rotated and re-encrypted`);
+  }
+
+  return data.access_token;
+}
+
+/**
+ * Fetch all pages of a paginated ESI endpoint using the director's access token.
+ * Returns a flat array of all results.
+ */
+async function esiCorpFetchAll(path, accessToken) {
+  const results = [];
+  for (let page = 1; page <= 200; page++) {
+    const sep = path.includes('?') ? '&' : '?';
+    const res = await fetch(`https://esi.evetech.net${path}${sep}datasource=tranquility&page=${page}`, {
+      headers: { 'Authorization': `Bearer ${accessToken}` },
+    });
+    if (!res.ok) {
+      if (res.status === 404 && page === 1) return []; // empty corp data
+      throw new Error(`ESI ${path} page ${page} returned ${res.status}`);
+    }
+    const data = await res.json();
+    if (!data || data.length === 0) break;
+    results.push(...data);
+    const xPages = res.headers.get('x-pages');
+    if (!xPages || page >= parseInt(xPages)) break;
+    // Brief delay to respect ESI rate limits
+    await new Promise(r => setTimeout(r, 150));
+  }
+  return results;
+}
+
+/**
+ * Refresh all cached corp data (blueprints, assets, jobs) from ESI.
+ * Uses the stored director refresh token.  Called on demand and on a schedule.
+ * Updates corp_config.last_refresh_* columns on completion.
+ */
+async function refreshCorpData(corpId) {
+  console.log(`⟳ Corp ${corpId}: refreshing ESI data...`);
+  try {
+    const accessToken = await refreshCorpAccessToken(corpId);
+
+    // ── Blueprints ───────────────────────────────────────────────────────────
+    const bps = await esiCorpFetchAll(
+      `/latest/corporations/${corpId}/blueprints/`,
+      accessToken
+    );
+    // Atomically replace with new data
+    await dbRun('DELETE FROM corp_blueprints WHERE corp_id = ?', [corpId]);
+    for (const bp of bps) {
+      await dbRun(
+        `INSERT OR REPLACE INTO corp_blueprints
+           (item_id, corp_id, type_id, quantity, runs,
+            material_efficiency, time_efficiency, location_id, location_flag, fetched_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+        [
+          bp.item_id, corpId, bp.type_id,
+          bp.quantity   ?? 0,
+          bp.runs       ?? -1,
+          bp.material_efficiency ?? 0,
+          bp.time_efficiency     ?? 0,
+          bp.location_id   ?? null,
+          bp.location_flag ?? null,
+        ]
+      );
+    }
+    console.log(`  ✓ Corp ${corpId}: ${bps.length} blueprints cached`);
+
+    // ── Assets ───────────────────────────────────────────────────────────────
+    const assets = await esiCorpFetchAll(
+      `/latest/corporations/${corpId}/assets/`,
+      accessToken
+    );
+    await dbRun('DELETE FROM corp_assets WHERE corp_id = ?', [corpId]);
+    for (const asset of assets) {
+      await dbRun(
+        `INSERT OR REPLACE INTO corp_assets
+           (item_id, corp_id, type_id, quantity, location_id, location_flag, is_singleton, fetched_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+        [
+          asset.item_id, corpId, asset.type_id,
+          asset.quantity     ?? 1,
+          asset.location_id  ?? null,
+          asset.location_flag ?? null,
+          asset.is_singleton  ? 1 : 0,
+        ]
+      );
+    }
+    console.log(`  ✓ Corp ${corpId}: ${assets.length} assets cached`);
+
+    // ── Industry Jobs ────────────────────────────────────────────────────────
+    const jobs = await esiCorpFetchAll(
+      `/latest/corporations/${corpId}/industry/jobs/?include_completed=false`,
+      accessToken
+    );
+    await dbRun('DELETE FROM corp_jobs WHERE corp_id = ?', [corpId]);
+    for (const job of jobs) {
+      await dbRun(
+        `INSERT OR REPLACE INTO corp_jobs
+           (job_id, corp_id, installer_id, blueprint_id, blueprint_type_id, product_type_id,
+            activity_id, runs, status, start_date, end_date, duration,
+            output_location_id, fetched_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+        [
+          job.job_id,              corpId,
+          job.installer_id        ?? null,
+          job.blueprint_id        ?? null,
+          job.blueprint_type_id   ?? null,
+          job.product_type_id     ?? null,
+          job.activity_id         ?? null,
+          job.runs                ?? null,
+          job.status              ?? null,
+          job.start_date          ?? null,
+          job.end_date            ?? null,
+          job.duration            ?? null,
+          job.output_location_id  ?? null,
+        ]
+      );
+    }
+    console.log(`  ✓ Corp ${corpId}: ${jobs.length} active jobs cached`);
+
+    // Update last_refresh timestamp
+    await dbRun(
+      `UPDATE corp_config
+         SET last_refresh_at = datetime('now'), last_refresh_status = 'ok', updated_at = datetime('now')
+       WHERE corp_id = ?`,
+      [corpId]
+    );
+    console.log(`✓ Corp ${corpId}: ESI data refresh complete`);
+    return { ok: true, blueprints: bps.length, assets: assets.length, jobs: jobs.length };
+
+  } catch (err) {
+    console.error(`❌ Corp ${corpId}: ESI refresh failed — ${err.message}`);
+    await dbRun(
+      `UPDATE corp_config
+         SET last_refresh_status = ?, updated_at = datetime('now')
+       WHERE corp_id = ?`,
+      [`error: ${err.message.slice(0, 200)}`, corpId]
+    ).catch(() => {});
+    throw err;
+  }
+}
+
+/**
+ * Middleware: verify that the authed character has corp data access.
+ * Priority:
+ *   1. corp_admin_access entry (whitelist) → immediate access
+ *   2. Valid corp_pin_sessions entry (not expired) → access
+ *   3. Else → 403 with CORP_PIN_REQUIRED code
+ *
+ * Must be used AFTER security.verifyEveToken (which sets req.characterId).
+ */
+async function requireCorpAccess(req, res, next) {
+  const characterId = req.characterId;
+  if (!characterId) return res.status(401).json({ error: 'Not authenticated' });
+
+  try {
+    // 1. Admin/dev whitelist — bypasses PIN entirely
+    const adminRow = await dbGet(
+      'SELECT 1 FROM corp_admin_access WHERE character_id = ?',
+      [characterId]
+    );
+    if (adminRow) return next();
+
+    // 2. Active PIN session
+    const session = await dbGet(
+      `SELECT * FROM corp_pin_sessions
+       WHERE character_id = ? AND expires_at > datetime('now')`,
+      [characterId]
+    );
+    if (session) return next();
+
+    // 3. Not verified
+    return res.status(403).json({
+      error: 'Corp data access requires PIN verification.',
+      code:  'CORP_PIN_REQUIRED',
+    });
+  } catch (err) {
+    console.error('requireCorpAccess error:', err.message);
+    return res.status(500).json({ error: 'Access check failed' });
+  }
+}
 
 // PAGINATED REGION PRICE FETCHER
 // Fetches complete order book from ESI for any region (handles pagination)
@@ -4209,6 +4620,559 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
     res.status(500).json({ error: err.message });
   }
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+// CORP API ENDPOINTS (v1.4.0)
+//
+// Rate-limiting strategy:
+//   - PIN verify:   tight auth limiter (5 req/15min per IP) — brute-force protection
+//   - Data reads:   standard apiLimiter
+//   - Admin ops:    admin key header replaces rate limit (no EVE token required)
+//
+// All data endpoints use: security.apiLimiter → security.verifyEveToken → requireCorpAccess
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── Admin helper ────────────────────────────────────────────────────────────
+
+/** Validate X-Admin-Key header.  Returns true if the key matches FORGE_ADMIN_KEY. */
+function isAdminRequest(req) {
+  const adminKey = process.env.FORGE_ADMIN_KEY;
+  return adminKey && req.headers['x-admin-key'] === adminKey;
+}
+
+// ── GET /api/corp/status ─────────────────────────────────────────────────────
+// Public (no EVE token needed) — lets the frontend know whether a corp has been
+// set up so it can show the correct UI state.
+app.get('/api/corp/status', security.apiLimiter, async (req, res) => {
+  try {
+    const config = await dbGet(
+      'SELECT corp_id, corp_name, director_char_name, last_refresh_at, last_refresh_status FROM corp_config LIMIT 1'
+    );
+    if (!config) {
+      return res.json({ configured: false });
+    }
+    res.json({
+      configured:         true,
+      corp_id:            config.corp_id,
+      corp_name:          config.corp_name,
+      director_char_name: config.director_char_name,
+      last_refresh_at:    config.last_refresh_at,
+      last_refresh_status: config.last_refresh_status,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/corp/setup ─────────────────────────────────────────────────────
+// Admin-only (X-Admin-Key required).
+// Body: { code, redirect_uri, pin }
+//
+// Flow:
+//  1. Validate admin key + inputs
+//  2. Exchange EVE OAuth code for tokens (must have corp scopes)
+//  3. Verify JWT to get character_id; look up corp_id from ESI
+//  4. Encrypt refresh_token; hash PIN
+//  5. Upsert corp_config
+//  6. Trigger initial ESI data refresh in background
+app.post('/api/corp/setup', async (req, res) => {
+  if (!isAdminRequest(req)) {
+    return res.status(403).json({ error: 'Admin key required' });
+  }
+
+  const { code, redirect_uri, pin } = req.body;
+
+  if (!code || !redirect_uri) {
+    return res.status(400).json({ error: 'Missing code or redirect_uri' });
+  }
+  if (!pin || !/^\d{6}$/.test(String(pin))) {
+    return res.status(400).json({ error: 'PIN must be exactly 6 digits' });
+  }
+  if (!CORP_ENCRYPTION_KEY) {
+    return res.status(500).json({ error: 'FORGE_CORP_KEY not configured on server' });
+  }
+
+  try {
+    // 1. Exchange auth code for EVE tokens
+    const clientId     = process.env.EVE_CLIENT_ID;
+    const clientSecret = process.env.EVE_CLIENT_SECRET;
+    const authHeader   = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+
+    const tokenRes = await fetch('https://login.eveonline.com/v2/oauth/token', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Basic ${authHeader}`,
+        'Content-Type':  'application/x-www-form-urlencoded',
+        'Host':          'login.eveonline.com',
+      },
+      body: `grant_type=authorization_code&code=${code}&redirect_uri=${encodeURIComponent(redirect_uri)}`,
+    });
+
+    const tokenData = await tokenRes.json();
+    if (!tokenRes.ok) {
+      return res.status(400).json({ error: tokenData.error_description || 'Token exchange failed' });
+    }
+
+    const { access_token, refresh_token } = tokenData;
+    if (!refresh_token) {
+      return res.status(400).json({ error: 'No refresh token in response — ensure offline_access scope is granted' });
+    }
+
+    // 2. Verify token + get character info from EVE SSO
+    const verifyRes = await fetch('https://login.eveonline.com/oauth/verify', {
+      headers: { 'Authorization': `Bearer ${access_token}` },
+    });
+    const charInfo = await verifyRes.json();
+    const characterId   = charInfo.CharacterID;
+    const characterName = charInfo.CharacterName;
+
+    if (!characterId) {
+      return res.status(400).json({ error: 'Could not verify character from token' });
+    }
+
+    // 3. Confirm corp scopes are present
+    const grantedScopes = (charInfo.Scopes || '').split(' ');
+    const requiredScopes = [
+      'esi-corporations.read_blueprints.v1',
+      'esi-corporations.read_assets.v1',
+      'esi-corporations.read_industry_jobs.v1',
+    ];
+    const missingScopes = requiredScopes.filter(s => !grantedScopes.includes(s));
+    if (missingScopes.length) {
+      return res.status(400).json({
+        error: `Missing required corp scopes: ${missingScopes.join(', ')}. ` +
+               `Ensure the director authorized all corp scopes.`,
+      });
+    }
+
+    // 4. Fetch character's corporation from ESI
+    const charRes = await fetch(
+      `https://esi.evetech.net/latest/characters/${characterId}/?datasource=tranquility`,
+      { headers: { 'Authorization': `Bearer ${access_token}` } }
+    );
+    const charData = await charRes.json();
+    const corpId   = charData.corporation_id;
+
+    if (!corpId) {
+      return res.status(400).json({ error: 'Could not determine corporation from ESI' });
+    }
+
+    // 5. Fetch corp name
+    const corpRes  = await fetch(
+      `https://esi.evetech.net/latest/corporations/${corpId}/?datasource=tranquility`
+    );
+    const corpData = await corpRes.json();
+    const corpName = corpData.name || `Corp ${corpId}`;
+
+    // 6. Encrypt refresh token + hash PIN
+    const enc = encryptToken(refresh_token);
+    const { hash: pinHash, salt: pinSalt } = hashPin(pin);
+
+    // 7. Upsert corp_config
+    await dbRun(
+      `INSERT INTO corp_config
+         (corp_id, corp_name, director_char_id, director_char_name,
+          enc_refresh_token, token_iv, token_tag,
+          pin_hash, pin_salt, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+       ON CONFLICT(corp_id) DO UPDATE SET
+         corp_name           = excluded.corp_name,
+         director_char_id    = excluded.director_char_id,
+         director_char_name  = excluded.director_char_name,
+         enc_refresh_token   = excluded.enc_refresh_token,
+         token_iv            = excluded.token_iv,
+         token_tag           = excluded.token_tag,
+         pin_hash            = excluded.pin_hash,
+         pin_salt            = excluded.pin_salt,
+         updated_at          = datetime('now')`,
+      [
+        corpId, corpName, characterId, characterName,
+        enc.ciphertext, enc.iv, enc.tag,
+        pinHash, pinSalt,
+      ]
+    );
+
+    console.log(`✓ Corp ${corpId} (${corpName}) configured by ${characterName} (${characterId})`);
+
+    // 8. Trigger initial ESI data refresh in background (non-blocking)
+    refreshCorpData(corpId).catch(err =>
+      console.error(`⚠ Initial corp data refresh failed: ${err.message}`)
+    );
+
+    res.json({
+      ok:            true,
+      corp_id:       corpId,
+      corp_name:     corpName,
+      director_name: characterName,
+      message:       'Corp configured successfully. Initial data refresh started in background.',
+    });
+
+  } catch (err) {
+    console.error('Corp setup error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/corp/verify-pin ────────────────────────────────────────────────
+// Rate-limited (authLimiter — 5 req/15min per IP).
+// Requires EVE token (character must be logged in).
+// Body: { pin }
+// Grants a 24-hour corp data session on success.
+app.post('/api/corp/verify-pin',
+  security.authLimiter,       // tight rate limit — brute-force protection
+  security.verifyEveToken,
+  async (req, res) => {
+    const { pin } = req.body;
+    if (!pin || !/^\d{6}$/.test(String(pin))) {
+      return res.status(400).json({ error: 'PIN must be exactly 6 digits' });
+    }
+
+    try {
+      const config = await dbGet('SELECT * FROM corp_config LIMIT 1');
+      if (!config) {
+        return res.status(404).json({ error: 'Corp not configured — contact your director.' });
+      }
+
+      const isValid = verifyPin(String(pin), config.pin_hash, config.pin_salt);
+      if (!isValid) {
+        // Log failed attempts for monitoring (not stored in DB to avoid PII creep)
+        console.warn(`⚠ Corp PIN verification failed for character ${req.characterId} (IP: ${req.ip})`);
+        return res.status(401).json({ error: 'Incorrect PIN.' });
+      }
+
+      // Create/update 24-hour session
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().replace('T', ' ').split('.')[0];
+      await dbRun(
+        `INSERT INTO corp_pin_sessions (character_id, corp_id, verified_at, expires_at)
+         VALUES (?, ?, datetime('now'), ?)
+         ON CONFLICT(character_id) DO UPDATE SET
+           corp_id     = excluded.corp_id,
+           verified_at = datetime('now'),
+           expires_at  = excluded.expires_at`,
+        [req.characterId, config.corp_id, expiresAt]
+      );
+
+      console.log(`✓ Corp PIN verified for character ${req.characterId} — session expires ${expiresAt}`);
+      res.json({ ok: true, corp_id: config.corp_id, expires_at: expiresAt });
+
+    } catch (err) {
+      console.error('Corp PIN verify error:', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+// ── GET /api/corp/access-status ──────────────────────────────────────────────
+// Returns whether the current character has active corp access (admin or PIN session).
+// Used by frontend to decide whether to show PIN modal vs data directly.
+app.get('/api/corp/access-status', security.apiLimiter, security.verifyEveToken, async (req, res) => {
+  try {
+    const characterId = req.characterId;
+
+    // Admin whitelist check
+    const adminRow = await dbGet(
+      'SELECT 1 FROM corp_admin_access WHERE character_id = ?', [characterId]
+    );
+    if (adminRow) {
+      return res.json({ hasAccess: true, method: 'admin' });
+    }
+
+    // Active PIN session check
+    const session = await dbGet(
+      `SELECT expires_at FROM corp_pin_sessions
+       WHERE character_id = ? AND expires_at > datetime('now')`,
+      [characterId]
+    );
+    if (session) {
+      return res.json({ hasAccess: true, method: 'pin', expires_at: session.expires_at });
+    }
+
+    res.json({ hasAccess: false });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/corp/blueprints ─────────────────────────────────────────────────
+// Returns cached corp blueprints with item names joined.
+// Query params: search (name filter), type (BPO|BPC|all), limit, offset
+app.get('/api/corp/blueprints',
+  security.apiLimiter,
+  security.verifyEveToken,
+  requireCorpAccess,
+  async (req, res) => {
+    try {
+      const config = await dbGet('SELECT corp_id, last_refresh_at FROM corp_config LIMIT 1');
+      if (!config) return res.status(404).json({ error: 'Corp not configured' });
+
+      const search = String(req.query.search || '').replace(/[^a-zA-Z0-9 '\-]/g, '').trim();
+      const type   = req.query.type || 'all';   // BPO | BPC | all
+      const limit  = Math.min(200, parseInt(req.query.limit  || '100') || 100);
+      const offset = Math.max(0,   parseInt(req.query.offset || '0')   || 0);
+
+      let whereClause = 'WHERE cb.corp_id = ?';
+      const params = [config.corp_id];
+
+      if (type === 'BPO') {
+        whereClause += ' AND cb.runs = -1';
+      } else if (type === 'BPC') {
+        whereClause += ' AND cb.runs >= 0';
+      }
+
+      if (search) {
+        whereClause += ' AND LOWER(COALESCE(i.name, "")) LIKE ?';
+        params.push(`%${search.toLowerCase()}%`);
+      }
+
+      const blueprints = await dbAll(
+        `SELECT
+           cb.item_id, cb.type_id, cb.quantity, cb.runs,
+           cb.material_efficiency AS me, cb.time_efficiency AS te,
+           cb.location_id, cb.location_flag, cb.fetched_at,
+           COALESCE(i.name, 'Item #' || cb.type_id) AS name,
+           CASE WHEN cb.runs = -1 THEN 'BPO' ELSE 'BPC' END AS bp_type
+         FROM corp_blueprints cb
+         LEFT JOIN items i ON i.type_id = cb.type_id
+         ${whereClause}
+         ORDER BY i.name ASC
+         LIMIT ? OFFSET ?`,
+        [...params, limit, offset]
+      );
+
+      const total = await dbGet(
+        `SELECT COUNT(*) AS n FROM corp_blueprints cb
+         LEFT JOIN items i ON i.type_id = cb.type_id
+         ${whereClause}`,
+        params
+      );
+
+      res.json({
+        blueprints,
+        meta: {
+          total:          total?.n ?? 0,
+          limit,
+          offset,
+          last_refresh_at: config.last_refresh_at,
+        },
+      });
+    } catch (err) {
+      console.error('Corp blueprints error:', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+// ── GET /api/corp/assets ─────────────────────────────────────────────────────
+// Returns cached corp assets grouped by type_id (summed quantity).
+// Query params: search, limit, offset
+app.get('/api/corp/assets',
+  security.apiLimiter,
+  security.verifyEveToken,
+  requireCorpAccess,
+  async (req, res) => {
+    try {
+      const config = await dbGet('SELECT corp_id, last_refresh_at FROM corp_config LIMIT 1');
+      if (!config) return res.status(404).json({ error: 'Corp not configured' });
+
+      const search = String(req.query.search || '').replace(/[^a-zA-Z0-9 '\-]/g, '').trim();
+      const limit  = Math.min(500, parseInt(req.query.limit  || '200') || 200);
+      const offset = Math.max(0,   parseInt(req.query.offset || '0')   || 0);
+
+      let whereClause = 'WHERE ca.corp_id = ?';
+      const params = [config.corp_id];
+
+      if (search) {
+        whereClause += ' AND LOWER(COALESCE(i.name, "")) LIKE ?';
+        params.push(`%${search.toLowerCase()}%`);
+      }
+
+      // Group by type_id and sum quantities for an aggregated view
+      const assets = await dbAll(
+        `SELECT
+           ca.type_id,
+           COALESCE(i.name, 'Item #' || ca.type_id) AS name,
+           SUM(ca.quantity) AS total_quantity,
+           MIN(ca.fetched_at)  AS fetched_at
+         FROM corp_assets ca
+         LEFT JOIN items i ON i.type_id = ca.type_id
+         ${whereClause}
+         GROUP BY ca.type_id
+         ORDER BY i.name ASC
+         LIMIT ? OFFSET ?`,
+        [...params, limit, offset]
+      );
+
+      const total = await dbGet(
+        `SELECT COUNT(DISTINCT ca.type_id) AS n
+         FROM corp_assets ca
+         LEFT JOIN items i ON i.type_id = ca.type_id
+         ${whereClause}`,
+        params
+      );
+
+      res.json({
+        assets,
+        meta: {
+          total:          total?.n ?? 0,
+          limit,
+          offset,
+          last_refresh_at: config.last_refresh_at,
+        },
+      });
+    } catch (err) {
+      console.error('Corp assets error:', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+// ── GET /api/corp/jobs ───────────────────────────────────────────────────────
+// Returns cached active corp industry jobs.
+app.get('/api/corp/jobs',
+  security.apiLimiter,
+  security.verifyEveToken,
+  requireCorpAccess,
+  async (req, res) => {
+    try {
+      const config = await dbGet('SELECT corp_id, last_refresh_at FROM corp_config LIMIT 1');
+      if (!config) return res.status(404).json({ error: 'Corp not configured' });
+
+      const jobs = await dbAll(
+        `SELECT
+           cj.job_id, cj.installer_id, cj.blueprint_id,
+           cj.blueprint_type_id, cj.product_type_id,
+           cj.activity_id, cj.runs, cj.status,
+           cj.start_date, cj.end_date, cj.duration,
+           cj.output_location_id, cj.fetched_at,
+           COALESCE(prod.name,  'Item #' || cj.product_type_id)   AS product_name,
+           COALESCE(bp.name,    'BP #'   || cj.blueprint_type_id) AS blueprint_name,
+           COALESCE(inst.name,  'Char #' || cj.installer_id)      AS installer_name
+         FROM corp_jobs cj
+         LEFT JOIN items prod ON prod.type_id = cj.product_type_id
+         LEFT JOIN items bp   ON bp.type_id   = cj.blueprint_type_id
+         LEFT JOIN items inst ON inst.type_id  = cj.installer_id
+         WHERE cj.corp_id = ?
+         ORDER BY cj.end_date ASC`,
+        [config.corp_id]
+      );
+
+      res.json({
+        jobs,
+        meta: { count: jobs.length, last_refresh_at: config.last_refresh_at },
+      });
+    } catch (err) {
+      console.error('Corp jobs error:', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+// ── POST /api/corp/refresh ───────────────────────────────────────────────────
+// Manually trigger an ESI data refresh. Admin OR verified corp member can call this.
+app.post('/api/corp/refresh',
+  security.apiLimiter,
+  security.verifyEveToken,
+  requireCorpAccess,
+  async (req, res) => {
+    try {
+      const config = await dbGet('SELECT corp_id FROM corp_config LIMIT 1');
+      if (!config) return res.status(404).json({ error: 'Corp not configured' });
+
+      // Run in background so the response returns immediately
+      refreshCorpData(config.corp_id)
+        .then(result => console.log(`✓ Manual corp refresh complete:`, result))
+        .catch(err    => console.error(`⚠ Manual corp refresh failed: ${err.message}`));
+
+      res.json({ ok: true, message: 'Corp data refresh started in background' });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+// ── Admin: whitelist management ──────────────────────────────────────────────
+
+// GET /api/corp/admin/whitelist — list all whitelisted characters
+app.get('/api/corp/admin/whitelist', async (req, res) => {
+  if (!isAdminRequest(req)) return res.status(403).json({ error: 'Admin key required' });
+  try {
+    const rows = await dbAll('SELECT * FROM corp_admin_access ORDER BY added_at DESC');
+    res.json({ whitelist: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/corp/admin/whitelist — add a character to the whitelist
+// Body: { character_id, note? }
+app.post('/api/corp/admin/whitelist', async (req, res) => {
+  if (!isAdminRequest(req)) return res.status(403).json({ error: 'Admin key required' });
+
+  const { character_id, note } = req.body;
+  if (!character_id || isNaN(parseInt(character_id))) {
+    return res.status(400).json({ error: 'character_id must be a numeric EVE character ID' });
+  }
+
+  try {
+    const config = await dbGet('SELECT corp_id FROM corp_config LIMIT 1');
+    await dbRun(
+      `INSERT INTO corp_admin_access (character_id, corp_id, note, added_at)
+       VALUES (?, ?, ?, datetime('now'))
+       ON CONFLICT(character_id) DO UPDATE SET corp_id = excluded.corp_id, note = excluded.note`,
+      [parseInt(character_id), config?.corp_id ?? null, note || null]
+    );
+    console.log(`✓ Corp admin whitelist: added character ${character_id} (${note || 'no note'})`);
+    res.json({ ok: true, character_id: parseInt(character_id) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/corp/admin/whitelist/:characterId — remove from whitelist
+app.delete('/api/corp/admin/whitelist/:characterId', async (req, res) => {
+  if (!isAdminRequest(req)) return res.status(403).json({ error: 'Admin key required' });
+
+  const characterId = parseInt(req.params.characterId);
+  if (isNaN(characterId)) return res.status(400).json({ error: 'Invalid character ID' });
+
+  try {
+    await dbRun('DELETE FROM corp_admin_access WHERE character_id = ?', [characterId]);
+    console.log(`✓ Corp admin whitelist: removed character ${characterId}`);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin: delete corp config entirely (for reset/re-setup)
+app.delete('/api/corp/admin/config', async (req, res) => {
+  if (!isAdminRequest(req)) return res.status(403).json({ error: 'Admin key required' });
+  try {
+    await dbRun('DELETE FROM corp_config');
+    await dbRun('DELETE FROM corp_blueprints');
+    await dbRun('DELETE FROM corp_assets');
+    await dbRun('DELETE FROM corp_jobs');
+    await dbRun('DELETE FROM corp_pin_sessions');
+    console.log('✓ Corp config and all cached corp data deleted');
+    res.json({ ok: true, message: 'Corp config deleted. Re-run corp setup to reconfigure.' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Scheduled corp data refresh ──────────────────────────────────────────────
+// Runs every 4 hours to keep corp data current without hammering ESI.
+// Only runs if a corp has been configured.
+setInterval(async () => {
+  try {
+    const config = await dbGet('SELECT corp_id FROM corp_config LIMIT 1');
+    if (!config) return; // no corp configured yet — nothing to refresh
+    console.log(`⟳ Scheduled corp data refresh for corp ${config.corp_id}...`);
+    await refreshCorpData(config.corp_id);
+  } catch (err) {
+    console.error(`⚠ Scheduled corp refresh failed: ${err.message}`);
+  }
+}, 4 * 60 * 60 * 1000); // every 4 hours
 
 // START SERVER
 initDatabase().then(async () => {

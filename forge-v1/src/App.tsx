@@ -27,6 +27,8 @@ import ChatPanel             from './components/ChatPanel';
 import LoginScreen           from './components/LoginScreen';
 import LoadingScreen         from './components/LoadingScreen';
 import IndustrySettingsModal from './components/IndustrySettings';
+import CorpPinModal          from './components/CorpPinModal';
+import { useCorpData }       from './hooks/useCorpData';
 
 function mapToMarketItems(
   results: TopProfitableResponse['results'],
@@ -122,6 +124,20 @@ const App: FC = () => {
   // v1.2.0 — Industry settings + settings modal
   const [industrySettings, setIndustrySettings] = useState<IndustrySettings | null>(null);
   const [settingsOpen,     setSettingsOpen]     = useState(false);
+
+  // v1.4.0 — Corp feature: PIN modal visibility + corp data hook
+  const [corpPinOpen, setCorpPinOpen] = useState(false);
+  const {
+    corpStatus,
+    accessStatus:  corpAccessStatus,
+    verifying:     corpVerifying,
+    pinError:      corpPinError,
+    verifyPin:     verifyCorpPin,
+    refreshAccess: refreshCorpAccess,
+  } = useCorpData(
+    auth.token,
+    activeTab === 'corp' && auth.status === 'authed',
+  );
 
   // Derive marketItems from rawResults — all prices come from the precomputed table
   // which is now run per-region, so no client-side overlay needed.
@@ -594,6 +610,10 @@ const App: FC = () => {
           onLoadMoreMarket={handleLoadMoreMarket}
           marketLoadingMore={marketLoadingMore}
           marketHasMore={marketHasMore}
+          token={auth.token}
+          corpStatus={corpStatus}
+          accessStatus={corpAccessStatus}
+          onNeedCorpPin={() => setCorpPinOpen(true)}
         />
 
         {/* Tablet overlay (dims background when detail panel is open) */}
@@ -645,6 +665,24 @@ const App: FC = () => {
           setSettingsOpen(false);
         }}
       />
+
+      {/* v1.4.0 — Corp PIN entry modal */}
+      {corpPinOpen && corpStatus?.configured && (
+        <CorpPinModal
+          corpStatus={corpStatus}
+          verifying={corpVerifying}
+          error={corpPinError}
+          onVerify={async (pin) => {
+            const ok = await verifyCorpPin(pin);
+            if (ok) {
+              setCorpPinOpen(false);
+              // If the Corp tab isn't already active, switch to it after PIN success
+              if (activeTab !== 'corp') setActiveTab('corp');
+              await refreshCorpAccess();
+            }
+          }}
+        />
+      )}
     </div>
   );
 };

@@ -1834,3 +1834,432 @@ tbody td.align-center { text-align: center; }
   .main-tabs { overflow-x: auto; }
   .main-tab  { padding: 10px 12px; font-size: 9px; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   CORP TAB (v1.4.0)
+   PIN modal, sub-tabs, data tables for corp blueprints / assets / jobs
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── PIN Modal overlay ─────────────────────────────────────────────────────── */
+
+.corp-pin-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  backdrop-filter: blur(4px);
+}
+
+.corp-pin-modal {
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-lg);
+  padding: 32px;
+  width: 100%;
+  max-width: 400px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+}
+
+.corp-pin-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.corp-pin-icon {
+  font-size: 28px;
+}
+
+.corp-pin-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+.corp-pin-corp-info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.corp-pin-corp-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-accent-primary);
+}
+
+.corp-pin-corp-dir {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+}
+
+.corp-pin-desc {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  text-align: center;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.corp-pin-inputs {
+  display: flex;
+  gap: 8px;
+}
+
+.corp-pin-digit {
+  width: 44px;
+  height: 52px;
+  background: var(--color-bg-tertiary);
+  border: 1.5px solid var(--color-border-light);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-primary);
+  font-size: 22px;
+  font-family: var(--font-sans);
+  text-align: center;
+  caret-color: var(--color-accent-primary);
+  transition: border-color 0.15s;
+  outline: none;
+}
+
+.corp-pin-digit:focus {
+  border-color: var(--color-accent-primary);
+  box-shadow: 0 0 0 2px rgba(79, 195, 247, 0.2);
+}
+
+.corp-pin-digit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.corp-pin-digit-error {
+  border-color: var(--color-danger) !important;
+}
+
+.corp-pin-error {
+  color: var(--color-danger);
+  font-size: 12px;
+  text-align: center;
+}
+
+.corp-pin-verifying {
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+  font-style: italic;
+}
+
+.corp-pin-submit {
+  width: 100%;
+  padding: 10px;
+}
+
+.corp-pin-footer {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  text-align: center;
+  margin: 0;
+}
+
+/* ── Corp not configured / needs PIN placeholder ───────────────────────────── */
+
+.corp-not-configured,
+.corp-needs-pin {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  height: 100%;
+  min-height: 300px;
+  padding: 40px;
+  text-align: center;
+}
+
+.corp-nc-icon {
+  font-size: 48px;
+  opacity: 0.5;
+}
+
+.corp-nc-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+.corp-nc-desc {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  max-width: 420px;
+  line-height: 1.6;
+  margin: 0;
+}
+
+/* ── Corp sub-tabs ─────────────────────────────────────────────────────────── */
+
+.corp-content {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.corp-sub-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 12px;
+  background: var(--color-bg-tertiary);
+  border-bottom: 0.5px solid var(--color-border-light);
+  flex-shrink: 0;
+}
+
+.corp-sub-tab {
+  padding: 6px 14px;
+  background: transparent;
+  border: 0.5px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  font: 12px var(--font-sans);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+
+.corp-sub-tab:hover {
+  background: rgba(79, 195, 247, 0.08);
+  color: var(--color-text-primary);
+}
+
+.corp-sub-tab.active {
+  background: rgba(79, 195, 247, 0.12);
+  border-color: rgba(79, 195, 247, 0.4);
+  color: var(--color-accent-primary);
+  font-weight: 600;
+}
+
+.corp-sub-tab-spacer {
+  flex: 1;
+}
+
+.corp-corp-name-badge {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  background: var(--color-bg-secondary);
+  border: 0.5px solid var(--color-border-light);
+  border-radius: var(--radius-sm);
+  padding: 3px 8px;
+  white-space: nowrap;
+}
+
+/* ── Corp sub-tab content area ─────────────────────────────────────────────── */
+
+.corp-sub-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+  padding: 12px;
+  gap: 10px;
+}
+
+/* ── Toolbar (search + filter + refresh + meta) ────────────────────────────── */
+
+.corp-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+.corp-search {
+  flex: 1;
+  min-width: 140px;
+  max-width: 280px;
+  padding: 6px 10px;
+  background: var(--color-bg-tertiary);
+  border: 0.5px solid var(--color-border-light);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-primary);
+  font: 12px var(--font-sans);
+  outline: none;
+}
+
+.corp-search:focus {
+  border-color: var(--color-accent-primary);
+}
+
+.corp-refresh-btn {
+  padding: 5px 12px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.corp-meta-text {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+/* ── Status / loading / empty states ──────────────────────────────────────── */
+
+.corp-error {
+  color: var(--color-danger);
+  font-size: 12px;
+  padding: 8px;
+  background: rgba(244, 67, 54, 0.08);
+  border-radius: var(--radius-sm);
+}
+
+.corp-loading {
+  color: var(--color-text-tertiary);
+  font-size: 13px;
+  padding: 32px;
+  text-align: center;
+}
+
+.corp-empty {
+  color: var(--color-text-tertiary);
+  font-size: 13px;
+  padding: 32px;
+  text-align: center;
+}
+
+/* ── Data table ────────────────────────────────────────────────────────────── */
+
+.corp-table-wrap {
+  flex: 1;
+  overflow-y: auto;
+  border: 0.5px solid var(--color-border-light);
+  border-radius: var(--radius-sm);
+}
+
+.corp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.corp-th {
+  position: sticky;
+  top: 0;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-tertiary);
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 8px 10px;
+  border-bottom: 0.5px solid var(--color-border-light);
+  white-space: nowrap;
+  text-align: left;
+  z-index: 1;
+}
+
+.corp-th-sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.corp-th-sortable:hover {
+  color: var(--color-text-primary);
+}
+
+.corp-th-center { text-align: center; }
+.corp-th-right  { text-align: right;  }
+
+.corp-row {
+  border-bottom: 0.5px solid var(--color-border-light);
+  transition: background 0.1s;
+}
+
+.corp-row:hover {
+  background: rgba(79, 195, 247, 0.04);
+}
+
+.corp-row-done {
+  opacity: 0.55;
+}
+
+.corp-td {
+  padding: 7px 10px;
+  color: var(--color-text-secondary);
+  vertical-align: middle;
+}
+
+.corp-td-name {
+  color: var(--color-text-primary);
+  font-weight: 500;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.corp-td-center { text-align: center; }
+.corp-td-right  { text-align: right;  }
+
+.corp-td-location {
+  color: var(--color-text-tertiary);
+  font-size: 11px;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Blueprint type badges (BPO / BPC) ─────────────────────────────────────── */
+
+.corp-bp-badge {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.corp-bp-badge-bpo {
+  background: rgba(79, 195, 247, 0.15);
+  color: var(--color-accent-primary);
+  border: 0.5px solid rgba(79, 195, 247, 0.35);
+}
+
+.corp-bp-badge-bpc {
+  background: rgba(255, 193, 7, 0.12);
+  color: #ffc107;
+  border: 0.5px solid rgba(255, 193, 7, 0.3);
+}
+
+/* ── Corp job status badges ─────────────────────────────────────────────────── */
+
+.corp-job-status {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.corp-job-status-active    { background: rgba(76, 175, 80, 0.15);  color: var(--color-success); }
+.corp-job-status-delivered { background: rgba(79, 195, 247, 0.12); color: var(--color-accent-primary); }
+.corp-job-status-paused    { background: rgba(255, 152, 0, 0.12);  color: var(--color-warning); }
+.corp-job-status-cancelled { background: rgba(244, 67, 54, 0.12);  color: var(--color-danger);  }
+
+/* ── Sort arrow ────────────────────────────────────────────────────────────── */
+
+.sort-arrow {
+  margin-left: 4px;
+  color: var(--color-accent-primary);
+  font-size: 10px;
+}

@@ -2,7 +2,7 @@
 
 > This file is the authoritative context document for Claude sessions working on this project.
 > Read this first. Update it whenever significant decisions, changes, or discoveries are made.
-> Last updated: v1.2.0 — True Profit with local ESI calculation, standings-aware fees, industry settings
+> Last updated: v1.4.0 — Corp feature: PIN-gated corp blueprints / assets / jobs viewer, admin whitelist
 
 ---
 
@@ -23,7 +23,7 @@ An EVE Online manufacturing intelligence web application for the **UKC corporati
 
 **Live domain:** https://forge-ukc.com  
 **GitHub:** https://github.com/SacuShi/forge-manufacturing.git  
-**Current version:** v1.2.0 (branch: `feature/v1.2.0-true-profit`, commit `b1bf051`)  
+**Current version:** v1.4.0 (branch: `main`)  
 **Version scheme:** `major.feature.change.patch`
 
 ---
@@ -252,6 +252,83 @@ duration_seconds     REAL
 status               TEXT
 ```
 
+#### `corp_config` ← NEW v1.4.0
+```sql
+corp_id              INTEGER PRIMARY KEY
+corp_name            TEXT
+director_char_id     INTEGER
+director_char_name   TEXT
+enc_refresh_token    TEXT NOT NULL  -- AES-256-GCM encrypted, base64
+token_iv             TEXT NOT NULL  -- 12-byte IV, hex
+token_tag            TEXT NOT NULL  -- 16-byte GCM auth tag, hex
+pin_hash             TEXT NOT NULL  -- scrypt(pin, salt, N=16384), base64
+pin_salt             TEXT NOT NULL  -- 32-byte salt, hex
+last_refresh_at      TEXT
+last_refresh_status  TEXT
+created_at           TEXT
+updated_at           TEXT
+```
+
+#### `corp_blueprints` ← NEW v1.4.0
+```sql
+item_id              INTEGER PRIMARY KEY  -- ESI unique item_id
+corp_id              INTEGER
+type_id              INTEGER
+quantity             INTEGER  -- -1 = singleton
+runs                 INTEGER  -- -1 = BPO, ≥0 = BPC
+material_efficiency  INTEGER
+time_efficiency      INTEGER
+location_id          INTEGER
+location_flag        TEXT
+fetched_at           TEXT
+```
+
+#### `corp_assets` ← NEW v1.4.0
+```sql
+item_id       INTEGER PRIMARY KEY
+corp_id       INTEGER
+type_id       INTEGER
+quantity      INTEGER
+location_id   INTEGER
+location_flag TEXT
+is_singleton  INTEGER
+fetched_at    TEXT
+```
+
+#### `corp_jobs` ← NEW v1.4.0
+```sql
+job_id              INTEGER PRIMARY KEY
+corp_id             INTEGER
+installer_id        INTEGER
+blueprint_id        INTEGER
+blueprint_type_id   INTEGER
+product_type_id     INTEGER
+activity_id         INTEGER
+runs                INTEGER
+status              TEXT
+start_date          TEXT
+end_date            TEXT
+duration            INTEGER
+output_location_id  INTEGER
+fetched_at          TEXT
+```
+
+#### `corp_pin_sessions` ← NEW v1.4.0
+```sql
+character_id INTEGER PRIMARY KEY  -- character who verified PIN
+corp_id      INTEGER
+verified_at  TEXT
+expires_at   TEXT                 -- 24hr expiry; checked on every data request
+```
+
+#### `corp_admin_access` ← NEW v1.4.0
+```sql
+character_id INTEGER PRIMARY KEY  -- bypasses PIN entirely
+corp_id      INTEGER              -- NULL = all corps
+note         TEXT                 -- admin note
+added_at     TEXT
+```
+
 ---
 
 ## 6. Market Hubs (v1.1)
@@ -338,6 +415,22 @@ All endpoints require `Authorization: Bearer <eve_token>` unless noted. Rate lim
 | GET | `/api/admin/ai-costs` | AI usage tracking |
 | GET | `/api/diagnose-t2/:characterId` | T2 blueprint DB coverage |
 | POST | `/api/trigger-precompute` | Manually trigger precompute (all 6 regions) |
+
+### Corp (v1.4.0) — all require `Authorization: Bearer <eve_token>` except admin endpoints
+| Method | Path | Auth | Notes |
+|---|---|---|---|
+| GET | `/api/corp/status` | None | Returns `{ configured, corp_id, corp_name, last_refresh_at }` |
+| POST | `/api/corp/setup` | X-Admin-Key | Body: `{ code, redirect_uri, pin }`. Exchanges EVE OAuth code (must have corp scopes), encrypts refresh token, hashes PIN. Triggers initial ESI fetch. |
+| POST | `/api/corp/verify-pin` | EVE token + auth rate limiter | Body: `{ pin }`. Creates 24hr session in `corp_pin_sessions`. |
+| GET | `/api/corp/access-status` | EVE token | Returns `{ hasAccess, method: 'admin'|'pin', expires_at? }` |
+| GET | `/api/corp/blueprints` | EVE token + PIN/admin | Query: `search`, `type` (BPO|BPC|all), `limit`, `offset`. Joins `items` for names. |
+| GET | `/api/corp/assets` | EVE token + PIN/admin | Query: `search`, `limit`. Aggregated by type_id. |
+| GET | `/api/corp/jobs` | EVE token + PIN/admin | Active corp industry jobs. |
+| POST | `/api/corp/refresh` | EVE token + PIN/admin | Triggers background ESI data refresh (blueprints + assets + jobs). |
+| GET | `/api/corp/admin/whitelist` | X-Admin-Key | List whitelisted characters. |
+| POST | `/api/corp/admin/whitelist` | X-Admin-Key | Body: `{ character_id, note? }`. Add character to bypass-PIN whitelist. |
+| DELETE | `/api/corp/admin/whitelist/:characterId` | X-Admin-Key | Remove from whitelist. |
+| DELETE | `/api/corp/admin/config` | X-Admin-Key | Delete all corp config + cached data (for re-setup). |
 
 ### AI Tools (internal — used by `/api/ai-chat`) — v1.1
 | Tool | Purpose |
@@ -766,6 +859,16 @@ EVE_CALLBACK_URL=https://forge-ukc.com/api/eve-token
 ANTHROPIC_API_KEY=...
 JWT_SECRET=...
 SESSION_SECRET=...
+FORGE_ADMIN_KEY=...         # protects /api/admin/* and /api/corp/admin/* endpoints
+FORGE_CORP_KEY=...          # v1.4.0: any strong random string; used to derive AES-256-GCM key for refresh token encryption. REQUIRED for corp feature.
+```
+
+**Adding FORGE_CORP_KEY on server:**
+```bash
+# Generate a strong random key (run once, save the output)
+ssh gumpy54@192.168.1.62 "node -e \"console.log(require('crypto').randomBytes(48).toString('hex'))\""
+# Add to .env on server then restart
+ssh gumpy54@192.168.1.62 "echo 'FORGE_CORP_KEY=<generated-key>' >> /home/gumpy54/forge-server/.env && pm2 restart forge"
 ```
 
 ---
@@ -783,7 +886,69 @@ SESSION_SECRET=...
 
 ---
 
-## 17. Outstanding / Future Work
+## 17. Corp Feature Setup Guide (v1.4.0)
+
+### Prerequisites
+1. Add `FORGE_CORP_KEY` to server `.env` (see Section 15)
+2. Register corp ESI scopes on EVE Developer Portal (same app):
+   - `esi-corporations.read_blueprints.v1`
+   - `esi-corporations.read_assets.v1`
+   - `esi-corporations.read_industry_jobs.v1`
+   The director who uses the setup URL MUST have Director or Factory_Manager role in EVE.
+
+### Corp Setup (director flow)
+The director needs to authenticate with the corp scopes. Build the OAuth URL manually:
+```
+https://login.eveonline.com/v2/oauth/authorize
+  ?response_type=code
+  &client_id=<EVE_CLIENT_ID>
+  &redirect_uri=<redirect_uri>
+  &scope=esi-corporations.read_blueprints.v1+esi-corporations.read_assets.v1+esi-corporations.read_industry_jobs.v1+offline_access
+  &state=<random>
+```
+After the director authorises and is redirected, extract the `code` from the URL query string.
+Then call the setup endpoint (requires FORGE_ADMIN_KEY):
+```bash
+curl -X POST https://forge-ukc.com/api/corp/setup \
+  -H "X-Admin-Key: <FORGE_ADMIN_KEY>" \
+  -H "Content-Type: application/json" \
+  -d '{ "code": "<code_from_callback>", "redirect_uri": "<same_uri_used_above>", "pin": "123456" }'
+```
+This stores the encrypted refresh token, hashes the PIN, and triggers an initial ESI data pull.
+
+### Add developer/tester to admin whitelist (bypass PIN)
+```bash
+curl -X POST https://forge-ukc.com/api/corp/admin/whitelist \
+  -H "X-Admin-Key: <FORGE_ADMIN_KEY>" \
+  -H "Content-Type: application/json" \
+  -d '{ "character_id": <your_character_id>, "note": "developer testing" }'
+```
+
+### View whitelist
+```bash
+curl https://forge-ukc.com/api/corp/admin/whitelist \
+  -H "X-Admin-Key: <FORGE_ADMIN_KEY>"
+```
+
+### Remove from whitelist
+```bash
+curl -X DELETE https://forge-ukc.com/api/corp/admin/whitelist/<character_id> \
+  -H "X-Admin-Key: <FORGE_ADMIN_KEY>"
+```
+
+### Reset corp config (start over)
+```bash
+curl -X DELETE https://forge-ukc.com/api/corp/admin/config \
+  -H "X-Admin-Key: <FORGE_ADMIN_KEY>"
+```
+
+### Scheduled ESI refresh
+Corp data (blueprints, assets, jobs) is automatically refreshed every 4 hours.
+Manual trigger: POST `/api/corp/refresh` (requires EVE token + PIN/admin access).
+
+---
+
+## 18. Outstanding / Future Work
 
 - **Haul cost awareness** — factor in freight cost (ISK/m³ × volume × jumps) when AI compares hub strategies
 - **Production planner UI** — visual queue builder from AI recommendations
@@ -795,7 +960,7 @@ SESSION_SECRET=...
 
 ---
 
-## 18. Quick Reference
+## 19. Quick Reference
 
 ### Rebuild & deploy (full)
 ```bash

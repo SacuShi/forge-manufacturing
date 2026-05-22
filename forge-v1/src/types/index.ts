@@ -273,6 +273,86 @@ export interface IndustrySettings {
   material_region_name?: string | null;
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// 6. v1.4.0 — CORP TYPES
+// ══════════════════════════════════════════════════════════════════════════
+
+/** Response from GET /api/corp/status */
+export interface CorpStatus {
+  configured:          boolean;
+  corp_id?:            number;
+  corp_name?:          string;
+  director_char_name?: string;
+  last_refresh_at?:    string | null;
+  last_refresh_status?: string | null;
+}
+
+/** Response from GET /api/corp/access-status */
+export interface CorpAccessStatus {
+  hasAccess: boolean;
+  method?:   'admin' | 'pin';
+  expires_at?: string;
+}
+
+/** One corp blueprint row from GET /api/corp/blueprints */
+export interface CorpBlueprint {
+  item_id:             number;
+  type_id:             number;
+  name:                string;
+  bp_type:             'BPO' | 'BPC';
+  quantity:            number;
+  runs:                number;
+  me:                  number;
+  te:                  number;
+  location_id:         number | null;
+  location_flag:       string | null;
+  fetched_at:          string;
+}
+
+/** One corp asset row (aggregated by type_id) from GET /api/corp/assets */
+export interface CorpAsset {
+  type_id:         number;
+  name:            string;
+  total_quantity:  number;
+  fetched_at:      string;
+}
+
+/** One corp industry job row from GET /api/corp/jobs */
+export interface CorpJob {
+  job_id:              number;
+  installer_id:        number | null;
+  installer_name:      string;
+  blueprint_type_id:   number | null;
+  blueprint_name:      string;
+  product_type_id:     number | null;
+  product_name:        string;
+  activity_id:         number | null;
+  runs:                number | null;
+  status:              string | null;
+  start_date:          string | null;
+  end_date:            string | null;
+  duration:            number | null;
+  fetched_at:          string;
+}
+
+/** Response from GET /api/corp/blueprints */
+export interface CorpBlueprintsResponse {
+  blueprints: CorpBlueprint[];
+  meta: { total: number; limit: number; offset: number; last_refresh_at: string | null };
+}
+
+/** Response from GET /api/corp/assets */
+export interface CorpAssetsResponse {
+  assets: CorpAsset[];
+  meta: { total: number; limit: number; offset: number; last_refresh_at: string | null };
+}
+
+/** Response from GET /api/corp/jobs */
+export interface CorpJobsResponse {
+  jobs: CorpJob[];
+  meta: { count: number; last_refresh_at: string | null };
+}
+
 /** Full response from POST /api/true-cost */
 export interface TrueCostResponse {
   product_id:          number;

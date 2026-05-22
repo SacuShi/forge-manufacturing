@@ -1,4 +1,4 @@
-// FORGE v1.0 — MainContent: market/blueprints/assets/jobs tabs
+// FORGE v1.0 — MainContent: market/blueprints/assets/jobs/corp tabs
 
 import { useState, useMemo, useEffect, type FC } from 'react';
 import type {
@@ -8,8 +8,11 @@ import type {
   EsiBlueprint,
   EsiAsset,
   ActiveJob,
+  CorpStatus,
+  CorpAccessStatus,
 } from '../types';
 import ItemTable from './ItemTable';
+import CorpTab   from './CorpTab';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -36,6 +39,13 @@ interface MainContentProps {
 
   /** Called when any item is selected (typeId + name) — opens RightSidebar */
   onSelectItem: (typeId: number, name: string) => void;
+
+  // v1.4.0 — Corp tab props
+  token:        string | null;
+  corpStatus:   CorpStatus | null;
+  accessStatus: CorpAccessStatus | null;
+  /** Signal parent to show the PIN entry modal */
+  onNeedCorpPin: () => void;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -45,6 +55,7 @@ const TABS = [
   { key: 'blueprints', label: '◈ Your blueprints' },
   { key: 'assets',     label: '◉ Assets' },
   { key: 'jobs',       label: '⚙ Jobs' },
+  { key: 'corp',       label: '🏭 Corp' },      // v1.4.0
 ];
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -65,6 +76,10 @@ const MainContent: FC<MainContentProps> = ({
   activeJobs,
   itemNames,
   onSelectItem,
+  token,
+  corpStatus,
+  accessStatus,
+  onNeedCorpPin,
 }) => {
   const [sortField, setSortField] = useState<SortField>('rank');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
@@ -591,6 +606,16 @@ const MainContent: FC<MainContentProps> = ({
             </div>
           )}
         </div>
+      )}
+
+      {/* v1.4.0 — Corp tab */}
+      {activeTab === 'corp' && (
+        <CorpTab
+          token={token}
+          corpStatus={corpStatus}
+          accessStatus={accessStatus}
+          onNeedPin={onNeedCorpPin}
+        />
       )}
 
     </main>

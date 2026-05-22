@@ -37,6 +37,8 @@ const NAV_ITEMS = [
   { key: 'blueprints',  label: '◈ My Blueprints' },
   { key: 'assets',      label: '◉ My Assets' },
   { key: 'jobs',        label: '⚙ Active Jobs' },
+  // v1.4.0 — Corp tab: blueprints, assets, and jobs for the whole corporation
+  { key: 'corp',        label: '🏭 Corp' },
 ];
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
