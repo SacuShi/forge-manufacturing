@@ -3271,7 +3271,9 @@ app.get('/api/top-profitable-by-skills', security.apiLimiter, security.verifyEve
              FROM precomputed_profits
              WHERE ${fbWhere.join(' AND ')}
              ORDER BY profit DESC LIMIT ?`,
-        isCrossHub ? [...fbParams, sourceRegionId, limit] : [...fbParams, limit]
+        // sourceRegionId must be FIRST — it binds the JOIN's src.region_id = ?
+        // which appears before the WHERE clause in the SQL text.
+        isCrossHub ? [sourceRegionId, ...fbParams, limit] : [...fbParams, limit]
       );
 
       const fbLastRun = await dbGet(`SELECT completed_at FROM precompute_runs ORDER BY id DESC LIMIT 1`);
@@ -3367,7 +3369,9 @@ app.get('/api/top-profitable-by-skills', security.apiLimiter, security.verifyEve
         WHERE ${joinConditions.join(' AND ')}
         ORDER BY profit DESC
         LIMIT ?
-      `, [...params, sourceRegionId, (offset + limit) * 3]);
+      // sourceRegionId must be FIRST — it binds the JOIN's src.region_id = ?
+      // which appears before the WHERE clause in the SQL text.
+      `, [sourceRegionId, ...params, (offset + limit) * 3]);
     }
 
     // Filter by skill requirements, skipping the first `offset` qualified items
