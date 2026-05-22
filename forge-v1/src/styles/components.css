@@ -223,6 +223,40 @@
   flex-shrink: 0;
 }
 
+/* v1.3.0 — Manufacturing location read-only display in the header bar.
+   Sits between the Source/Market selector group and the ⚙ Mfg Setup button. */
+.mfg-location-display {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  border-left: 1px solid rgba(79, 195, 247, 0.12);
+  padding-left: 12px;
+}
+
+/* Matches .market-selector-label — uppercase tertiary label */
+.mfg-location-label {
+  color: var(--color-text-tertiary);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+/* System name value — matches .market-dropdown colour and size */
+.mfg-location-value {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-family: inherit;
+}
+
+/* Dimmed when no system is configured yet */
+.mfg-location-value.mfg-location-unset {
+  color: var(--color-text-tertiary);
+  font-style: italic;
+}
+
 .session-expired-message {
   background: rgba(255, 180, 0, 0.1);
   border: 1px solid var(--color-warning, #ffb400);

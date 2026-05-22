@@ -525,6 +525,7 @@ const App: FC = () => {
         selectedMarket={selectedMarket}
         selectedSourceMarket={selectedSourceMarket}
         regionLoading={marketLoading}
+        mfgSystemName={industrySettings?.system_name ?? null}
         onToggleChat={handleToggleChat}
         onMenuToggle={() => setDrawerOpen((o) => !o)}
         onThemeToggle={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}

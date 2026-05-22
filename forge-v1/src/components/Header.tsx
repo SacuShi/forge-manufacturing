@@ -25,21 +25,27 @@ import { MarketSelector } from './MarketSelector';
 // ── Types ────────────────────────────────────────────────────────────────────
 
 interface HeaderProps {
-  character:          CharacterInfo;
-  chatOpen:           boolean;
-  theme:              string;
+  character:             CharacterInfo;
+  chatOpen:              boolean;
+  theme:                 string;
   /** Sell hub — drives Market Opportunities table and sell-price calculations */
-  selectedMarket:     Market;
-  regionLoading:      boolean;
+  selectedMarket:        Market;
+  regionLoading:         boolean;
   /** Source hub — where raw materials are purchased */
   selectedSourceMarket:  Market;
-  onToggleChat:       () => void;
-  onMenuToggle:       () => void;
-  onThemeToggle:      () => void;
-  onLogout:           () => void;
-  onMarketChange:     (market: Market) => void;
-  onSourceMarketChange: (market: Market) => void;
-  onOpenSettings:     () => void;
+  /**
+   * Name of the manufacturing solar system saved in Industry Settings.
+   * Null when the user hasn't configured a system yet.
+   * Displayed read-only in the header bar so the active setup is always visible.
+   */
+  mfgSystemName:         string | null;
+  onToggleChat:          () => void;
+  onMenuToggle:          () => void;
+  onThemeToggle:         () => void;
+  onLogout:              () => void;
+  onMarketChange:        (market: Market) => void;
+  onSourceMarketChange:  (market: Market) => void;
+  onOpenSettings:        () => void;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -55,6 +61,7 @@ const Header: FC<HeaderProps> = ({
   selectedMarket,
   regionLoading,
   selectedSourceMarket,
+  mfgSystemName,
   onToggleChat,
   onMenuToggle,
   onThemeToggle,
@@ -145,6 +152,24 @@ const Header: FC<HeaderProps> = ({
             onMarketChange={onMarketChange}
             loading={regionLoading}
           />
+        </div>
+
+        {/* ── Manufacturing location display ──────────────────────────────
+             Read-only indicator of the system saved in Industry Settings.
+             Clicking the adjacent ⚙ Mfg Setup button lets the user change it. */}
+        <div
+          className="mfg-location-display"
+          title={mfgSystemName
+            ? `Manufacturing location: ${mfgSystemName} — click ⚙ Mfg Setup to change`
+            : 'No manufacturing system configured — click ⚙ Mfg Setup to set one'}
+          aria-label={mfgSystemName
+            ? `Manufacturing location: ${mfgSystemName}`
+            : 'Manufacturing location: not configured'}
+        >
+          <span className="mfg-location-label">Mfg Location:</span>
+          <span className={`mfg-location-value${mfgSystemName ? '' : ' mfg-location-unset'}`}>
+            {mfgSystemName ?? 'Not set'}
+          </span>
         </div>
 
         {/* Manufacturing setup — opens IndustrySettings modal */}
