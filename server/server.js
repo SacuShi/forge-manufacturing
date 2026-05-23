@@ -3298,28 +3298,49 @@ async function runPreCompute() {
   }
 }
 
-// Synchronous material cost calculation using in-memory data
-// Avoids per-item DB queries during pre-compute (performance critical)
+// Synchronous material cost calculation using in-memory data.
+// Avoids per-item DB queries during pre-compute (performance critical).
+//
+// IMPORTANT: always use the SELL price (lowest ask) for material costs.
+// The sell price is what you pay to buy materials immediately from sell orders.
+// The buy price (highest bid) is what you receive when selling — irrelevant here.
+// Using buy prices understates material costs for wide-spread items (e.g. capital
+// components), making the precomputed profit wildly optimistic.
+//
+// Price fallback chain: sell → buy → 0
+//   sell: lowest ask (market sell order) — preferred
+//   buy:  highest bid — fallback when no sell orders exist
+//   0:    item genuinely untradeable or not yet in the order book
 function calculateMaterialCostSync(materialId, quantity, prices, materialsByBp, bpByProduct, depth = 0) {
-  // Prevent infinite recursion on circular references
+  // Prevent infinite recursion on circular blueprint references
   if (depth > 10) {
-    return (prices[materialId]?.buy || 0) * quantity;
+    return (prices[materialId]?.sell || prices[materialId]?.buy || 0) * quantity;
   }
+
+  // Helper: sell price with buy-price fallback (never use bare .buy alone)
+  const marketBuyPrice = (typeId) =>
+    prices[typeId]?.sell || prices[typeId]?.buy || 0;
 
   const subBpId = bpByProduct[materialId];
   if (subBpId) {
+    // This material can be manufactured. Compute raw-material cost for 1 sub-run,
+    // then compare against buying it outright — take whichever is cheaper.
     const subMats = materialsByBp[subBpId] || [];
-    let mfgCost = 0;
+    let mfgCostPerRun = 0;
     for (const sub of subMats) {
-      mfgCost += calculateMaterialCostSync(
+      mfgCostPerRun += calculateMaterialCostSync(
         sub.material_id, sub.quantity, prices, materialsByBp, bpByProduct, depth + 1
       );
     }
-    const buyCost = (prices[materialId]?.buy || 0) * quantity;
-    return Math.min(mfgCost * quantity, buyCost);
+    // Cost to buy `quantity` units from market
+    const buyCost = marketBuyPrice(materialId) * quantity;
+    // Cost to manufacture `quantity` units (1 sub-run produces 1 unit at depth > 0;
+    // we scale linearly — this is an approximation but correct for qty = 1 sub-runs)
+    const mfgCost = mfgCostPerRun * quantity;
+    return Math.min(mfgCost, buyCost);
   }
 
-  return (prices[materialId]?.buy || 0) * quantity;
+  return marketBuyPrice(materialId) * quantity;
 }
 
 // VOLUME ENRICHMENT JOB (v0.9.1)
