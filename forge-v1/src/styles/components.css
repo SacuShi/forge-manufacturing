@@ -981,6 +981,37 @@ tbody td.align-center { text-align: center; }
 .price-cell-label { font-size: 8px; color: var(--color-text-secondary); letter-spacing: 0.5px; margin-bottom: 2px; }
 .price-cell-value { font-size: 10px; font-weight: 600; font-family: var(--font-mono); }
 
+/* v1.5.0 — Historical price fallback indicators */
+
+/* Warning banner in right sidebar when item has no live sell orders */
+.price-hist-notice {
+  font-size: 10px;
+  color: var(--color-warning, #f59e0b);
+  background: rgba(245, 158, 11, 0.08);
+  border: 0.5px solid rgba(245, 158, 11, 0.25);
+  border-radius: var(--radius-sm, 3px);
+  padding: 4px 6px;
+  margin-bottom: 6px;
+  line-height: 1.4;
+}
+
+/* "(no orders)" suffix on the LOWEST SELL label */
+.price-cell-label-hist {
+  color: var(--color-text-tertiary);
+  font-size: 7px;
+  margin-left: 2px;
+}
+
+/* ~ superscript in Market Opportunities table — price from 30d history */
+.price-source-hist {
+  font-size: 9px;
+  color: var(--color-warning, #f59e0b);
+  margin-left: 3px;
+  vertical-align: super;
+  cursor: help;
+  font-weight: 600;
+}
+
 /* Sparkline */
 .sparkline {
   display: flex;

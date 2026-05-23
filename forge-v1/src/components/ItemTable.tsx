@@ -159,6 +159,12 @@ const ItemTable: FC<ItemTableProps> = ({
                 <span className={`num ${profitClass}`}>
                   {formatISK(item.profitPerRun)}
                 </span>
+                {item.priceSource === 'history_30d' && (
+                  <span
+                    className="price-source-hist"
+                    title={`No live sell orders — sell price estimated from 30-day trade average${item.avg30dPrice ? ` (~${formatISK(item.avg30dPrice)})` : ''}`}
+                  >~</span>
+                )}
               </td>
 
               {/* Margin */}

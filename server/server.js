@@ -358,6 +358,22 @@ async function runMigrations() {
     )
   `);
 
+  // v1.5.0 migration: 30-day average price table (historical price fallback)
+  // Populated by volume enrichment; used when live order book has no sell/buy orders.
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS item_history_prices (
+      type_id      INTEGER PRIMARY KEY,
+      avg_30d_price  REAL    DEFAULT 0,   -- mean of ESI daily 'average' over last 30 days
+      avg_30d_volume REAL    DEFAULT 0,   -- mean daily volume
+      sample_days    INTEGER DEFAULT 0,   -- how many days used in calculation
+      updated_at     TEXT    NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_hist_prices_type ON item_history_prices (type_id)`);
+
+  // v1.5.0: store avg_30d_price on precomputed_profits rows (for transparency/display)
+  try { await dbRun(`ALTER TABLE precomputed_profits ADD COLUMN avg_30d_price REAL DEFAULT NULL`); } catch (_) {}
+
   console.log('✓ Database migrations complete');
 }
 
@@ -808,6 +824,19 @@ async function fetchRegionPrices(regionId) {
     }
   });
 
+  // Inject 30-day historical average as tertiary fallback (avg30d).
+  // For items already in the order book, avg30d is attached as extra metadata.
+  // For items with NO live orders at all, a stub entry is created so the
+  // fallback chain (sell → buy → avg30d → 0) works everywhere downstream.
+  for (const [typeId, avg30d] of historyPriceMap) {
+    if (prices[typeId]) {
+      prices[typeId].avg30d = avg30d; // supplement live-order entry
+    } else {
+      // Item traded historically but has no live orders right now
+      prices[typeId] = { sell: 0, buy: 0, median: avg30d, avg30d };
+    }
+  }
+
   const durationMs = Date.now() - startTime;
   console.log(`✓ Region ${regionId} prices loaded — ${Object.keys(prices).length} items ` +
               `(${buyOrders.length} buy orders, ${sellOrders.length} sell orders) ` +
@@ -860,6 +889,22 @@ const regionPriceCache = new Map();
 
 // Tracks which regions have a background price-warm in flight (avoid duplicate fetches)
 const regionWarmingSet = new Set();
+
+// 30-day average prices from ESI market history.
+// Used as tertiary fallback when live order book has no sell AND no buy orders.
+// Populated at startup (from DB) and refreshed after every volume enrichment run.
+// Key: typeId (integer), Value: avg 30-day trade price (ISK)
+let historyPriceMap = new Map();
+
+async function loadHistoryPriceMap() {
+  try {
+    const rows = await dbAll('SELECT type_id, avg_30d_price FROM item_history_prices WHERE avg_30d_price > 0');
+    historyPriceMap = new Map(rows.map(r => [r.type_id, r.avg_30d_price]));
+    console.log(`✓ History price map loaded — ${historyPriceMap.size} items`);
+  } catch (err) {
+    console.error('⚠ Failed to load history price map:', err.message);
+  }
+}
 
 // Backwards-compatible accessor for existing code
 // jitaPricesCache points to the Jita entry in regionPriceCache
@@ -1698,6 +1743,7 @@ app.post('/api/item-details', security.apiLimiter, async (req, res) => {
       `https://esi.evetech.net/latest/markets/${JITA_REGION}/history/?datasource=tranquility&type_id=${typeId}`
     );
 
+    let avg30dFromHistory = 0;
     if (historyRes.ok) {
       const historyData = await historyRes.json();
       if (Array.isArray(historyData) && historyData.length > 0) {
@@ -1705,7 +1751,7 @@ app.post('/api/item-details', security.apiLimiter, async (req, res) => {
           .sort((a, b) => new Date(b.date) - new Date(a.date))
           .slice(0, 90)
           .reverse();
-        
+
         itemDetails.priceHistory = sorted.map(day => ({
           date: day.date,
           average: day.average,
@@ -1714,16 +1760,34 @@ app.post('/api/item-details', security.apiLimiter, async (req, res) => {
           volume: day.volume,
           orderCount: day.order_count
         }));
+
+        // Calculate 30-day average from the most recent 30 days of actual trades
+        const recent30 = historyData.slice(-30);
+        if (recent30.length > 0) {
+          avg30dFromHistory = recent30.reduce((sum, d) => sum + (d.average || 0), 0) / recent30.length;
+        }
       }
     }
 
     // Sell-hub prices — used for the "Current Market" price display and profit calculation
     const sellPrices = regionPriceCache.get(regionId)?.prices || jitaPricesCache || {};
+    // avg30d: prefer freshly-fetched history, fall back to cached map value
+    const avg30d = avg30dFromHistory || historyPriceMap.get(typeId) || 0;
     if (sellPrices[typeId]) {
       itemDetails.currentPrice = {
         sell:   sellPrices[typeId].sell,
         buy:    sellPrices[typeId].buy,
         median: sellPrices[typeId].median,
+        avg30d,
+      };
+    } else if (avg30d > 0) {
+      // No live orders but we have historical trade data — expose it so True Profit
+      // can use a realistic price rather than showing zero revenue
+      itemDetails.currentPrice = {
+        sell:   0,
+        buy:    0,
+        median: avg30d,
+        avg30d,
       };
     }
 
@@ -1810,8 +1874,10 @@ app.post('/api/item-details', security.apiLimiter, async (req, res) => {
           // Unit cost uses the source-hub SELL price (lowest ask) — the price a
           // manufacturer actually pays to buy materials immediately from the market.
           // Using .buy (highest bid) would understate costs; consistent with /api/true-cost.
+          // Fallback chain: sell → buy → 30d avg → 0
           const matPrice = matPrices[mat.material_id];
-          const unitCost = matPrice ? (matPrice.sell || matPrice.buy || 0) : 0;
+          const matAvg30d = matPrice?.avg30d || historyPriceMap.get(mat.material_id) || 0;
+          const unitCost = matPrice ? (matPrice.sell || matPrice.buy || matAvg30d || 0) : matAvg30d;
           const itemCost = unitCost * needed;
           totalCost += itemCost;
 
@@ -1830,8 +1896,11 @@ app.post('/api/item-details', security.apiLimiter, async (req, res) => {
           if (shortage > 0) canBuild = false;
         }
 
-        // Calculate potential profit — sell price from sell hub, material cost from source hub
-        const sellPrice = itemDetails.currentPrice ? itemDetails.currentPrice.sell : 0;
+        // Calculate potential profit — sell price from sell hub, material cost from source hub.
+        // Use 30d avg as fallback when no live sell orders exist (avoids showing zero revenue).
+        const sellPrice = itemDetails.currentPrice
+          ? (itemDetails.currentPrice.sell || itemDetails.currentPrice.avg30d || 0)
+          : 0;
         const productQuantity = blueprint.product_quantity || 1;
         const batchRevenue = sellPrice * productQuantity;
         const profit = batchRevenue - totalCost;
@@ -3227,7 +3296,16 @@ async function runPreCompute() {
           );
         }
 
-        const sellPrice = prices[bp.product_id]?.sell || 0;
+        // Sell price fallback: live sell → 30d avg → 0
+        // Using avg30d when no live sell orders exist gives a realistic revenue estimate
+        // rather than treating the item as worthless. The price_source column records
+        // which fallback was used so the UI can flag it if needed.
+        const liveSell   = prices[bp.product_id]?.sell || 0;
+        const hist30d    = prices[bp.product_id]?.avg30d || 0;
+        const sellPrice  = liveSell || hist30d || 0;
+        const priceSource = liveSell > 0
+          ? (regionId === 10000002 ? 'jita' : `region_${regionId}`)
+          : (hist30d > 0 ? 'history_30d' : 'no_data');
         const buyPrice  = prices[bp.product_id]?.buy  || 0;
         const productQuantity = bp.product_quantity || 1;
         const batchRevenue = sellPrice * productQuantity;
@@ -3241,14 +3319,13 @@ async function runPreCompute() {
           INSERT INTO precomputed_profits
             (blueprint_id, region_id, product_id, product_name, material_cost, sell_price,
              buy_price, profit, profit_margin, isk_per_hour, build_time,
-             material_count, computed_at, price_source, activity_id)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             material_count, computed_at, price_source, activity_id, avg_30d_price)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `, [
           bp.blueprint_id, regionId, bp.product_id, bp.product_name || null,
           totalMatCost, sellPrice, buyPrice, profit, profitMargin,
           iskPerHour, bp.build_time || 0, materials.length, computedAt,
-          regionId === 10000002 ? 'jita' : `region_${regionId}`,
-          bp.activity_id || 1
+          priceSource, bp.activity_id || 1, hist30d || null
         ]);
 
         regionProcessed++;
@@ -3307,19 +3384,20 @@ async function runPreCompute() {
 // Using buy prices understates material costs for wide-spread items (e.g. capital
 // components), making the precomputed profit wildly optimistic.
 //
-// Price fallback chain: sell → buy → 0
-//   sell: lowest ask (market sell order) — preferred
-//   buy:  highest bid — fallback when no sell orders exist
-//   0:    item genuinely untradeable or not yet in the order book
+// Price fallback chain: sell → buy → avg30d → 0
+//   sell:   lowest ask (market sell order) — preferred
+//   buy:    highest bid — fallback when no sell orders exist
+//   avg30d: 30-day trade-weighted average — fallback when order book is completely empty
+//   0:      item genuinely untradeable (contract-only) or no history at all
 function calculateMaterialCostSync(materialId, quantity, prices, materialsByBp, bpByProduct, depth = 0) {
   // Prevent infinite recursion on circular blueprint references
   if (depth > 10) {
-    return (prices[materialId]?.sell || prices[materialId]?.buy || 0) * quantity;
+    return (prices[materialId]?.sell || prices[materialId]?.buy || prices[materialId]?.avg30d || 0) * quantity;
   }
 
-  // Helper: sell price with buy-price fallback (never use bare .buy alone)
+  // Helper: sell price → buy-price → 30d-history fallback (never use bare .buy alone)
   const marketBuyPrice = (typeId) =>
-    prices[typeId]?.sell || prices[typeId]?.buy || 0;
+    prices[typeId]?.sell || prices[typeId]?.buy || prices[typeId]?.avg30d || 0;
 
   const subBpId = bpByProduct[materialId];
   if (subBpId) {
@@ -3395,20 +3473,47 @@ async function runVolumeEnrichment() {
 
     for (const item of itemsToEnrich) {
       try {
-        // Fetch market history for volume data
+        // Fetch market history for volume data AND 30-day average price
         const historyRes = await fetch(
           `https://esi.evetech.net/latest/markets/${JITA_REGION}/history/?datasource=tranquility&type_id=${item.product_id}`
         );
 
         let avgVolume = 0;
+        let avg30dPrice = 0;
+        let sampleDays = 0;
         if (historyRes.ok) {
           const history = await historyRes.json();
           if (Array.isArray(history) && history.length > 0) {
             // Calculate 30-day average (or less if not enough data)
             const recentHistory = history.slice(-30);
+            sampleDays = recentHistory.length;
             const totalVolume = recentHistory.reduce((sum, day) => sum + (day.volume || 0), 0);
-            avgVolume = recentHistory.length > 0 ? totalVolume / recentHistory.length : 0;
+            avgVolume = sampleDays > 0 ? totalVolume / sampleDays : 0;
+            // 30-day average of the daily trade-weighted average price
+            // ESI 'average' = volume-weighted mean of actual transactions for that day
+            const totalPrice = recentHistory.reduce((sum, day) => sum + (day.average || 0), 0);
+            avg30dPrice = sampleDays > 0 ? totalPrice / sampleDays : 0;
           }
+        }
+
+        // Persist historical average price so the precompute job can use it as a fallback
+        if (avg30dPrice > 0) {
+          await dbRun(`
+            INSERT INTO item_history_prices (type_id, avg_30d_price, avg_30d_volume, sample_days, updated_at)
+            VALUES (?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(type_id) DO UPDATE SET
+              avg_30d_price  = excluded.avg_30d_price,
+              avg_30d_volume = excluded.avg_30d_volume,
+              sample_days    = excluded.sample_days,
+              updated_at     = excluded.updated_at
+          `, [item.product_id, avg30dPrice, avgVolume, sampleDays]);
+
+          // Also stamp it on the precomputed_profits row for display/audit
+          await dbRun(`
+            UPDATE precomputed_profits
+            SET avg_30d_price = ?
+            WHERE product_id = ? AND region_id = 10000002
+          `, [avg30dPrice, item.product_id]);
         }
 
         // Fetch market_group_id to detect non-marketable items
@@ -3475,6 +3580,58 @@ async function runVolumeEnrichment() {
         errors++;
       }
     }
+
+    // Second pass: items with sell_price = 0 that were excluded from the main loop.
+    // These need historical averages most urgently — without them they appear as
+    // "no revenue, infinite loss" which is misleading when there IS trade history.
+    const zeroSellItems = await dbAll(`
+      SELECT DISTINCT pp.product_id, pp.product_name
+      FROM precomputed_profits pp
+      WHERE pp.region_id = 10000002
+        AND pp.sell_price = 0
+        AND NOT EXISTS (
+          SELECT 1 FROM item_history_prices ihp WHERE ihp.type_id = pp.product_id
+        )
+      LIMIT 300
+    `);
+
+    if (zeroSellItems.length > 0) {
+      console.log(`⟳ Fetching history for ${zeroSellItems.length} zero-sell-price items...`);
+      for (const item of zeroSellItems) {
+        try {
+          const histRes = await fetch(
+            `https://esi.evetech.net/latest/markets/${JITA_REGION}/history/?datasource=tranquility&type_id=${item.product_id}`
+          );
+          if (histRes.ok) {
+            const history = await histRes.json();
+            if (Array.isArray(history) && history.length > 0) {
+              const recent = history.slice(-30);
+              const sampleDays = recent.length;
+              const avgVol = recent.reduce((s, d) => s + (d.volume || 0), 0) / sampleDays;
+              const avgPrice = recent.reduce((s, d) => s + (d.average || 0), 0) / sampleDays;
+              if (avgPrice > 0) {
+                await dbRun(`
+                  INSERT INTO item_history_prices (type_id, avg_30d_price, avg_30d_volume, sample_days, updated_at)
+                  VALUES (?, ?, ?, ?, datetime('now'))
+                  ON CONFLICT(type_id) DO UPDATE SET
+                    avg_30d_price  = excluded.avg_30d_price,
+                    avg_30d_volume = excluded.avg_30d_volume,
+                    sample_days    = excluded.sample_days,
+                    updated_at     = excluded.updated_at
+                `, [item.product_id, avgPrice, avgVol, sampleDays]);
+              }
+            }
+          }
+          await new Promise(r => setTimeout(r, 100));
+        } catch (err) {
+          console.error(`  ✗ Zero-sell history fetch failed for ${item.product_name}:`, err.message);
+        }
+      }
+      console.log('✓ Zero-sell-price history pass complete');
+    }
+
+    // Reload the in-memory map so the next precompute run benefits immediately
+    await loadHistoryPriceMap();
 
     // Copy volume/market data from Jita rows to all other region rows.
     // avg_daily_volume and market_group_id are item properties, not region-specific.
@@ -3799,7 +3956,8 @@ app.get('/api/top-profitable-by-skills', security.apiLimiter, security.verifyEve
                sell_price, buy_price, profit, profit_margin, isk_per_hour,
                build_time, material_count, computed_at,
                avg_daily_volume, market_group_id, liquidity_risk,
-               COALESCE(activity_id, 1) AS activity_id
+               COALESCE(activity_id, 1) AS activity_id,
+               price_source, avg_30d_price
         FROM precomputed_profits
         WHERE ${whereConditions.join(' AND ')}
         ORDER BY ${orderClause}
@@ -3844,7 +4002,9 @@ app.get('/api/top-profitable-by-skills', security.apiLimiter, security.verifyEve
           sell.avg_daily_volume,
           sell.market_group_id,
           sell.liquidity_risk,
-          COALESCE(sell.activity_id, 1) AS activity_id
+          COALESCE(sell.activity_id, 1) AS activity_id,
+          sell.price_source,
+          sell.avg_30d_price
         FROM precomputed_profits sell
         JOIN precomputed_profits src
           ON  src.blueprint_id = sell.blueprint_id
@@ -5244,6 +5404,9 @@ setInterval(async () => {
 initDatabase().then(async () => {
   // Run v0.9.0 migrations
   await runMigrations();
+
+  // Load 30-day history price map from DB (populated by volume enrichment)
+  await loadHistoryPriceMap();
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`

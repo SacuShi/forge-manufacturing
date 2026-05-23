@@ -38,6 +38,10 @@ export interface MarketItem {
   buildTimeMinutes: number;
   owned: OwnedStatus;
   canBuild: boolean;
+  /** 'jita' | 'history_30d' | 'no_data' | region string — price source for sell price */
+  priceSource?: string | null;
+  /** 30-day average price when sell orders are absent (display reference only) */
+  avg30dPrice?: number | null;
 }
 
 export interface Material {
@@ -173,6 +177,10 @@ export interface TopProfitableItem {
   avg_daily_volume: number | null;
   market_group_id: number | null;
   liquidity_risk: string | null;
+  /** 'jita' | 'history_30d' | 'no_data' | 'region_XXXXXXX' — indicates which price source was used */
+  price_source?: string | null;
+  /** 30-day average trade price from ESI history (0 if unavailable) */
+  avg_30d_price?: number | null;
 }
 
 export interface TopProfitableResponse {
@@ -232,6 +240,8 @@ export interface ItemDetailApiResponse {
     sell: number;
     buy: number;
     median: number;
+    /** 30-day average trade price from ESI history — non-zero when no live sell orders */
+    avg30d?: number;
   };
   buildInfo?: {
     blueprintOwned: boolean;

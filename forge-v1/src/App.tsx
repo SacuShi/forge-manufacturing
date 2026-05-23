@@ -61,6 +61,8 @@ function mapToMarketItems(
       buildTimeMinutes: Math.round((item.build_time ?? 0) / 60),
       owned,
       canBuild:         owned !== '—',
+      priceSource:      item.price_source ?? null,
+      avg30dPrice:      item.avg_30d_price ?? null,
     } as MarketItem;
   });
 }

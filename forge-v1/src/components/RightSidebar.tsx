@@ -371,23 +371,44 @@ const RightSidebar: FC<RightSidebarProps> = ({
             {apiDetail.currentPrice && (
               <div className="detail-section">
                 <div className="detail-section-heading">Current {marketLabel} Market</div>
+
+                {/* Warn when there are no live sell orders — price estimated from history */}
+                {apiDetail.currentPrice.sell === 0 && (apiDetail.currentPrice.avg30d ?? 0) > 0 && (
+                  <div className="price-hist-notice">
+                    ⚠ No live sell orders — prices below estimated from 30-day trade average
+                  </div>
+                )}
+
                 <div className="price-grid">
                   <div>
-                    <div className="price-cell-label">LOWEST SELL</div>
+                    <div className="price-cell-label">
+                      LOWEST SELL
+                      {apiDetail.currentPrice.sell === 0 && (apiDetail.currentPrice.avg30d ?? 0) > 0
+                        ? <span className="price-cell-label-hist"> (no orders)</span>
+                        : null}
+                    </div>
                     <div className="price-cell-value" style={{ color: 'var(--color-danger)' }}>
-                      {formatISK(apiDetail.currentPrice.sell)}
+                      {apiDetail.currentPrice.sell > 0
+                        ? formatISK(apiDetail.currentPrice.sell)
+                        : <span style={{ color: 'var(--color-text-tertiary)' }}>—</span>}
                     </div>
                   </div>
                   <div>
-                    <div className="price-cell-label">MEDIAN</div>
+                    <div className="price-cell-label">
+                      {(apiDetail.currentPrice.avg30d ?? 0) > 0 ? '30D AVG TRADE' : 'MEDIAN'}
+                    </div>
                     <div className="price-cell-value" style={{ color: 'var(--color-accent-primary)' }}>
-                      {formatISK(apiDetail.currentPrice.median)}
+                      {(apiDetail.currentPrice.avg30d ?? 0) > 0
+                        ? formatISK(apiDetail.currentPrice.avg30d!)
+                        : formatISK(apiDetail.currentPrice.median)}
                     </div>
                   </div>
                   <div>
                     <div className="price-cell-label">HIGHEST BUY</div>
                     <div className="price-cell-value" style={{ color: 'var(--color-success)' }}>
-                      {formatISK(apiDetail.currentPrice.buy)}
+                      {apiDetail.currentPrice.buy > 0
+                        ? formatISK(apiDetail.currentPrice.buy)
+                        : <span style={{ color: 'var(--color-text-tertiary)' }}>—</span>}
                     </div>
                   </div>
                 </div>
