@@ -395,10 +395,11 @@ const RightSidebar: FC<RightSidebarProps> = ({
                   </div>
                   <div>
                     <div className="price-cell-label">
-                      {(apiDetail.currentPrice.avg30d ?? 0) > 0 ? '30D AVG TRADE' : 'MEDIAN'}
+                      {apiDetail.currentPrice.sell === 0 && (apiDetail.currentPrice.avg30d ?? 0) > 0
+                        ? '30D AVG TRADE' : 'MEDIAN'}
                     </div>
                     <div className="price-cell-value" style={{ color: 'var(--color-accent-primary)' }}>
-                      {(apiDetail.currentPrice.avg30d ?? 0) > 0
+                      {apiDetail.currentPrice.sell === 0 && (apiDetail.currentPrice.avg30d ?? 0) > 0
                         ? formatISK(apiDetail.currentPrice.avg30d!)
                         : formatISK(apiDetail.currentPrice.median)}
                     </div>
