@@ -5097,7 +5097,7 @@ app.post('/api/corp/setup', async (req, res) => {
     const requiredScopes = [
       'esi-corporations.read_blueprints.v1',
       'esi-corporations.read_assets.v1',
-      'esi-corporations.read_industry_jobs.v1',
+      'esi-corporations.read_corporation_jobs.v1',
     ];
     const missingScopes = requiredScopes.filter(s => !grantedScopes.includes(s));
     if (missingScopes.length) {
