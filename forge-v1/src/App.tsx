@@ -11,6 +11,7 @@ import type {
   IndustrySettings,
   FeeRates,
   EsiBlueprint,
+  EsiAsset,
 } from './types';
 import { MARKETS } from './components/MarketSelector';
 import { useAuth }       from './hooks/useAuth';
@@ -178,6 +179,88 @@ const App: FC = () => {
   const [industrySettings, setIndustrySettings] = useState<IndustrySettings | null>(null);
   const [settingsOpen,     setSettingsOpen]     = useState(false);
 
+  // v1.5 — Multi-character: view isolation + fee character selection
+  // viewCharacterId: null = combined view; a characterId = isolated single-char view
+  // feeCharacterId:  null = use primary character's token for fee/true-cost calls
+  const [viewCharacterId, setViewCharacterId] = useState<number | null>(null);
+  const [feeCharacterId,  setFeeCharacterId]  = useState<number | null>(null);
+
+  // ── v1.5 Aggregation ──────────────────────────────────────────────────────
+  // Derive combined/isolated datasets from primary + alts based on viewCharacterId.
+
+  const activeAltCharacters = useMemo(() =>
+    viewCharacterId === null
+      ? auth.altCharacters
+      : auth.altCharacters.filter((a) => a.characterId === viewCharacterId),
+    [viewCharacterId, auth.altCharacters]
+  );
+
+  const primaryInScope = viewCharacterId === null || viewCharacterId === auth.character?.characterId;
+
+  // All blueprints across in-scope characters (used for ownership badges + market filtering)
+  const allBlueprints = useMemo<EsiBlueprint[]>(() => [
+    ...(primaryInScope ? auth.blueprints : []),
+    ...activeAltCharacters.flatMap((a) => a.blueprints),
+  ], [primaryInScope, auth.blueprints, activeAltCharacters]);
+
+  // Combined assets summed by type_id — used by useItemDetail for have/needed
+  const combinedAssets = useMemo<EsiAsset[]>(() => {
+    const map = new Map<number, number>();
+    const add = (assets: EsiAsset[]) =>
+      assets.forEach((a) => map.set(a.type_id, (map.get(a.type_id) ?? 0) + a.quantity));
+    if (primaryInScope) add(auth.assets);
+    activeAltCharacters.forEach((a) => add(a.assets));
+    // Convert back to EsiAsset[] (server/hooks expect an array)
+    return Array.from(map.entries()).map(([type_id, quantity]) => ({
+      type_id, quantity,
+      item_id: type_id, location_id: 0, location_flag: 'Hangar', is_singleton: false,
+    }));
+  }, [primaryInScope, auth.assets, activeAltCharacters]);
+
+  // Best skill level per skill_id across in-scope characters (for market filtering)
+  const bestSkillsArray = useMemo(() => {
+    const map = new Map<number, number>();
+    const add = (skills: Array<{ skill_id: number; active_skill_level: number }>) =>
+      skills.forEach((s) => map.set(s.skill_id, Math.max(map.get(s.skill_id) ?? 0, s.active_skill_level)));
+    if (primaryInScope) add(auth.skills);
+    activeAltCharacters.forEach((a) => add(a.skills));
+    return Array.from(map.entries()).map(([skill_id, active_skill_level]) => ({ skill_id, active_skill_level }));
+  }, [primaryInScope, auth.skills, activeAltCharacters]);
+
+  // All active jobs across in-scope characters
+  const allActiveJobs = useMemo(() => [
+    ...(primaryInScope ? (auth.character?.activeJobs ?? []) : []),
+    ...activeAltCharacters.flatMap((a) => a.activeJobs),
+  ], [primaryInScope, auth.character, activeAltCharacters]);
+
+  // Total wallet across in-scope characters
+  const totalWalletISK = useMemo(() =>
+    (primaryInScope ? (auth.character?.walletISK ?? 0) : 0) +
+    activeAltCharacters.reduce((s, a) => s + a.walletISK, 0),
+    [primaryInScope, auth.character, activeAltCharacters]
+  );
+
+  // Blueprint → owner name map (item_id → character name) — for attribution badges
+  const blueprintOwnerMap = useMemo(() => {
+    const map = new Map<number, string>();
+    if (auth.altCharacters.length === 0) return map; // no alts → no badges needed
+    auth.blueprints.forEach((bp) => map.set(bp.item_id, auth.character?.name ?? 'Primary'));
+    auth.altCharacters.forEach((a) => a.blueprints.forEach((bp) => map.set(bp.item_id, a.name)));
+    return map;
+  }, [auth.blueprints, auth.character, auth.altCharacters]);
+
+  // Token to use for fee-rate and true-cost calls (primary or selected alt)
+  const feeToken = useMemo(() => {
+    if (!feeCharacterId) return auth.token;
+    return auth.altCharacters.find((a) => a.characterId === feeCharacterId)?.token ?? auth.token;
+  }, [feeCharacterId, auth.token, auth.altCharacters]);
+
+  // Name of the character whose fees are being used (for the selector label)
+  const feeCharacterName = useMemo(() => {
+    if (!feeCharacterId) return auth.character?.name ?? 'Primary';
+    return auth.altCharacters.find((a) => a.characterId === feeCharacterId)?.name ?? 'Primary';
+  }, [feeCharacterId, auth.character, auth.altCharacters]);
+
   // v1.4.0 — Corp feature: PIN modal visibility + corp data hook
   const [corpPinOpen, setCorpPinOpen] = useState(false);
   const {
@@ -195,17 +278,18 @@ const App: FC = () => {
   // Derive marketItems from rawResults.
   // When feeRates are loaded, profit/margin/ISK-hr are recalculated with the same
   // formula as True Profit so both panels show consistent figures.
+  // Uses allBlueprints so owned status reflects all in-scope characters.
   const marketItems = useMemo<MarketItem[]>(() => {
     if (!rawResults.length) return [];
-    return mapToMarketItems(rawResults, auth.blueprints, feeRates);
-  }, [rawResults, auth.blueprints, feeRates]);
+    return mapToMarketItems(rawResults, allBlueprints, feeRates);
+  }, [rawResults, allBlueprints, feeRates]);
 
   const {
     detail: apiDetail,
     loading: detailLoading,
     error: detailError,
   } = useItemDetail(
-    selectedTypeId, auth.assets, auth.blueprints, auth.token,
+    selectedTypeId, combinedAssets, allBlueprints, auth.token,
     selectedMarket.id,        // sell hub — drives "Current Market" price box
     selectedSourceMarket.id,  // source hub — drives material unit costs in build analysis
   );
@@ -215,16 +299,17 @@ const App: FC = () => {
   // ESI blueprint type_ids differ from product type_ids, so we match by name:
   //   itemNames.get(bp.type_id) === productName + " Blueprint"
   // BPO (quantity === -1) is preferred over any BPC when both exist.
+  // v1.5: search allBlueprints so alts' blueprints are included in ME/TE resolution
   const { selectedBlueprintME, selectedBlueprintTE } = useMemo(() => {
-    if (!selectedTypeId || !itemNames.size || !auth.blueprints.length) {
+    if (!selectedTypeId || !itemNames.size || !allBlueprints.length) {
       return { selectedBlueprintME: 0, selectedBlueprintTE: 0 };
     }
     const productName = itemNames.get(selectedTypeId);
     if (!productName) return { selectedBlueprintME: 0, selectedBlueprintTE: 0 };
     const bpNameTarget = (productName + ' Blueprint').toLowerCase();
 
-    let best: (typeof auth.blueprints)[0] | null = null;
-    for (const bp of auth.blueprints) {
+    let best: EsiBlueprint | null = null;
+    for (const bp of allBlueprints) {
       const bpName = itemNames.get(bp.type_id);
       if (!bpName || bpName.toLowerCase() !== bpNameTarget) continue;
       // Prefer BPO (quantity === -1); among BPCs pick any
@@ -234,9 +319,10 @@ const App: FC = () => {
       selectedBlueprintME: best?.material_efficiency ?? 0,
       selectedBlueprintTE: best?.time_efficiency     ?? 0,
     };
-  }, [selectedTypeId, auth.blueprints, itemNames]);
+  }, [selectedTypeId, allBlueprints, itemNames]);
 
   // v1.2.0 — True Profit calculation via /api/true-cost (local ESI calc, no external API)
+  // v1.5: feeToken switches to whichever character the user selects for fee calculations
   const {
     data:    trueCostData,
     loading: trueCostLoading,
@@ -247,7 +333,7 @@ const App: FC = () => {
     selectedSourceMarket.id,  // source hub — determines material purchase prices
     selectedBlueprintME,
     selectedBlueprintTE,
-    auth.token,
+    feeToken,
   );
 
   useEffect(() => {
@@ -276,19 +362,36 @@ const App: FC = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth.status]);
 
-  // v1.5.1 — Load fee rates on login and whenever the sell hub changes.
-  // Fee rates (broker standings, transaction tax, SCI) are character-specific
-  // and hub-specific — re-fetching when the hub changes keeps profit figures accurate.
+  // v1.5 — Load fee rates on login, hub change, or fee-character change.
+  // feeToken resolves to primary or a selected alt's token.
   useEffect(() => {
-    if (auth.status !== 'authed' || !auth.token) return;
+    if (auth.status !== 'authed' || !feeToken) return;
     apiGet<FeeRates>(
       `/api/character-fee-rates?sellRegionId=${selectedMarket.id}`,
-      auth.token
+      feeToken
     )
       .then(setFeeRates)
       .catch(() => { /* non-fatal — falls back to precomputed figures */ });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auth.status, selectedMarket.id]);
+  }, [auth.status, selectedMarket.id, feeToken]);
+
+  // v1.5 — Re-POST combined session to server whenever the in-scope character set changes.
+  // This keeps /api/top-profitable-by-skills skill-filtering and have/needed checks
+  // up-to-date with the current combined (or isolated) character data — no server changes needed.
+  useEffect(() => {
+    if (auth.status !== 'authed' || !auth.token) return;
+    apiPost('/api/session-data', {
+      assets:    combinedAssets,
+      blueprints: allBlueprints,
+      prices:    {},
+      wallet:    auth.character?.walletISK ?? 0,
+      jobs:      allActiveJobs,
+      skills:    bestSkillsArray,
+      standings: auth.hasStandingsScope ? undefined : null,
+    }, auth.token).catch(() => { /* non-fatal */ });
+  // Depend on lengths so we don't re-POST on every render, only when data actually changes
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auth.status, auth.token, allBlueprints.length, combinedAssets.length, bestSkillsArray.length]);
 
   useEffect(() => {
     if (auth.status !== 'authed') return;
@@ -652,7 +755,7 @@ const App: FC = () => {
 
         <LeftSidebar
           character={character}
-          blueprints={auth.blueprints}
+          blueprints={allBlueprints}
           activeTab={activeTab}
           onTabChange={(tab) => {
             setActiveTab(tab);
@@ -660,6 +763,13 @@ const App: FC = () => {
           }}
           drawerOpen={drawerOpen}
           onQuickPrompt={handleSendMessage}
+          altCharacters={auth.altCharacters}
+          addingAlt={auth.addingAlt}
+          onAddCharacter={auth.addCharacter}
+          onRemoveCharacter={auth.removeCharacter}
+          viewCharacterId={viewCharacterId}
+          onViewChange={setViewCharacterId}
+          totalWalletISK={totalWalletISK}
         />
 
         <MainContent
@@ -668,9 +778,9 @@ const App: FC = () => {
           marketItems={marketItems}
           marketLoading={marketLoading}
           marketError={marketError}
-          blueprints={auth.blueprints}
-          assets={auth.assets}
-          activeJobs={character.activeJobs}
+          blueprints={allBlueprints}
+          assets={combinedAssets}
+          activeJobs={allActiveJobs}
           itemNames={itemNames}
           selectedTypeId={selectedTypeId}
           onSelectItem={handleSelectItem}
@@ -682,6 +792,7 @@ const App: FC = () => {
           corpStatus={corpStatus}
           accessStatus={corpAccessStatus}
           onNeedCorpPin={() => setCorpPinOpen(true)}
+          blueprintOwnerMap={blueprintOwnerMap}
         />
 
         {/* Tablet overlay (dims background when detail panel is open) */}
@@ -698,7 +809,7 @@ const App: FC = () => {
           detailLoading={detailLoading}
           detailError={detailError}
           detailOpen={detailOpen}
-          blueprints={auth.blueprints}
+          blueprints={allBlueprints}
           itemNames={itemNames}
           selectedMarket={selectedMarket}
           trueCostData={trueCostData}
@@ -709,6 +820,11 @@ const App: FC = () => {
           onSelectItem={handleSelectItem}
           onBack={handlePanelBack}
           canGoBack={panelHistory.length > 0}
+          altCharacters={auth.altCharacters}
+          primaryCharacterName={auth.character?.name ?? ''}
+          feeCharacterId={feeCharacterId}
+          feeCharacterName={feeCharacterName}
+          onFeeCharacterChange={setFeeCharacterId}
         />
 
         <ChatPanel

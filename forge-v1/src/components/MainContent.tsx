@@ -46,6 +46,8 @@ interface MainContentProps {
   accessStatus: CorpAccessStatus | null;
   /** Signal parent to show the PIN entry modal */
   onNeedCorpPin: () => void;
+  /** v1.5 — item_id → character name; populated when alts are loaded; empty = no badges */
+  blueprintOwnerMap?: Map<number, string>;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -80,6 +82,7 @@ const MainContent: FC<MainContentProps> = ({
   corpStatus,
   accessStatus,
   onNeedCorpPin,
+  blueprintOwnerMap = new Map(),
 }) => {
   const [sortField, setSortField] = useState<SortField>('rank');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
@@ -443,6 +446,12 @@ const MainContent: FC<MainContentProps> = ({
                           <span className="badge-me">ME{firstCopy.material_efficiency}</span>
                           <span className="badge-te">TE{firstCopy.time_efficiency}</span>
                         </>
+                      )}
+                      {/* v1.5 — Owner badge: shown when multiple characters are loaded */}
+                      {blueprintOwnerMap.size > 0 && blueprintOwnerMap.get(firstCopy.item_id) && (
+                        <span className="bp-owner-badge">
+                          {blueprintOwnerMap.get(firstCopy.item_id)}
+                        </span>
                       )}
                     </div>
 

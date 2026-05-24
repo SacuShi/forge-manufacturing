@@ -261,6 +261,29 @@ export interface ItemDetailApiResponse {
 
 export type AuthStatus = 'idle' | 'exchanging' | 'loading' | 'authed' | 'error';
 
+/**
+ * v1.5 — An additional EVE character loaded alongside the primary.
+ * Data is loaded from ESI just like the primary character and stored
+ * in sessionStorage under forge_alt_tokens.
+ */
+export interface AltCharacter {
+  characterId:       number;
+  name:              string;
+  token:             string;
+  blueprints:        EsiBlueprint[];
+  assets:            EsiAsset[];
+  skills:            Array<{ skill_id: number; active_skill_level: number }>;
+  activeJobs:        ActiveJob[];
+  walletISK:         number;
+  blueprintCount:    number;
+  bpoCount:          number;
+  activeJobCount:    number;
+  hasStandingsScope: boolean;
+  /** True while this alt's ESI data is being fetched */
+  loading:           boolean;
+  error:             string | null;
+}
+
 // ══════════════════════════════════════════════════════════════════════════
 // 5. v1.2.0 — TRUE PROFIT TYPES
 // ══════════════════════════════════════════════════════════════════════════

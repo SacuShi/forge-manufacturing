@@ -22,7 +22,7 @@
  */
 
 import { useMemo, type FC } from 'react';
-import type { ItemDetail, ItemDetailApiResponse, EsiBlueprint, Market, TrueCostResponse } from '../types';
+import type { ItemDetail, ItemDetailApiResponse, EsiBlueprint, Market, TrueCostResponse, AltCharacter } from '../types';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -54,6 +54,13 @@ interface RightSidebarProps {
   onBack?:         () => void;
   /** True when there is at least one entry in the back-stack */
   canGoBack?:      boolean;
+  // v1.5 — Multi-character fee selector
+  altCharacters:        AltCharacter[];
+  primaryCharacterName: string;
+  /** null = use primary character's fees */
+  feeCharacterId:       number | null;
+  feeCharacterName:     string;
+  onFeeCharacterChange: (characterId: number | null) => void;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -97,6 +104,11 @@ const RightSidebar: FC<RightSidebarProps> = ({
   onSelectItem,
   onBack,
   canGoBack = false,
+  altCharacters,
+  primaryCharacterName,
+  feeCharacterId,
+  feeCharacterName,
+  onFeeCharacterChange,
 }) => {
   const isJita       = selectedMarket.id === 10000002;
   const marketLabel  = `${selectedMarket.name}${selectedMarket.type === 'nullsec' ? ' [NULLSEC]' : ''}`;
@@ -637,9 +649,28 @@ const RightSidebar: FC<RightSidebarProps> = ({
         {/* ── True Profit — 4-box breakdown ──────────────────────────────── */}
         {selectedTypeId && (
           <div className="detail-section">
-            <div className="detail-section-heading">
-              True Profit
-              <span style={{ float: 'right', fontSize: 10, fontWeight: 400,
+            <div className="detail-section-heading" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span>True Profit</span>
+              {/* v1.5 — Fee character selector (only shown when alts are loaded) */}
+              {altCharacters.length > 0 && (
+                <select
+                  className="fee-char-select"
+                  value={feeCharacterId ?? 'primary'}
+                  title={`Fees calculated using ${feeCharacterName}'s skills & standings`}
+                  onChange={(e) => onFeeCharacterChange(
+                    e.target.value === 'primary' ? null : Number(e.target.value)
+                  )}
+                  aria-label="Character to use for fee calculations"
+                >
+                  <option value="primary">{primaryCharacterName}</option>
+                  {altCharacters.map((a) => (
+                    <option key={a.characterId} value={a.characterId} disabled={a.loading}>
+                      {a.loading ? 'Loading…' : a.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <span style={{ marginLeft: 'auto', fontSize: 10, fontWeight: 400,
                 color: 'var(--color-text-tertiary)', letterSpacing: 0 }}>
                 incl. all fees &amp; taxes
               </span>

@@ -1012,6 +1012,127 @@ tbody td.align-center { text-align: center; }
   font-weight: 600;
 }
 
+/* ─────────────────────────────────────────────────────────────────
+   v1.5 — Multi-character styles
+   ───────────────────────────────────────────────────────────────── */
+
+/* View toggle chips (All / CharName / AltName) */
+.char-view-toggle {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+/* Alt character card */
+.alt-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  background: var(--color-bg-secondary);
+  border: 0.5px solid rgba(79, 195, 247, 0.1);
+  border-radius: var(--radius-sm);
+  margin-bottom: 5px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.alt-card:hover {
+  border-color: rgba(79, 195, 247, 0.3);
+}
+.alt-card.isolated {
+  border-color: var(--color-accent-primary);
+  background: rgba(79, 195, 247, 0.05);
+}
+.alt-card-info {
+  flex: 1;
+  min-width: 0;
+}
+.alt-card-name {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.alt-card-stats {
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+  margin-top: 1px;
+  font-family: var(--font-sans);
+}
+.alt-card-remove {
+  background: none;
+  border: none;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 2px;
+  flex-shrink: 0;
+  transition: color 0.15s;
+}
+.alt-card-remove:hover {
+  color: var(--color-danger);
+}
+
+/* Add character button — dashed outline style */
+.char-add-btn {
+  width: 100%;
+  margin-top: 4px;
+  font-size: 11px;
+  padding: 6px 10px;
+  color: var(--color-accent-primary);
+  border: 0.5px dashed rgba(79, 195, 247, 0.35);
+  background: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  letter-spacing: 0.5px;
+  font-family: var(--font-sans);
+  transition: border-color 0.15s, background 0.15s;
+}
+.char-add-btn:hover:not(:disabled) {
+  border-color: var(--color-accent-primary);
+  background: rgba(79, 195, 247, 0.06);
+}
+.char-add-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Fee character selector in the True Profit section heading */
+.fee-char-select {
+  font-size: 10px;
+  background: var(--color-bg-tertiary);
+  border: 0.5px solid rgba(79, 195, 247, 0.2);
+  border-radius: 3px;
+  color: var(--color-text-secondary);
+  padding: 2px 5px;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  transition: border-color 0.15s, color 0.15s;
+  flex-shrink: 0;
+}
+.fee-char-select:hover {
+  border-color: var(--color-accent-primary);
+  color: var(--color-accent-primary);
+}
+
+/* Blueprint owner attribution badge */
+.bp-owner-badge {
+  display: inline-block;
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 2px;
+  background: rgba(79, 195, 247, 0.1);
+  color: var(--color-accent-primary);
+  border: 0.5px solid rgba(79, 195, 247, 0.25);
+  vertical-align: middle;
+  font-family: var(--font-sans);
+  white-space: nowrap;
+}
+
 /* Sparkline */
 .sparkline {
   display: flex;
