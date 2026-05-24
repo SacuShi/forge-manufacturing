@@ -9,6 +9,7 @@ import type {
   AiChatResponse,
   Market,
   IndustrySettings,
+  FeeRates,
 } from './types';
 import { MARKETS } from './components/MarketSelector';
 import { useAuth }       from './hooks/useAuth';
@@ -30,33 +31,79 @@ import IndustrySettingsModal from './components/IndustrySettings';
 import CorpPinModal          from './components/CorpPinModal';
 import { useCorpData }       from './hooks/useCorpData';
 
+/**
+ * Maps raw precomputed results to MarketItem display rows.
+ *
+ * When feeRates is provided (post-login), profit/margin/ISK-hr are
+ * recalculated with the same formula as /api/true-cost so both the
+ * Market Opportunities table and the True Profit panel show consistent
+ * figures:
+ *
+ *   me         = best owned blueprint ME level (0 if unowned)
+ *   meFactor   = max(0, 1 − me/100)
+ *   adjMatCost = material_cost × meFactor        (ME reduces material spend)
+ *   jobCost    = adjMatCost × (sci + 0.02 + facilityTax)
+ *   fees       = sell_price × (brokerFeeRate + transactionTaxRate)
+ *   profit     = sell_price − adjMatCost − jobCost − fees
+ */
 function mapToMarketItems(
   results: TopProfitableResponse['results'],
-  esiBlueprints: Array<{ type_id: number; quantity: number; runs: number }>,
+  esiBlueprints: Array<{ type_id: number; quantity: number; runs: number; material_efficiency: number }>,
+  feeRates: FeeRates | null = null,
   rankOffset = 0
 ): MarketItem[] {
-  // Map type_id → owned status.
-  // ESI: BPO = runs === -1; BPC singleton = quantity === -1 but runs > 0; BPC stack = quantity > 0
-  const bpMap = new Map<number, 'BPO' | 'BPC'>();
+  // Map blueprint type_id → owned status + best ME level
+  const bpMap  = new Map<number, 'BPO' | 'BPC'>();
+  const bpMeMap = new Map<number, number>();
+
   esiBlueprints.forEach((bp) => {
     const isBpo = bp.runs === -1;
     // BPO wins if any copy is an original (don't downgrade BPO → BPC)
     if (isBpo || !bpMap.has(bp.type_id)) {
       bpMap.set(bp.type_id, isBpo ? 'BPO' : 'BPC');
     }
+    // Track highest ME among owned copies (BPO usually has best ME)
+    const me = bp.material_efficiency ?? 0;
+    if (!bpMeMap.has(bp.type_id) || me > (bpMeMap.get(bp.type_id) ?? 0)) {
+      bpMeMap.set(bp.type_id, me);
+    }
   });
 
   return results.map((item, index) => {
     const owned = bpMap.get(item.blueprint_id) ?? '—';
+
+    let profitPerRun = item.profit;
+    let margin       = item.profit_margin;
+    let iskPerHour   = item.isk_per_hour;
+
+    // Apply fee-adjusted math when rates are available and sell price is known
+    if (feeRates && item.sell_price > 0) {
+      const me        = bpMeMap.get(item.blueprint_id) ?? 0;
+      const meFactor  = Math.max(0, 1 - me / 100);
+
+      // ME-adjusted material cost (precomputed baseline is ME=0)
+      const adjMatCost = item.material_cost * meFactor;
+
+      // Manufacturing job cost: EIV proxy = adjMatCost; see /api/true-cost for exact formula
+      const jobCost = adjMatCost * (feeRates.sci + feeRates.scc_rate + feeRates.facility_tax);
+
+      // Sales fees: broker fee + transaction tax on full sell revenue
+      const fees = item.sell_price * (feeRates.broker_fee_rate + feeRates.transaction_tax_rate);
+
+      profitPerRun = item.sell_price - adjMatCost - jobCost - fees;
+      margin       = (profitPerRun / item.sell_price) * 100;
+      const buildHrs = (item.build_time ?? 0) / 3600;
+      iskPerHour   = buildHrs > 0 ? profitPerRun / buildHrs : 0;
+    }
 
     return {
       rank:             rankOffset + index + 1,
       typeId:           item.product_id,
       name:             item.product_name,
       category:         '',
-      profitPerRun:     item.profit,
-      margin:           item.profit_margin,
-      iskPerHour:       item.isk_per_hour,
+      profitPerRun,
+      margin,
+      iskPerHour,
       buildTime:        formatBuildTime(item.build_time ?? 0),
       buildTimeMinutes: Math.round((item.build_time ?? 0) / 60),
       owned,
@@ -123,6 +170,9 @@ const App: FC = () => {
     return MARKETS[0]; // default: Jita
   });
 
+  // v1.5.1 — Character fee rates (broker, tax, SCI, facility tax) for profit alignment
+  const [feeRates, setFeeRates] = useState<FeeRates | null>(null);
+
   // v1.2.0 — Industry settings + settings modal
   const [industrySettings, setIndustrySettings] = useState<IndustrySettings | null>(null);
   const [settingsOpen,     setSettingsOpen]     = useState(false);
@@ -141,12 +191,13 @@ const App: FC = () => {
     activeTab === 'corp' && auth.status === 'authed',
   );
 
-  // Derive marketItems from rawResults — all prices come from the precomputed table
-  // which is now run per-region, so no client-side overlay needed.
+  // Derive marketItems from rawResults.
+  // When feeRates are loaded, profit/margin/ISK-hr are recalculated with the same
+  // formula as True Profit so both panels show consistent figures.
   const marketItems = useMemo<MarketItem[]>(() => {
     if (!rawResults.length) return [];
-    return mapToMarketItems(rawResults, auth.blueprints);
-  }, [rawResults, auth.blueprints]);
+    return mapToMarketItems(rawResults, auth.blueprints, feeRates);
+  }, [rawResults, auth.blueprints, feeRates]);
 
   const {
     detail: apiDetail,
@@ -223,6 +274,20 @@ const App: FC = () => {
       .catch(() => { /* non-fatal — settings remain null */ });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth.status]);
+
+  // v1.5.1 — Load fee rates on login and whenever the sell hub changes.
+  // Fee rates (broker standings, transaction tax, SCI) are character-specific
+  // and hub-specific — re-fetching when the hub changes keeps profit figures accurate.
+  useEffect(() => {
+    if (auth.status !== 'authed' || !auth.token) return;
+    apiGet<FeeRates>(
+      `/api/character-fee-rates?sellRegionId=${selectedMarket.id}`,
+      auth.token
+    )
+      .then(setFeeRates)
+      .catch(() => { /* non-fatal — falls back to precomputed figures */ });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auth.status, selectedMarket.id]);
 
   useEffect(() => {
     if (auth.status !== 'authed') return;

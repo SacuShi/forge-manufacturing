@@ -4547,6 +4547,77 @@ app.get('/api/industry-settings', security.apiLimiter, security.verifyEveToken, 
   }
 });
 
+// GET /api/character-fee-rates — return the character's fee rates for the given sell hub.
+// Used by the client to recompute Market Opportunities profit/margin/ISK-hr with the same
+// formula used by /api/true-cost, so both panels show consistent figures.
+//
+// Query params:
+//   sellRegionId  — region to use for standings-based broker fee (default 10000002 = Jita)
+//
+// Response:
+//   broker_fee_rate        — decimal (e.g. 0.025 for 2.5%)
+//   transaction_tax_rate   — decimal (e.g. 0.0375)
+//   sci                    — System Cost Index for the character's configured system (0 if unconfigured)
+//   scc_rate               — always 0.02 (SCC surcharge, flat)
+//   facility_tax           — decimal (e.g. 0.025 for 2.5%)
+//   setup_configured       — true if industry system has been set
+app.get('/api/character-fee-rates', security.apiLimiter, security.verifyEveToken, async (req, res) => {
+  try {
+    const characterId  = req.characterId;
+    const sellRegionId = VALID_REGIONS.includes(parseInt(req.query.sellRegionId))
+      ? parseInt(req.query.sellRegionId)
+      : 10000002;
+
+    // ── Session: skills + standings ────────────────────────────────────────
+    const session   = getCached(`session:${characterId}`);
+    const skillsArr = session?.skills   || [];
+    const standings = session?.standings || { factions: {}, corps: {} };
+
+    const skillMap = {};
+    skillsArr.forEach(s => { skillMap[Number(s.skill_id)] = s.active_skill_level || 0; });
+
+    // ── Industry settings (system + facility tax) ──────────────────────────
+    const settings = await dbGet(
+      'SELECT * FROM character_industry_settings WHERE character_id = ?',
+      [characterId]
+    );
+    const facilityTaxDecimal = (settings?.facility_tax || 0) / 100;
+    const targetSystemId     = settings?.system_id || 30000142; // default: Jita IV
+
+    // ── System Cost Index ──────────────────────────────────────────────────
+    const costIndices = await fetchCostIndices();
+    const sci         = costIndices[targetSystemId] || 0;
+
+    // ── Broker fee rate (standings-adjusted) ──────────────────────────────
+    const hub             = HUB_STANDINGS[sellRegionId];
+    const brokerRelations = skillMap[3446]  || 0;
+    const accounting      = skillMap[16622] || 0;
+    const factionStanding = standings.factions[hub?.faction_id] || 0;
+    const corpStanding    = standings.corps[hub?.corp_id]       || 0;
+
+    const brokerFeeRate = Math.max(0.01,
+      0.03
+      - (0.003  * brokerRelations)
+      - (0.0003 * Math.max(0, factionStanding))
+      - (0.0002 * Math.max(0, corpStanding))
+    );
+    const transactionTaxRate = Math.max(0, 0.075 * (1 - 0.11 * accounting));
+
+    res.json({
+      broker_fee_rate:      brokerFeeRate,
+      transaction_tax_rate: transactionTaxRate,
+      sci,
+      scc_rate:             0.02,
+      facility_tax:         facilityTaxDecimal,
+      setup_configured:     !!(settings?.system_id),
+    });
+
+  } catch (err) {
+    console.error('Character fee rates error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/industry-settings — save settings for the authed character.
 // Accepts both manufacturing location fields (system, structure, rigs, tax) and
 // the material source hub (material_region_id / material_region_name).

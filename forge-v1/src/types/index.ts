@@ -286,7 +286,27 @@ export interface IndustrySettings {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// 6. v1.4.0 — CORP TYPES
+// 6. v1.5.1 — FEE RATES (used to align Market Opportunities with True Profit)
+// ══════════════════════════════════════════════════════════════════════════
+
+/** Response from GET /api/character-fee-rates */
+export interface FeeRates {
+  /** Broker fee as a decimal fraction (e.g. 0.025 = 2.5%) */
+  broker_fee_rate:      number;
+  /** Transaction tax as a decimal fraction (e.g. 0.0375 = 3.75%) */
+  transaction_tax_rate: number;
+  /** System Cost Index for the character's configured manufacturing system */
+  sci:                  number;
+  /** SCC surcharge — always 0.02 */
+  scc_rate:             number;
+  /** Facility tax as a decimal fraction */
+  facility_tax:         number;
+  /** True if the character has configured a manufacturing system */
+  setup_configured:     boolean;
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// 7. v1.4.0 — CORP TYPES
 // ══════════════════════════════════════════════════════════════════════════
 
 /** Response from GET /api/corp/status */
