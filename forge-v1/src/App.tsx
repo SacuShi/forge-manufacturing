@@ -10,6 +10,7 @@ import type {
   Market,
   IndustrySettings,
   FeeRates,
+  EsiBlueprint,
 } from './types';
 import { MARKETS } from './components/MarketSelector';
 import { useAuth }       from './hooks/useAuth';
@@ -48,7 +49,7 @@ import { useCorpData }       from './hooks/useCorpData';
  */
 function mapToMarketItems(
   results: TopProfitableResponse['results'],
-  esiBlueprints: Array<{ type_id: number; quantity: number; runs: number; material_efficiency: number }>,
+  esiBlueprints: EsiBlueprint[],
   feeRates: FeeRates | null = null,
   rankOffset = 0
 ): MarketItem[] {

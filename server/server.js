@@ -377,6 +377,11 @@ async function runMigrations() {
   console.log('✓ Database migrations complete');
 }
 
+// ── Cache TTL ─────────────────────────────────────────────────────────────────
+// Defined once so every expiry calculation stays in sync.
+const CACHE_TTL_MS     = 60 * 60 * 1000;      // 1 hour
+const CACHE_TTL_ADJ_MS = 6 * CACHE_TTL_MS;    // 6 hours — for ESI adjusted prices
+
 // Simple cache
 const cache = new Map();
 const getCached = (key) => {
@@ -389,7 +394,7 @@ const getCached = (key) => {
   return item.data;
 };
 
-const setCached = (key, data, ttl = 3600000) => {
+const setCached = (key, data, ttl = CACHE_TTL_MS) => {
   cache.set(key, { data, expiry: Date.now() + ttl });
 };
 
@@ -898,6 +903,11 @@ app.post('/api/eve-token', security.authLimiter, async (req, res) => {
 // v0.9.4: Only Jita (10000002) is populated. v1.1 will populate multiple regions.
 const regionPriceCache = new Map();
 
+/** Write region prices to the cache with the standard 1-hour TTL. Single write point. */
+function setRegionPriceCache(regionId, prices) {
+  regionPriceCache.set(regionId, { prices, expiry: Date.now() + CACHE_TTL_MS });
+}
+
 // Tracks which regions have a background price-warm in flight (avoid duplicate fetches)
 const regionWarmingSet = new Set();
 
@@ -930,11 +940,8 @@ Object.defineProperty(global, 'jitaPricesCache', {
     if (value === null) {
       regionPriceCache.delete(10000002);
     } else {
-      regionPriceCache.set(10000002, {
-        prices: value,
-        expiry: Date.now() + (60 * 60 * 1000)
-      });
-      jitaPricesCacheExpiry = Date.now() + (60 * 60 * 1000);
+      setRegionPriceCache(10000002, value);
+      jitaPricesCacheExpiry = Date.now() + CACHE_TTL_MS;
     }
   },
   configurable: true
@@ -990,7 +997,7 @@ app.get('/api/jita-prices', security.apiLimiter, async (req, res) => {
 
     const prices = await fetchRegionPrices(10000002); // The Forge (Jita)
     jitaPricesCache = prices;
-    jitaPricesCacheExpiry = Date.now() + 3600000;
+    jitaPricesCacheExpiry = Date.now() + CACHE_TTL_MS;
     res.json({ prices });
 
   } catch (err) {
@@ -1059,7 +1066,7 @@ async function fetchAdjustedPrices() {
       map[item.type_id] = item.adjusted_price ?? item.average_price ?? 0;
     }
     adjustedPriceCache.data   = map;
-    adjustedPriceCache.expiry = Date.now() + 6 * 3600000;
+    adjustedPriceCache.expiry = Date.now() + CACHE_TTL_ADJ_MS;
     console.log(`✓ ESI adjusted prices cached — ${Object.keys(map).length} types`);
     return map;
   } finally {
@@ -1138,7 +1145,7 @@ async function fetchCostIndices() {
 
   costIndexCache.sciMap  = sciMap;
   costIndexCache.nameMap = nameMap;
-  costIndexCache.expiry  = Date.now() + 3600000;
+  costIndexCache.expiry  = Date.now() + CACHE_TTL_MS;
   console.log(`✓ ESI cost indices + names cached — ${systemIds.length} systems`);
   return sciMap;
 }
@@ -1202,7 +1209,7 @@ async function getItemPricesAllRegions(typeId) {
     if (!entry || Date.now() >= entry.expiry) {
       // fetchRegionPrices returns prices but doesn't cache — store explicitly
       const prices = await fetchRegionPrices(regionId);
-      regionPriceCache.set(regionId, { prices, expiry: Date.now() + 3600000 });
+      setRegionPriceCache(regionId, prices);
       entry = regionPriceCache.get(regionId);
     }
 
@@ -1240,7 +1247,7 @@ app.get('/api/prices/:regionId', security.apiLimiter, async (req, res) => {
 
     console.log(`⟳ Fetching region ${regionId} prices from ESI...`);
     const prices = await fetchRegionPrices(regionId);
-    regionPriceCache.set(regionId, { prices, expiry: Date.now() + 3600000 });
+    setRegionPriceCache(regionId, prices);
     res.json({ regionId, prices });
 
   } catch (err) {
@@ -1969,7 +1976,7 @@ app.post('/api/analyze-blueprints', security.apiLimiter, async (req, res) => {
       try {
         const prices = await fetchRegionPrices(10000002); // The Forge (Jita)
         jitaPricesCache = prices;
-        jitaPricesCacheExpiry = Date.now() + (60 * 60 * 1000); // 1 hour
+        jitaPricesCacheExpiry = Date.now() + CACHE_TTL_MS;
       } catch (err) {
         console.error('⚠ Failed to load prices, proceeding with cached/zero prices:', err.message);
       }
@@ -3227,7 +3234,7 @@ async function ensureJitaPrices() {
 
   // Update the shared cache so other endpoints benefit too
   jitaPricesCache = prices;
-  jitaPricesCacheExpiry = Date.now() + 3600000;
+  jitaPricesCacheExpiry = Date.now() + CACHE_TTL_MS;
 
   return prices;
 }
@@ -3290,9 +3297,9 @@ async function runPreCompute() {
       let prices;
       try {
         prices = await fetchRegionPrices(regionId);
-        regionPriceCache.set(regionId, { prices, expiry: Date.now() + 3600000 });
+        setRegionPriceCache(regionId, prices);
         if (regionId === 10000002) {
-          jitaPricesCacheExpiry = Date.now() + 3600000; // keep compat accessor in sync
+          jitaPricesCacheExpiry = Date.now() + CACHE_TTL_MS; // keep compat accessor in sync
         }
       } catch (err) {
         console.error(`⚠ Region ${regionId}: price fetch failed, skipping — ${err.message}`);
@@ -3393,6 +3400,19 @@ async function runPreCompute() {
   }
 }
 
+/**
+ * Best available market price for a type from a region prices map.
+ * Priority: sell (lowest ask) → buy (highest bid) → 30-day avg → 0.
+ *
+ * This is the single source of truth for price resolution across:
+ *   • material cost calculation (calculateMaterialCostSync)
+ *   • sell revenue estimation (precompute job)
+ * Never read prices[id].buy directly — always call resolvePrice().
+ */
+function resolvePrice(prices, typeId) {
+  return prices[typeId]?.sell || prices[typeId]?.buy || prices[typeId]?.avg30d || 0;
+}
+
 // Synchronous material cost calculation using in-memory data.
 // Avoids per-item DB queries during pre-compute (performance critical).
 //
@@ -3402,20 +3422,10 @@ async function runPreCompute() {
 // Using buy prices understates material costs for wide-spread items (e.g. capital
 // components), making the precomputed profit wildly optimistic.
 //
-// Price fallback chain: sell → buy → avg30d → 0
-//   sell:   lowest ask (market sell order) — preferred
-//   buy:    highest bid — fallback when no sell orders exist
-//   avg30d: 30-day trade-weighted average — fallback when order book is completely empty
-//   0:      item genuinely untradeable (contract-only) or no history at all
+// Price fallback chain: sell → buy → avg30d → 0 (via resolvePrice)
 function calculateMaterialCostSync(materialId, quantity, prices, materialsByBp, bpByProduct, depth = 0) {
   // Prevent infinite recursion on circular blueprint references
-  if (depth > 10) {
-    return (prices[materialId]?.sell || prices[materialId]?.buy || prices[materialId]?.avg30d || 0) * quantity;
-  }
-
-  // Helper: sell price → buy-price → 30d-history fallback (never use bare .buy alone)
-  const marketBuyPrice = (typeId) =>
-    prices[typeId]?.sell || prices[typeId]?.buy || prices[typeId]?.avg30d || 0;
+  if (depth > 10) return resolvePrice(prices, materialId) * quantity;
 
   const subBpId = bpByProduct[materialId];
   if (subBpId) {
@@ -3428,15 +3438,13 @@ function calculateMaterialCostSync(materialId, quantity, prices, materialsByBp, 
         sub.material_id, sub.quantity, prices, materialsByBp, bpByProduct, depth + 1
       );
     }
-    // Cost to buy `quantity` units from market
-    const buyCost = marketBuyPrice(materialId) * quantity;
-    // Cost to manufacture `quantity` units (1 sub-run produces 1 unit at depth > 0;
-    // we scale linearly — this is an approximation but correct for qty = 1 sub-runs)
+    // Cost to buy `quantity` units from market vs cost to manufacture
+    const buyCost = resolvePrice(prices, materialId) * quantity;
     const mfgCost = mfgCostPerRun * quantity;
     return Math.min(mfgCost, buyCost);
   }
 
-  return marketBuyPrice(materialId) * quantity;
+  return resolvePrice(prices, materialId) * quantity;
 }
 
 // VOLUME ENRICHMENT JOB (v0.9.1)
@@ -4547,6 +4555,54 @@ app.get('/api/industry-settings', security.apiLimiter, security.verifyEveToken, 
   }
 });
 
+// ── Sales-fee helpers (shared by /api/character-fee-rates and /api/true-cost) ──────────
+
+/**
+ * Extract a character's skill map and standings from the server-side session cache.
+ * Returns safe defaults ({} and empty standing maps) when the session is missing.
+ *
+ * @param {number|string} characterId
+ * @returns {{ skillMap: Object, standings: { factions: Object, corps: Object } }}
+ */
+function getCharacterSession(characterId) {
+  const session   = getCached(`session:${characterId}`);
+  const skillsArr = session?.skills   || [];
+  const standings = session?.standings || { factions: {}, corps: {} };
+  const skillMap  = {};
+  skillsArr.forEach(s => { skillMap[Number(s.skill_id)] = s.active_skill_level || 0; });
+  return { skillMap, standings };
+}
+
+/**
+ * Calculate EVE broker fee and transaction tax rates for a character at a trade hub.
+ *
+ * Broker fee:
+ *   max(1%, 3% − 0.3%×BrokerRelations − 0.03%×max(0,factionStanding) − 0.02%×max(0,corpStanding))
+ * Transaction tax:
+ *   max(0%, 7.5% × (1 − 11%×Accounting))
+ *
+ * @param {Object} skillMap  — { [skill_id]: level } from getCharacterSession
+ * @param {Object} standings — { factions: {id: val}, corps: {id: val} }
+ * @param {Object|undefined} hub — { faction_id, corp_id } from HUB_STANDINGS
+ * @returns {{ brokerFeeRate, transactionTaxRate, brokerRelations, accounting, factionStanding, corpStanding }}
+ */
+function calcSalesFeeRates(skillMap, standings, hub) {
+  const brokerRelations = skillMap[3446]  || 0;  // Broker Relations (skill_id 3446)
+  const accounting      = skillMap[16622] || 0;  // Accounting       (skill_id 16622)
+  const factionStanding = standings.factions[hub?.faction_id] || 0;
+  const corpStanding    = standings.corps[hub?.corp_id]       || 0;
+
+  const brokerFeeRate = Math.max(0.01,
+    0.03
+    - (0.003  * brokerRelations)
+    - (0.0003 * Math.max(0, factionStanding))
+    - (0.0002 * Math.max(0, corpStanding))
+  );
+  const transactionTaxRate = Math.max(0, 0.075 * (1 - 0.11 * accounting));
+
+  return { brokerFeeRate, transactionTaxRate, brokerRelations, accounting, factionStanding, corpStanding };
+}
+
 // GET /api/character-fee-rates — return the character's fee rates for the given sell hub.
 // Used by the client to recompute Market Opportunities profit/margin/ISK-hr with the same
 // formula used by /api/true-cost, so both panels show consistent figures.
@@ -4569,12 +4625,7 @@ app.get('/api/character-fee-rates', security.apiLimiter, security.verifyEveToken
       : 10000002;
 
     // ── Session: skills + standings ────────────────────────────────────────
-    const session   = getCached(`session:${characterId}`);
-    const skillsArr = session?.skills   || [];
-    const standings = session?.standings || { factions: {}, corps: {} };
-
-    const skillMap = {};
-    skillsArr.forEach(s => { skillMap[Number(s.skill_id)] = s.active_skill_level || 0; });
+    const { skillMap, standings } = getCharacterSession(characterId);
 
     // ── Industry settings (system + facility tax) ──────────────────────────
     const settings = await dbGet(
@@ -4588,20 +4639,9 @@ app.get('/api/character-fee-rates', security.apiLimiter, security.verifyEveToken
     const costIndices = await fetchCostIndices();
     const sci         = costIndices[targetSystemId] || 0;
 
-    // ── Broker fee rate (standings-adjusted) ──────────────────────────────
-    const hub             = HUB_STANDINGS[sellRegionId];
-    const brokerRelations = skillMap[3446]  || 0;
-    const accounting      = skillMap[16622] || 0;
-    const factionStanding = standings.factions[hub?.faction_id] || 0;
-    const corpStanding    = standings.corps[hub?.corp_id]       || 0;
-
-    const brokerFeeRate = Math.max(0.01,
-      0.03
-      - (0.003  * brokerRelations)
-      - (0.0003 * Math.max(0, factionStanding))
-      - (0.0002 * Math.max(0, corpStanding))
-    );
-    const transactionTaxRate = Math.max(0, 0.075 * (1 - 0.11 * accounting));
+    // ── Sales fee rates ────────────────────────────────────────────────────
+    const { brokerFeeRate, transactionTaxRate } =
+      calcSalesFeeRates(skillMap, standings, HUB_STANDINGS[sellRegionId]);
 
     res.json({
       broker_fee_rate:      brokerFeeRate,
@@ -4750,12 +4790,7 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
     if (!product_id) return res.status(400).json({ error: 'product_id required' });
 
     // ── Session: skills + standings ────────────────────────────────────────
-    const session   = getCached(`session:${characterId}`);
-    const skillsArr = session?.skills   || [];
-    const standings = session?.standings || { factions: {}, corps: {} };
-
-    const skillMap = {};
-    skillsArr.forEach(s => { skillMap[Number(s.skill_id)] = s.active_skill_level || 0; });
+    const { skillMap, standings } = getCharacterSession(characterId);
 
     // ── Industry settings (system, structure, rigs, facility tax) ──────────
     const settings = await dbGet(
@@ -4840,7 +4875,7 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
       if (!regionWarmingSet.has(matRegionId)) {
         regionWarmingSet.add(matRegionId);
         fetchRegionPrices(matRegionId)
-          .then(prices => regionPriceCache.set(matRegionId, { prices, expiry: Date.now() + 3600000 }))
+          .then(prices => setRegionPriceCache(matRegionId, prices))
           .catch(() => {})
           .finally(() => regionWarmingSet.delete(matRegionId));
       }
@@ -4862,7 +4897,7 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
       if (!regionWarmingSet.has(sellRegionId)) {
         regionWarmingSet.add(sellRegionId);
         fetchRegionPrices(sellRegionId)
-          .then(prices => regionPriceCache.set(sellRegionId, { prices, expiry: Date.now() + 3600000 }))
+          .then(prices => setRegionPriceCache(sellRegionId, prices))
           .catch(() => {})
           .finally(() => regionWarmingSet.delete(sellRegionId));
       }
@@ -4873,21 +4908,10 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
 
     // ── Sales fees (broker fee + transaction tax) ─────────────────────────
     // Standings are looked up by sell hub — that is where the order is placed.
-    const hub             = HUB_STANDINGS[sellRegionId];
-    const brokerRelations = skillMap[3446]  || 0;
-    const accounting      = skillMap[16622] || 0;
-    const factionStanding = standings.factions[hub?.faction_id] || 0;
-    const corpStanding    = standings.corps[hub?.corp_id]       || 0;
-
-    // Broker fee: max(1%, 3% − 0.3%×BR − 0.03%×max(0,faction) − 0.02%×max(0,corp))
-    const brokerFeeRate = Math.max(0.01,
-      0.03
-      - (0.003  * brokerRelations)
-      - (0.0003 * Math.max(0, factionStanding))
-      - (0.0002 * Math.max(0, corpStanding))
-    );
-    // Transaction tax: max(0%, 7.5% × (1 − 11%×Accounting))
-    const transactionTaxRate = Math.max(0, 0.075 * (1 - 0.11 * accounting));
+    const {
+      brokerFeeRate, transactionTaxRate,
+      brokerRelations, accounting, factionStanding, corpStanding,
+    } = calcSalesFeeRates(skillMap, standings, HUB_STANDINGS[sellRegionId]);
 
     const brokerFee      = sellPrice * brokerFeeRate;
     const transactionTax = sellPrice * transactionTaxRate;
