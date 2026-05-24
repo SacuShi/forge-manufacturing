@@ -828,8 +828,19 @@ async function fetchRegionPrices(regionId) {
   // For items already in the order book, avg30d is attached as extra metadata.
   // For items with NO live orders at all, a stub entry is created so the
   // fallback chain (sell → buy → avg30d → 0) works everywhere downstream.
+  //
+  // Outlier cap: the outlier filter above only runs over live-order items.
+  // Stub entries bypass it entirely, so we apply a sanity cap here:
+  // avg30d is clamped to a maximum of 500× the item's buy price (when available),
+  // or discarded if it is astronomically large (> 100T ISK — clearly corrupt).
+  // This prevents a bad enrichment run from injecting scam-tier prices.
+  const MAX_SANE_PRICE = 100_000_000_000_000; // 100 trillion ISK hard cap
   for (const [typeId, avg30d] of historyPriceMap) {
+    if (avg30d <= 0 || avg30d > MAX_SANE_PRICE) continue; // drop corrupt values
     if (prices[typeId]) {
+      // For live-order items, also validate against existing buy price
+      const buy = prices[typeId].buy;
+      if (buy > 0 && avg30d > buy * 500) continue; // extreme vs buy price → skip
       prices[typeId].avg30d = avg30d; // supplement live-order entry
     } else {
       // Item traded historically but has no live orders right now
@@ -1747,6 +1758,16 @@ app.post('/api/item-details', security.apiLimiter, async (req, res) => {
     if (historyRes.ok) {
       const historyData = await historyRes.json();
       if (Array.isArray(historyData) && historyData.length > 0) {
+        // Calculate 30-day average BEFORE sorting — ESI returns history oldest-first,
+        // so slice(-30) on the raw array gives the 30 most recent trading days.
+        // IMPORTANT: must happen before .sort() which mutates the array in-place,
+        // changing the order and making slice(-30) return the oldest days instead.
+        const recent30 = historyData.slice(-30);
+        if (recent30.length > 0) {
+          avg30dFromHistory = recent30.reduce((sum, d) => sum + (d.average || 0), 0) / recent30.length;
+        }
+
+        // Sort descending then reverse for chronological chart display (last 90 days)
         const sorted = historyData
           .sort((a, b) => new Date(b.date) - new Date(a.date))
           .slice(0, 90)
@@ -1760,12 +1781,6 @@ app.post('/api/item-details', security.apiLimiter, async (req, res) => {
           volume: day.volume,
           orderCount: day.order_count
         }));
-
-        // Calculate 30-day average from the most recent 30 days of actual trades
-        const recent30 = historyData.slice(-30);
-        if (recent30.length > 0) {
-          avg30dFromHistory = recent30.reduce((sum, d) => sum + (d.average || 0), 0) / recent30.length;
-        }
       }
     }
 
@@ -1898,9 +1913,11 @@ app.post('/api/item-details', security.apiLimiter, async (req, res) => {
 
         // Calculate potential profit — sell price from sell hub, material cost from source hub.
         // Use 30d avg as fallback when no live sell orders exist (avoids showing zero revenue).
-        const sellPrice = itemDetails.currentPrice
-          ? (itemDetails.currentPrice.sell || itemDetails.currentPrice.avg30d || 0)
-          : 0;
+        const liveSellForBuild = itemDetails.currentPrice?.sell || 0;
+        const avg30dForBuild   = itemDetails.currentPrice?.avg30d || 0;
+        const sellPrice = liveSellForBuild || avg30dForBuild || 0;
+        // Flag whether the profit was estimated from historical data (no live orders)
+        const sellPriceSource = liveSellForBuild > 0 ? 'live' : (avg30dForBuild > 0 ? 'history_30d' : 'no_data');
         const productQuantity = blueprint.product_quantity || 1;
         const batchRevenue = sellPrice * productQuantity;
         const profit = batchRevenue - totalCost;
@@ -1915,6 +1932,7 @@ app.post('/api/item-details', security.apiLimiter, async (req, res) => {
           materials: materialAnalysis,
           totalCost: totalCost,
           sellPrice: sellPrice,
+          sellPriceSource,
           profit: profit,
           profitMargin: profitMargin
         };
@@ -3619,6 +3637,31 @@ async function runVolumeEnrichment() {
                     sample_days    = excluded.sample_days,
                     updated_at     = excluded.updated_at
                 `, [item.product_id, avgPrice, avgVol, sampleDays]);
+
+                // Also update precomputed_profits rows directly so this cycle's
+                // data is correct immediately — without this, items stay hidden
+                // (sell_price = 0, filtered out) until the next precompute cycle
+                // runs (up to 6 hours away). Update all regions — historical price
+                // is hub-agnostic (we only have Jita history but it's the best proxy).
+                await dbRun(`
+                  UPDATE precomputed_profits
+                  SET sell_price    = ?,
+                      profit        = ? - material_cost,
+                      profit_margin = CASE WHEN ? > 0
+                                       THEN (? - material_cost) / ? * 100
+                                       ELSE 0 END,
+                      isk_per_hour  = CASE WHEN build_time > 0
+                                       THEN (? - material_cost) / (build_time / 3600.0)
+                                       ELSE 0 END,
+                      price_source  = 'history_30d',
+                      avg_30d_price = ?
+                  WHERE product_id = ? AND sell_price = 0
+                `, [
+                  avgPrice,
+                  avgPrice, avgPrice, avgPrice, avgPrice, avgPrice,
+                  avgPrice,
+                  item.product_id
+                ]);
               }
             }
           }

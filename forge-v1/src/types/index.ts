@@ -250,6 +250,8 @@ export interface ItemDetailApiResponse {
     totalCost: number;
     profit: number;
     profitMargin: number;
+    /** 'live' | 'history_30d' | 'no_data' — indicates whether sell price came from live orders or historical average */
+    sellPriceSource?: string;
   };
 }
 

@@ -427,13 +427,23 @@ const RightSidebar: FC<RightSidebarProps> = ({
                 </div>
 
                 {/* Cost summary row */}
+                {apiDetail.buildInfo.sellPriceSource === 'history_30d' && (
+                  <div className="price-hist-notice" style={{ marginBottom: 6 }}>
+                    ⚠ No live sell orders — profit estimated from 30-day trade average
+                  </div>
+                )}
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 8 }}>
                   <div className="stat-card">
                     <div className="stat-card-label">Material Cost</div>
                     <div className="stat-card-value">{formatISK(apiDetail.buildInfo.totalCost)}</div>
                   </div>
                   <div className="stat-card">
-                    <div className="stat-card-label">Profit / Run</div>
+                    <div className="stat-card-label">
+                      Profit / Run
+                      {apiDetail.buildInfo.sellPriceSource === 'history_30d' && (
+                        <span className="price-source-hist" title="Based on 30-day average — no live sell orders">~</span>
+                      )}
+                    </div>
                     <div
                       className="stat-card-value"
                       style={{ color: apiDetail.buildInfo.profit > 0 ? 'var(--color-success)' : 'var(--color-danger)' }}
