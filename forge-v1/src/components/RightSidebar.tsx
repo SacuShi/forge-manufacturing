@@ -672,12 +672,54 @@ const RightSidebar: FC<RightSidebarProps> = ({
             {trueCostData && !trueCostLoading && (
               <div className="cost-breakdown-row">
 
-                {/* Box 1 — Material Cost */}
+                {/* Box 1 — Material Cost (with tooltip explaining ME reduction) */}
                 <div className="cost-box material">
                   <span className="cost-box-label">Materials</span>
                   <span className="cost-box-value">
                     {formatISK(trueCostData.total_material_cost)}
                   </span>
+                  {/* Tooltip */}
+                  <div className="cost-tooltip">
+                    {(() => {
+                      const me = blueprint?.material_efficiency ?? 0;
+                      const meFactor = Math.max(0, 1 - me / 100);
+                      const rawCost = me > 0
+                        ? trueCostData.total_material_cost / meFactor
+                        : trueCostData.total_material_cost;
+                      const saving = rawCost - trueCostData.total_material_cost;
+                      return (
+                        <>
+                          <div className="cost-tooltip-row">
+                            <span>Blueprint ME</span>
+                            <span style={{ color: 'var(--color-success)' }}>{me}%</span>
+                          </div>
+                          {me > 0 && (
+                            <>
+                              <div className="cost-tooltip-row">
+                                <span>Base cost (ME 0)</span>
+                                <span>{formatISK(rawCost)}</span>
+                              </div>
+                              <div className="cost-tooltip-row">
+                                <span>ME saving ({me}%)</span>
+                                <span style={{ color: 'var(--color-success)' }}>
+                                  −{formatISK(saving)}
+                                </span>
+                              </div>
+                              <div className="cost-tooltip-divider" />
+                            </>
+                          )}
+                          <div className="cost-tooltip-row total">
+                            <span>Adjusted cost</span>
+                            <span>{formatISK(trueCostData.total_material_cost)}</span>
+                          </div>
+                          <div className="cost-tooltip-setup">
+                            Quantities in the list below are unmodified
+                            (ME 0). True Profit applies ME reduction to cost.
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
                 </div>
 
                 {/* Box 2 — Manufacturing Fees (with tooltip) */}
@@ -789,7 +831,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
                   </div>
                 </div>
 
-                {/* Box 4 — True Profit */}
+                {/* Box 4 — True Profit (with full formula tooltip) */}
                 <div className={`cost-box true-profit${trueCostData.true_profit >= 0 ? ' positive' : ' negative'}`}>
                   <span className="cost-box-label">True Profit</span>
                   <span className="cost-box-value">
@@ -798,6 +840,59 @@ const RightSidebar: FC<RightSidebarProps> = ({
                   <span className="cost-box-margin">
                     {trueCostData.true_margin.toFixed(1)}%
                   </span>
+                  {/* Tooltip — full formula so users can verify the math */}
+                  <div className="cost-tooltip">
+                    <div className="cost-tooltip-row">
+                      <span>Sell Revenue</span>
+                      <span>{formatISK(trueCostData.sell_price * trueCostData.runs)}</span>
+                    </div>
+                    <div className="cost-tooltip-row">
+                      <span>− Materials</span>
+                      <span style={{ color: 'var(--color-danger)' }}>
+                        −{formatISK(trueCostData.total_material_cost)}
+                      </span>
+                    </div>
+                    {trueCostData.setup_configured && (
+                      <div className="cost-tooltip-row">
+                        <span>− Mfg Fees</span>
+                        <span style={{ color: 'var(--color-danger)' }}>
+                          −{formatISK(trueCostData.mfg_fees.total)}
+                        </span>
+                      </div>
+                    )}
+                    <div className="cost-tooltip-row">
+                      <span>− Sales Tax</span>
+                      <span style={{ color: 'var(--color-danger)' }}>
+                        −{formatISK(trueCostData.sales_tax.total)}
+                      </span>
+                    </div>
+                    <div className="cost-tooltip-divider" />
+                    <div className="cost-tooltip-row total">
+                      <span>= True Profit</span>
+                      <span style={{
+                        color: trueCostData.true_profit >= 0
+                          ? 'var(--color-success)'
+                          : 'var(--color-danger)',
+                      }}>
+                        {formatISK(trueCostData.true_profit)}
+                      </span>
+                    </div>
+                    <div className="cost-tooltip-row">
+                      <span>Margin</span>
+                      <span style={{
+                        color: trueCostData.true_margin >= 0
+                          ? 'var(--color-success)'
+                          : 'var(--color-danger)',
+                      }}>
+                        {trueCostData.true_margin.toFixed(2)}%
+                      </span>
+                    </div>
+                    {!trueCostData.setup_configured && (
+                      <div className="cost-tooltip-setup">
+                        Mfg Fees excluded — configure manufacturing setup for full accuracy.
+                      </div>
+                    )}
+                  </div>
                 </div>
 
               </div>
