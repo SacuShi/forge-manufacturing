@@ -377,6 +377,16 @@ async function runMigrations() {
   console.log('✓ Database migrations complete');
 }
 
+// ── Error sanitisation ────────────────────────────────────────────────────────
+// Strips filesystem paths from error messages before sending to clients.
+// SQLite errors include the full DB path (e.g. /home/gumpy54/forge-db/forge.db)
+// which reveals server internals. Internal logging keeps the full message.
+function clientErrMsg(err) {
+  return (err.message || 'Internal server error')
+    .replace(/\/[^\s"']+\.(db|js|json|sqlite)/gi, '[file]')
+    .replace(/\/home\/[^\s"']+/gi, '[path]');
+}
+
 // ── Cache TTL ─────────────────────────────────────────────────────────────────
 // Defined once so every expiry calculation stays in sync.
 const CACHE_TTL_MS     = 60 * 60 * 1000;      // 1 hour
@@ -894,7 +904,7 @@ app.post('/api/eve-token', security.authLimiter, async (req, res) => {
 
   } catch (err) {
     console.error("OAuth error:", err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: clientErrMsg(err) });
   }
 });
 
@@ -1252,7 +1262,7 @@ app.get('/api/prices/:regionId', security.apiLimiter, async (req, res) => {
 
   } catch (err) {
     console.error(`Region ${req.params.regionId} prices error:`, err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: clientErrMsg(err) });
   }
 });
 
@@ -1410,7 +1420,7 @@ app.post('/api/calculate-profitability', security.apiLimiter, async (req, res) =
 
   } catch (err) {
     console.error('Profitability error:', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: clientErrMsg(err) });
   }
 });
 
@@ -1442,13 +1452,20 @@ app.post('/api/production-chain', security.apiLimiter, async (req, res) => {
   try {
     const { itemName, ownedBlueprints } = req.body;
 
-    if (!itemName) {
+    if (!itemName || typeof itemName !== 'string') {
       return res.status(400).json({ error: "itemName required" });
     }
 
-    console.log(`⟳ Building production chain for: ${itemName}`);
+    // Sanitise: cap length and escape SQLite LIKE wildcards (%, _, \) to prevent
+    // catastrophic backtracking on patterns like '%%%%...%%%%' (DoS via full-table scan).
+    const safeItemName = itemName.slice(0, 100).replace(/[%_\\]/g, '\\$&');
 
-    const item = await dbGet('SELECT type_id, name FROM items WHERE name LIKE ? LIMIT 1', [`%${itemName}%`]);
+    console.log(`⟳ Building production chain for: ${safeItemName}`);
+
+    const item = await dbGet(
+      "SELECT type_id, name FROM items WHERE name LIKE ? ESCAPE '\\' LIMIT 1",
+      [`%${safeItemName}%`]
+    );
     if (!item) {
       return res.json({ error: `Item "${itemName}" not found`, chain: null });
     }
@@ -1494,7 +1511,7 @@ app.post('/api/production-chain', security.apiLimiter, async (req, res) => {
 
   } catch (err) {
     console.error('Production chain error:', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: clientErrMsg(err) });
   }
 });
 
@@ -1606,7 +1623,7 @@ app.post('/api/get-price', security.apiLimiter, async (req, res) => {
     
   } catch (err) {
     console.error('Price lookup error:', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: clientErrMsg(err) });
   }
 });
 
@@ -1725,7 +1742,7 @@ app.post('/api/get-blueprint', security.apiLimiter, async (req, res) => {
     
   } catch (err) {
     console.error('Blueprint lookup error:', err.message);
-    res.json({ error: err.message, blueprint: null });
+    res.json({ error: clientErrMsg(err), blueprint: null });
   }
 });
 
@@ -1951,7 +1968,7 @@ app.post('/api/item-details', security.apiLimiter, async (req, res) => {
 
   } catch (err) {
     console.error("Item details error:", err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: clientErrMsg(err) });
   }
 });
 
@@ -2156,7 +2173,7 @@ app.post('/api/analyze-blueprints', security.apiLimiter, async (req, res) => {
 });
 
 // DIAGNOSE T2 BLUEPRINTS — checks session BPCs against the database
-app.get('/api/diagnose-t2/:characterId', security.apiLimiter, async (req, res) => {
+app.get('/api/diagnose-t2/:characterId', security.apiLimiter, security.verifyEveToken, async (req, res) => {
   try {
     const { characterId } = req.params;
     const sessionKey = `session:${characterId}`;
@@ -2208,7 +2225,7 @@ app.get('/api/diagnose-t2/:characterId', security.apiLimiter, async (req, res) =
     res.json(report);
   } catch (err) {
     console.error('❌ T2 diagnose error:', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: clientErrMsg(err) });
   }
 });
 
@@ -2234,7 +2251,7 @@ app.post('/api/blueprint-metadata', security.apiLimiter, async (req, res) => {
     res.json(metadata);
   } catch (err) {
     console.error('❌ Blueprint metadata error:', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: clientErrMsg(err) });
   }
 });
 
@@ -2833,7 +2850,9 @@ app.post('/api/ai-chat',
 
             case "diagnose_blueprints": {
               try {
-                const diagRes = await fetch(`http://localhost:${PORT}/api/diagnose-t2/${characterId}`);
+                const diagRes = await fetch(`http://localhost:${PORT}/api/diagnose-t2/${characterId}`, {
+                  headers: { Authorization: req.headers.authorization || '' },
+                });
                 const diagData = await diagRes.json();
                 toolResult = {
                   summary: diagData.summary,
@@ -3012,8 +3031,8 @@ app.post('/api/ai-chat',
   } catch (err) {
     console.error("AI chat error:", err.message);
     res.json({ 
-      content: [{ type: "text", text: `[System Error: ${err.message}]` }],
-      error: err.message 
+      content: [{ type: "text", text: `[System Error: ${clientErrMsg(err)}]` }],
+      error: clientErrMsg(err)
     });
   }
 });
@@ -4227,7 +4246,7 @@ app.get('/api/admin/precompute-status', async (req, res) => {
       }
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: clientErrMsg(err) });
   }
 });
 
@@ -4479,7 +4498,7 @@ app.get('/api/admin/ai-costs', async (req, res) => {
     res.json({ today, week, month, daily });
 
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: clientErrMsg(err) });
   }
 });
 
@@ -4551,7 +4570,7 @@ app.get('/api/industry-settings', security.apiLimiter, security.verifyEveToken, 
     });
   } catch (err) {
     console.error('Industry settings GET error:', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: clientErrMsg(err) });
   }
 });
 
@@ -4654,7 +4673,7 @@ app.get('/api/character-fee-rates', security.apiLimiter, security.verifyEveToken
 
   } catch (err) {
     console.error('Character fee rates error:', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: clientErrMsg(err) });
   }
 });
 
@@ -4709,7 +4728,7 @@ app.post('/api/industry-settings', security.apiLimiter, security.verifyEveToken,
     res.json({ ok: true });
   } catch (err) {
     console.error('Industry settings POST error:', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: clientErrMsg(err) });
   }
 });
 
@@ -4979,7 +4998,7 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
 
   } catch (err) {
     console.error('True cost error:', err.message, err.stack?.split('\n')[1]);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: clientErrMsg(err) });
   }
 });
 
@@ -5022,7 +5041,7 @@ app.get('/api/corp/status', security.apiLimiter, async (req, res) => {
       last_refresh_status: config.last_refresh_status,
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: clientErrMsg(err) });
   }
 });
 
@@ -5171,7 +5190,7 @@ app.post('/api/corp/setup', async (req, res) => {
 
   } catch (err) {
     console.error('Corp setup error:', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: clientErrMsg(err) });
   }
 });
 
@@ -5219,7 +5238,7 @@ app.post('/api/corp/verify-pin',
 
     } catch (err) {
       console.error('Corp PIN verify error:', err.message);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: clientErrMsg(err) });
     }
   }
 );
@@ -5251,7 +5270,7 @@ app.get('/api/corp/access-status', security.apiLimiter, security.verifyEveToken,
 
     res.json({ hasAccess: false });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: clientErrMsg(err) });
   }
 });
 
@@ -5319,7 +5338,7 @@ app.get('/api/corp/blueprints',
       });
     } catch (err) {
       console.error('Corp blueprints error:', err.message);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: clientErrMsg(err) });
     }
   }
 );
@@ -5383,7 +5402,7 @@ app.get('/api/corp/assets',
       });
     } catch (err) {
       console.error('Corp assets error:', err.message);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: clientErrMsg(err) });
     }
   }
 );
@@ -5426,7 +5445,7 @@ app.get('/api/corp/jobs',
       });
     } catch (err) {
       console.error('Corp jobs error:', err.message);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: clientErrMsg(err) });
     }
   }
 );
@@ -5449,7 +5468,7 @@ app.post('/api/corp/refresh',
 
       res.json({ ok: true, message: 'Corp data refresh started in background' });
     } catch (err) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: clientErrMsg(err) });
     }
   }
 );
@@ -5463,7 +5482,7 @@ app.get('/api/corp/admin/whitelist', async (req, res) => {
     const rows = await dbAll('SELECT * FROM corp_admin_access ORDER BY added_at DESC');
     res.json({ whitelist: rows });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: clientErrMsg(err) });
   }
 });
 
@@ -5488,7 +5507,7 @@ app.post('/api/corp/admin/whitelist', async (req, res) => {
     console.log(`✓ Corp admin whitelist: added character ${character_id} (${note || 'no note'})`);
     res.json({ ok: true, character_id: parseInt(character_id) });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: clientErrMsg(err) });
   }
 });
 
@@ -5504,7 +5523,7 @@ app.delete('/api/corp/admin/whitelist/:characterId', async (req, res) => {
     console.log(`✓ Corp admin whitelist: removed character ${characterId}`);
     res.json({ ok: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: clientErrMsg(err) });
   }
 });
 
@@ -5520,7 +5539,7 @@ app.delete('/api/corp/admin/config', async (req, res) => {
     console.log('✓ Corp config and all cached corp data deleted');
     res.json({ ok: true, message: 'Corp config deleted. Re-run corp setup to reconfigure.' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: clientErrMsg(err) });
   }
 });
 

@@ -28,6 +28,14 @@
  *   - removeCharacter(characterId) — removes an alt from state + sessionStorage
  *   - forge_alt_tokens sessionStorage key stores alt tokens as JSON array
  *   - forge_adding_alt flag distinguishes alt login from primary login
+ *
+ * Security note (sessionStorage):
+ *   All EVE Bearer tokens live in sessionStorage (cleared on tab close).
+ *   The blast radius of an XSS attack is all loaded characters simultaneously.
+ *   Mitigation: deploy with a strict Content-Security-Policy header on the
+ *   server to block injected scripts.  A future improvement is to proxy ESI
+ *   calls through the FORGE server with HttpOnly session cookies so raw tokens
+ *   never reach the browser's JS environment.
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -52,59 +60,66 @@ const SCOPES =
   'esi-markets.structure_markets.v1 ' +
   'esi-characters.read_standings.v1';
 
-const SESSION_TOKEN_KEY  = 'forge_token';
-const SESSION_STATE_KEY  = 'forge_oauth_state';
-const ALT_TOKENS_KEY     = 'forge_alt_tokens';
-const ADDING_ALT_KEY     = 'forge_adding_alt';
+const SESSION_TOKEN_KEY = 'forge_token';
+const SESSION_STATE_KEY = 'forge_oauth_state';
+const ALT_TOKENS_KEY    = 'forge_alt_tokens';
+const ADDING_ALT_KEY    = 'forge_adding_alt';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export type AuthStatus = 'idle' | 'exchanging' | 'loading' | 'authed' | 'error';
 
 export interface LoadStep {
-  label: string;
-  status: 'ok' | 'warn' | 'err' | 'pending';
+  label:   string;
+  status:  'ok' | 'warn' | 'err' | 'pending';
   detail?: string;
 }
 
+/** Standings data stored for accurate combined-session re-POST in App.tsx */
+export type StandingsData = {
+  factions: Record<number, number>;
+  corps:    Record<number, number>;
+};
+
+type EsiStanding = { from_id: number; from_type: string; standing: number };
+
 export interface AuthState {
-  status: AuthStatus;
-  token: string | null;
-  character: CharacterInfo | null;
-  /** Raw ESI blueprint list — needed for ownership checks and AI chat */
-  blueprints: EsiBlueprint[];
-  /** Raw ESI asset list — needed for AI chat */
-  assets: EsiAsset[];
-  /** Character trained skills (skill_id + active_skill_level) — for blueprint filtering */
-  skills: Array<{ skill_id: number; active_skill_level: number }>;
-  /** True if esi-characters.read_standings.v1 was granted on this login. */
+  status:           AuthStatus;
+  token:            string | null;
+  character:        CharacterInfo | null;
+  blueprints:       EsiBlueprint[];
+  assets:           EsiAsset[];
+  skills:           Array<{ skill_id: number; active_skill_level: number }>;
   hasStandingsScope: boolean;
-  error: string | null;
-  /** Current loading step label (shown on LoadingScreen) */
-  loadStep: string;
-  /** Log of all loading steps (shown on LoadingScreen) */
-  dataLog: LoadStep[];
-  /** v1.5 — Additional characters loaded alongside the primary */
-  altCharacters: AltCharacter[];
-  /** v1.5 — True while EVE SSO redirect is in progress for adding an alt */
-  addingAlt: boolean;
+  /** Primary character standings — exposed so App.tsx can include them in combined re-POST */
+  primaryStandings: StandingsData | null;
+  error:            string | null;
+  loadStep:         string;
+  dataLog:          LoadStep[];
+  altCharacters:    AltCharacter[];
+  addingAlt:        boolean;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Decode a JWT payload without verifying the signature (verification happens server-side) */
+/**
+ * Decode a JWT payload without verifying the signature (verification happens server-side).
+ * Uses TextDecoder so non-ASCII character names (accents etc.) are handled correctly;
+ * atob() alone produces Latin-1 corruption for multi-byte UTF-8 sequences.
+ */
 function decodeJwtPayload(token: string): Record<string, unknown> {
-  const part = token.split('.')[1]
-    .replace(/-/g, '+')
-    .replace(/_/g, '/');
-  const pad = '=='.slice(0, (4 - (part.length % 4)) % 4);
-  return JSON.parse(atob(part + pad)) as Record<string, unknown>;
+  const part = token.split('.')[1];
+  if (!part) throw new Error('Malformed JWT: missing payload segment');
+  const padded = part.replace(/-/g, '+').replace(/_/g, '/');
+  const pad    = '=='.slice(0, (4 - (padded.length % 4)) % 4);
+  const bytes  = Uint8Array.from(atob(padded + pad), (c) => c.charCodeAt(0));
+  return JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>;
 }
 
 /** Extract numeric characterId from EVE JWT sub claim ("CHARACTER:EVE:12345678") */
 function characterIdFromJwt(token: string): number {
   const payload = decodeJwtPayload(token);
-  const sub = payload.sub as string;
+  const sub     = payload.sub as string;
   return parseInt(sub.replace('CHARACTER:EVE:', ''), 10);
 }
 
@@ -115,18 +130,13 @@ function generateState(): string {
   return Array.from(arr, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-/**
- * Convert ESI end_date (ISO 8601) to a human-readable remaining time string.
- * Returns "Done" if the date is in the past.
- */
+/** Convert ESI end_date to a human-readable remaining time string */
 function formatTimeRemaining(endDate: string): { label: string; done: boolean } {
   const diff = new Date(endDate).getTime() - Date.now();
   if (diff <= 0) return { label: 'Done', done: true };
-
   const totalMinutes = Math.floor(diff / 60_000);
   const hours        = Math.floor(totalMinutes / 60);
   const minutes      = totalMinutes % 60;
-
   if (hours === 0) return { label: `${minutes}m`, done: false };
   return { label: `${hours}h ${String(minutes).padStart(2, '0')}m`, done: false };
 }
@@ -145,6 +155,29 @@ function saveAltTokens(tokens: string[]): void {
   sessionStorage.setItem(ALT_TOKENS_KEY, JSON.stringify(tokens));
 }
 
+/**
+ * Resolve item names for a list of typeIds in parallel with automatic deduplication.
+ * Dedup prevents N+1 ESI requests when multiple jobs share the same product type.
+ * Returns a Map<typeId, name> — failed lookups fall back to "Item #<id>".
+ */
+async function resolveTypeNames(typeIds: number[]): Promise<Map<number, string>> {
+  const uniqueIds = [...new Set(typeIds)];
+  const results   = await Promise.allSettled(
+    uniqueIds.map((id) =>
+      esiGet<{ name: string }>(`/universe/types/${id}/`)
+        .then((r) => [id, r.name] as [number, string])
+    )
+  );
+  const map = new Map<number, string>();
+  results.forEach((r, i) => {
+    map.set(
+      uniqueIds[i],
+      r.status === 'fulfilled' ? r.value[1] : `Item #${uniqueIds[i]}`
+    );
+  });
+  return map;
+}
+
 // ── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useAuth(): AuthState & {
@@ -160,6 +193,7 @@ export function useAuth(): AuthState & {
   const [assets,            setAssets]            = useState<EsiAsset[]>([]);
   const [skills,            setSkills]            = useState<Array<{ skill_id: number; active_skill_level: number }>>([]);
   const [hasStandingsScope, setHasStandingsScope] = useState(false);
+  const [primaryStandings,  setPrimaryStandings]  = useState<StandingsData | null>(null);
   const [error,             setError]             = useState<string | null>(null);
   const [loadStep,          setLoadStep]          = useState('');
   const [dataLog,           setDataLog]           = useState<LoadStep[]>([]);
@@ -168,8 +202,16 @@ export function useAuth(): AuthState & {
   const [altCharacters, setAltCharacters] = useState<AltCharacter[]>([]);
   const [addingAlt,     setAddingAlt]     = useState(false);
 
-  // Ref to track alt loading cancellation
-  const altCancelledRef = useRef<Set<number>>(new Set());
+  /**
+   * Tracks characterIds of in-flight alt loads to prevent duplicate concurrent
+   * loads of the same character (race condition on session restore).
+   */
+  const inFlightAltsRef  = useRef<Set<number>>(new Set());
+  /**
+   * Tracks characterIds of removed alts so an in-flight load completing after
+   * removal doesn't write stale data back into state.
+   */
+  const altCancelledRef  = useRef<Set<number>>(new Set());
 
   // ── loadCharacterData ──────────────────────────────────────────────────────
 
@@ -230,36 +272,25 @@ export function useAuth(): AuthState & {
       setLoadStep('Checking industry jobs…');
       let activeJobs: ActiveJob[] = [];
       try {
-        const allJobs = await esiGet<EsiJob[]>(
-          `/characters/${cid}/industry/jobs/?include_completed=true`,
-          acc
+        const allJobs       = await esiGet<EsiJob[]>(
+          `/characters/${cid}/industry/jobs/?include_completed=true`, acc
         );
         const activeEsiJobs = allJobs.filter((j) => j.status === 'active');
-
-        const namePromises = activeEsiJobs.map(async (job) => {
-          try {
-            const typeInfo = await esiGet<{ name: string }>(
-              `/universe/types/${job.product_type_id}/`
-            );
-            return typeInfo.name;
-          } catch {
-            return `Item #${job.product_type_id}`;
-          }
-        });
-
-        const names = await Promise.all(namePromises);
-
-        activeJobs = activeEsiJobs.map((job, i) => {
+        // Filter out jobs with missing product_type_id (edge case for non-standard activities)
+        // then resolve names in parallel, deduplicated by typeId (fixes N+1 requests)
+        const nameMap       = await resolveTypeNames(
+          activeEsiJobs.filter((j) => j.product_type_id != null).map((j) => j.product_type_id)
+        );
+        activeJobs = activeEsiJobs.map((job) => {
           const { label, done } = formatTimeRemaining(job.end_date);
           return {
-            name:       names[i],
+            name:       nameMap.get(job.product_type_id) ?? `Item #${job.product_type_id}`,
             quantity:   job.runs,
             remaining:  label,
             done,
             activityId: job.activity_id,
           };
         });
-
         addLog('Industry Jobs', 'ok', `${activeJobs.length} active`);
       } catch (e) {
         addLog('Industry Jobs', 'err', (e as Error).message);
@@ -269,11 +300,10 @@ export function useAuth(): AuthState & {
       setLoadStep('Scanning skills…');
       let skillData: Array<{ skill_id: number; active_skill_level: number }> = [];
       try {
-        const skillsResponse = await esiGet<{ skills: Array<{ skill_id: number; active_skill_level: number }> }>(
-          `/characters/${cid}/skills/`,
-          acc
-        );
-        skillData = skillsResponse.skills || [];
+        const skillsResponse = await esiGet<{
+          skills: Array<{ skill_id: number; active_skill_level: number }>;
+        }>(`/characters/${cid}/skills/`, acc);
+        skillData = skillsResponse.skills ?? [];
         setSkills(skillData);
         addLog('Skills', 'ok', `${skillData.length} trained`);
       } catch (e) {
@@ -282,29 +312,39 @@ export function useAuth(): AuthState & {
 
       // ── 8. Character standings (for broker fee accuracy) ──────────────────
       setLoadStep('Loading standings…');
-      let standingsData: { factions: Record<number, number>; corps: Record<number, number> } =
-        { factions: {}, corps: {} };
-      let standingsScopeGranted = false;
+      let standingsData: StandingsData = { factions: {}, corps: {} };
+      let standingsScopeGranted        = false;
       try {
-        type EsiStanding = { from_id: number; from_type: string; standing: number };
         const rawStandings = await esiGet<EsiStanding[]>(`/characters/${cid}/standings/`, acc);
         for (const s of rawStandings) {
-          if (s.from_type === 'faction')   standingsData.factions[s.from_id] = s.standing;
-          if (s.from_type === 'npc_corp')  standingsData.corps[s.from_id]    = s.standing;
+          if (s.from_type === 'faction')  standingsData.factions[s.from_id] = s.standing;
+          if (s.from_type === 'npc_corp') standingsData.corps[s.from_id]    = s.standing;
         }
         standingsScopeGranted = true;
         setHasStandingsScope(true);
+        setPrimaryStandings(standingsData);
         addLog('Standings', 'ok', `${rawStandings.length} entries`);
       } catch (e) {
-        addLog('Standings', 'warn', 'Scope not granted — broker fee uses skills only');
-        setHasStandingsScope(false);
+        // Only mark the scope as denied on a definitive 403 response.
+        // A transient ESI outage (5xx, timeout) must not permanently show the
+        // re-auth banner to users who already granted the scope.
+        const isScopeDenied =
+          (e as Error).message.includes('403') ||
+          (e as Error).message.toLowerCase().includes('forbidden');
+        if (isScopeDenied) {
+          addLog('Standings', 'warn', 'Scope not granted — broker fee uses skills only');
+          setHasStandingsScope(false);
+          setPrimaryStandings(null);
+        } else {
+          addLog('Standings', 'warn',
+            `ESI unavailable — standings not loaded (${(e as Error).message})`);
+          // Leave hasStandingsScope at its current value; don't force a re-auth prompt
+        }
       }
 
-      // ── Count BPOs vs BPCs ──────────────────────────────────────────────────
+      // ── Build CharacterInfo ──────────────────────────────────────────────
       const bpoCount = bData.filter((bp) => bp.quantity === -1).length;
-
-      // ── Build CharacterInfo ──────────────────────────────────────────────────
-      const charInfoResult: CharacterInfo = {
+      setCharacter({
         characterId:    cid,
         name:           charInfo.name,
         walletISK:      wallet,
@@ -312,10 +352,9 @@ export function useAuth(): AuthState & {
         blueprintCount: bData.length,
         bpoCount,
         activeJobs,
-      };
-      setCharacter(charInfoResult);
+      });
 
-      // ── 10. Cache session on FORGE server (required for AI chat) ────────────
+      // ── 10. Cache session on FORGE server (required for AI chat) ──────────
       setLoadStep('Caching session data…');
       try {
         await apiPost('/api/session-data', {
@@ -329,26 +368,29 @@ export function useAuth(): AuthState & {
         }, acc);
         addLog('Session', 'ok', 'Cached on server (2hr expiry)');
       } catch (e) {
-        addLog('Session', 'warn', `Cache failed — AI chat may not work: ${(e as Error).message}`);
+        addLog('Session', 'warn',
+          `Cache failed — AI chat may not work: ${(e as Error).message}`);
         console.warn('Session cache failed:', e);
       }
 
-      // ── 11. Done ──────────────────────────────────────────────────────────
       sessionStorage.setItem(SESSION_TOKEN_KEY, acc);
       setStatus('authed');
 
     } catch (e) {
-      const msg = (e as Error).message;
-      setError(msg);
+      setError((e as Error).message);
       setStatus('error');
     }
   }, []);
 
   // ── loadAltCharacterData ─────────────────────────────────────────────────
-  // v1.5 — Loads an additional character and adds it to altCharacters[].
-  // Non-blocking: adds a stub entry immediately, then updates it in-place.
+  //
+  // v1.5 — Loads an additional character and merges it into altCharacters[].
+  // All ESI requests run in parallel (Promise.allSettled) for fast alt loading.
+  // Guards against: invalid tokens, adding the primary as alt, and concurrent
+  // duplicate loads of the same character (race condition on session restore).
 
   const loadAltCharacterData = useCallback(async (acc: string) => {
+    // ── Decode token ────────────────────────────────────────────────────────
     let cid: number;
     try {
       cid = characterIdFromJwt(acc);
@@ -357,112 +399,153 @@ export function useAuth(): AuthState & {
       return;
     }
 
-    // Don't load a duplicate (primary or already-loaded alt)
-    // We'll check after getting cid below
+    // ── Guard 1: don't add primary character as an alt ─────────────────────
+    // Decode the saved primary token to get its characterId for comparison.
+    const primaryToken = sessionStorage.getItem(SESSION_TOKEN_KEY);
+    if (primaryToken) {
+      try {
+        if (characterIdFromJwt(primaryToken) === cid) {
+          console.warn(`Character ${cid} is already the primary — skipping alt load`);
+          return;
+        }
+      } catch {
+        // Malformed primary token — let it fail elsewhere; don't block alt load
+      }
+    }
 
-    // Add stub entry immediately so UI shows a loading card
+    // ── Guard 2: prevent duplicate concurrent loads ─────────────────────────
+    // A fresh load supersedes any prior cancellation for the same character.
+    altCancelledRef.current.delete(cid);
+    if (inFlightAltsRef.current.has(cid)) return;
+    inFlightAltsRef.current.add(cid);
+
+    // ── Add stub so UI shows a loading card immediately ────────────────────
     const stub: AltCharacter = {
       characterId: cid, name: `Character #${cid}`, token: acc,
       blueprints: [], assets: [], skills: [], activeJobs: [],
       walletISK: 0, blueprintCount: 0, bpoCount: 0, activeJobCount: 0,
       hasStandingsScope: false, loading: true, error: null,
     };
-
     setAltCharacters((prev) => {
-      // Deduplicate: don't add if already present
+      // Functional-updater dedup: don't add if the card is already present
       if (prev.some((a) => a.characterId === cid)) return prev;
       return [...prev, stub];
     });
 
-    // Save token to sessionStorage
+    // ── Persist token ───────────────────────────────────────────────────────
     const saved = getSavedAltTokens();
-    if (!saved.includes(acc)) {
-      saveAltTokens([...saved, acc]);
-    }
+    if (!saved.includes(acc)) saveAltTokens([...saved, acc]);
 
     try {
-      const charInfo  = await esiGet<EsiCharacter>(`/characters/${cid}/`, acc);
-
-      let aData: EsiAsset[] = [];
-      try { aData = await esiFetchAll<EsiAsset>(`/characters/${cid}/assets/`, acc); } catch {}
-
-      let bData: EsiBlueprint[] = [];
-      try { bData = await esiFetchAll<EsiBlueprint>(`/characters/${cid}/blueprints/`, acc); } catch {}
-
-      let wallet = 0;
-      try { wallet = await esiGet<number>(`/characters/${cid}/wallet/`, acc); } catch {}
-
-      let activeJobs: ActiveJob[] = [];
-      try {
-        const allJobs = await esiGet<EsiJob[]>(`/characters/${cid}/industry/jobs/?include_completed=true`, acc);
-        const activeEsiJobs = allJobs.filter((j) => j.status === 'active');
-        const names = await Promise.all(activeEsiJobs.map(async (job) => {
-          try {
-            const t = await esiGet<{ name: string }>(`/universe/types/${job.product_type_id}/`);
-            return t.name;
-          } catch { return `Item #${job.product_type_id}`; }
-        }));
-        activeJobs = activeEsiJobs.map((job, i) => {
-          const { label, done } = formatTimeRemaining(job.end_date);
-          return { name: names[i], quantity: job.runs, remaining: label, done, activityId: job.activity_id };
-        });
-      } catch {}
-
-      let skillData: Array<{ skill_id: number; active_skill_level: number }> = [];
-      try {
-        const sr = await esiGet<{ skills: Array<{ skill_id: number; active_skill_level: number }> }>(
+      // ── Phase 1: Parallel ESI fetches ────────────────────────────────────
+      // All requests fire simultaneously — alt loading is ~7× faster than sequential.
+      const [
+        charInfoResult,
+        aDataResult,
+        bDataResult,
+        walletResult,
+        jobsResult,
+        skillsResult,
+        standingsResult,
+      ] = await Promise.allSettled([
+        esiGet<EsiCharacter>(`/characters/${cid}/`, acc),
+        esiFetchAll<EsiAsset>(`/characters/${cid}/assets/`, acc),
+        esiFetchAll<EsiBlueprint>(`/characters/${cid}/blueprints/`, acc),
+        esiGet<number>(`/characters/${cid}/wallet/`, acc),
+        esiGet<EsiJob[]>(
+          `/characters/${cid}/industry/jobs/?include_completed=true`, acc
+        ),
+        esiGet<{ skills: Array<{ skill_id: number; active_skill_level: number }> }>(
           `/characters/${cid}/skills/`, acc
-        );
-        skillData = sr.skills || [];
-      } catch {}
+        ),
+        esiGet<EsiStanding[]>(`/characters/${cid}/standings/`, acc),
+      ]);
 
-      let standingsScopeGranted = false;
-      let standingsData: { factions: Record<number, number>; corps: Record<number, number> } =
-        { factions: {}, corps: {} };
-      try {
-        type EsiStanding = { from_id: number; from_type: string; standing: number };
-        const rawStandings = await esiGet<EsiStanding[]>(`/characters/${cid}/standings/`, acc);
+      // Extract fulfilled values with safe fallbacks
+      const charInfo  = charInfoResult.status  === 'fulfilled' ? charInfoResult.value  : null;
+      const aData     = aDataResult.status     === 'fulfilled' ? aDataResult.value     : [];
+      const bData     = bDataResult.status     === 'fulfilled' ? bDataResult.value     : [];
+      const wallet    = walletResult.status    === 'fulfilled' ? walletResult.value    : 0;
+      const rawJobs   = jobsResult.status      === 'fulfilled' ? jobsResult.value      : [];
+      const skillData = skillsResult.status    === 'fulfilled'
+        ? (skillsResult.value.skills ?? [])
+        : [];
+      const rawStandings = standingsResult.status === 'fulfilled'
+        ? standingsResult.value
+        : null;
+
+      // ── Phase 2: Resolve job names (parallel, deduplicated) ───────────────
+      // Filter out jobs missing product_type_id (edge case for some activity types)
+      const activeEsiJobs = rawJobs.filter(
+        (j) => j.status === 'active' && j.product_type_id != null
+      );
+      const nameMap       = await resolveTypeNames(
+        activeEsiJobs.map((j) => j.product_type_id)
+      );
+      const activeJobs: ActiveJob[] = activeEsiJobs.map((job) => {
+        const { label, done } = formatTimeRemaining(job.end_date);
+        return {
+          name:       nameMap.get(job.product_type_id) ?? `Item #${job.product_type_id}`,
+          quantity:   job.runs,
+          remaining:  label,
+          done,
+          activityId: job.activity_id,
+        };
+      });
+
+      // ── Build standings ───────────────────────────────────────────────────
+      let standingsData: StandingsData = { factions: {}, corps: {} };
+      let standingsScopeGranted        = false;
+      if (rawStandings) {
         for (const s of rawStandings) {
           if (s.from_type === 'faction')  standingsData.factions[s.from_id] = s.standing;
           if (s.from_type === 'npc_corp') standingsData.corps[s.from_id]    = s.standing;
         }
         standingsScopeGranted = true;
-      } catch {}
+      }
 
-      // Cache alt session on server
+      // ── Cache alt session on server ───────────────────────────────────────
       try {
         await apiPost('/api/session-data', {
           assets: aData, blueprints: bData, prices: {}, wallet,
           jobs: activeJobs, skills: skillData,
           standings: standingsScopeGranted ? standingsData : null,
         }, acc);
-      } catch {}
+      } catch {
+        // Non-fatal — only affects AI chat context for this alt
+      }
 
       const bpoCount = bData.filter((bp) => bp.quantity === -1).length;
 
-      // Replace stub with fully-loaded alt
+      // ── Replace stub with fully-loaded alt (if not removed mid-load) ──────
       if (!altCancelledRef.current.has(cid)) {
         setAltCharacters((prev) => prev.map((a) =>
-          a.characterId === cid
-            ? {
-                characterId: cid, name: charInfo.name, token: acc,
-                blueprints: bData, assets: aData, skills: skillData, activeJobs,
-                walletISK: wallet, blueprintCount: bData.length, bpoCount,
-                activeJobCount: activeJobs.length,
-                hasStandingsScope: standingsScopeGranted,
-                loading: false, error: null,
-              }
-            : a
+          a.characterId !== cid ? a : {
+            characterId: cid,
+            name:        charInfo?.name ?? `Character #${cid}`,
+            token:       acc,
+            blueprints:  bData,
+            assets:      aData,
+            skills:      skillData,
+            activeJobs,
+            walletISK:        wallet,
+            blueprintCount:   bData.length,
+            bpoCount,
+            activeJobCount:   activeJobs.length,
+            hasStandingsScope: standingsScopeGranted,
+            loading: false,
+            error:   null,
+          }
         ));
       }
     } catch (e) {
       if (!altCancelledRef.current.has(cid)) {
         setAltCharacters((prev) => prev.map((a) =>
-          a.characterId === cid
-            ? { ...a, loading: false, error: (e as Error).message }
-            : a
+          a.characterId !== cid ? a : { ...a, loading: false, error: (e as Error).message }
         ));
       }
+    } finally {
+      inFlightAltsRef.current.delete(cid);
     }
   }, []);
 
@@ -473,13 +556,15 @@ export function useAuth(): AuthState & {
     const code   = params.get('code');
     const state  = params.get('state');
 
-    // Detect whether this OAuth callback is for an alt or the primary character
+    // Read and ALWAYS clear the adding-alt flag before any branching.
+    // If the user cancelled the EVE SSO flow (redirected back without code/state),
+    // the flag would otherwise persist indefinitely and misroute the next primary login.
     const isAddingAlt = sessionStorage.getItem(ADDING_ALT_KEY) === 'true';
+    sessionStorage.removeItem(ADDING_ALT_KEY);
 
     if (code && state) {
-      // ── Handle OAuth callback ──────────────────────────────────────────────
+      // ── Handle OAuth callback ────────────────────────────────────────────
       window.history.replaceState({}, '', window.location.pathname);
-      sessionStorage.removeItem(ADDING_ALT_KEY);
 
       const savedState = sessionStorage.getItem(SESSION_STATE_KEY);
       sessionStorage.removeItem(SESSION_STATE_KEY);
@@ -490,15 +575,18 @@ export function useAuth(): AuthState & {
         return;
       }
 
+      const redirectUri = window.location.origin + window.location.pathname;
+
       if (isAddingAlt) {
         // Alt login: exchange token and load as alt (non-blocking)
-        const redirectUri = window.location.origin + window.location.pathname;
         apiPost<{ access_token: string; error_description?: string }>(
           '/api/eve-token',
           { code, redirect_uri: redirectUri }
         )
           .then((data) => {
-            if (!data.access_token) throw new Error(data.error_description ?? 'No token returned');
+            if (!data.access_token) {
+              throw new Error(data.error_description ?? 'No token returned');
+            }
             return loadAltCharacterData(data.access_token);
           })
           .catch((e: Error) => console.warn('Alt login failed:', e.message));
@@ -509,7 +597,6 @@ export function useAuth(): AuthState & {
       setStatus('exchanging');
       setLoadStep('Verifying login with EVE…');
 
-      const redirectUri = window.location.origin + window.location.pathname;
       apiPost<{ access_token: string; error_description?: string }>(
         '/api/eve-token',
         { code, redirect_uri: redirectUri }
@@ -533,9 +620,8 @@ export function useAuth(): AuthState & {
     if (saved) {
       loadCharacterData(saved)
         .then(() => {
-          // After primary loads, restore any saved alts
-          const altTokens = getSavedAltTokens();
-          altTokens.forEach((t) => loadAltCharacterData(t));
+          // After primary loads, restore alts in parallel
+          getSavedAltTokens().forEach((t) => loadAltCharacterData(t));
         })
         .catch((e: Error) => {
           sessionStorage.removeItem(SESSION_TOKEN_KEY);
@@ -547,7 +633,6 @@ export function useAuth(): AuthState & {
   }, []);
 
   // ── addCharacter ──────────────────────────────────────────────────────────
-  // v1.5 — Redirects to EVE SSO with a flag so the callback adds an alt.
 
   const addCharacter = useCallback(() => {
     const state       = generateState();
@@ -557,30 +642,31 @@ export function useAuth(): AuthState & {
     sessionStorage.setItem(ADDING_ALT_KEY, 'true');
     setAddingAlt(true);
 
-    const params = new URLSearchParams({
-      response_type: 'code',
-      client_id:     EVE_CLIENT_ID,
-      redirect_uri:  redirectUri,
-      scope:         SCOPES,
-      state,
-    });
-
-    window.location.href = `https://login.eveonline.com/v2/oauth/authorize?${params}`;
+    window.location.href =
+      `https://login.eveonline.com/v2/oauth/authorize?${new URLSearchParams({
+        response_type: 'code',
+        client_id:     EVE_CLIENT_ID,
+        redirect_uri:  redirectUri,
+        scope:         SCOPES,
+        state,
+      })}`;
   }, []);
 
   // ── removeCharacter ───────────────────────────────────────────────────────
-  // v1.5 — Removes an alt from state and sessionStorage.
 
   const removeCharacter = useCallback((characterId: number) => {
+    // Mark as cancelled so any in-flight load won't write its result back to state
     altCancelledRef.current.add(characterId);
+
     setAltCharacters((prev) => {
-      const removed = prev.find((a) => a.characterId === characterId);
-      if (!removed) return prev;
-      // Remove token from sessionStorage
-      const saved = getSavedAltTokens();
-      saveAltTokens(saved.filter((t) => {
-        try { return characterIdFromJwt(t) !== characterId; } catch { return true; }
-      }));
+      if (!prev.some((a) => a.characterId === characterId)) return prev;
+      // Remove the token from sessionStorage (inline to keep it atomic with state update)
+      saveAltTokens(
+        getSavedAltTokens().filter((t) => {
+          try { return characterIdFromJwt(t) !== characterId; }
+          catch { return true; }
+        })
+      );
       return prev.filter((a) => a.characterId !== characterId);
     });
   }, []);
@@ -593,15 +679,14 @@ export function useAuth(): AuthState & {
 
     sessionStorage.setItem(SESSION_STATE_KEY, state);
 
-    const params = new URLSearchParams({
-      response_type: 'code',
-      client_id:     EVE_CLIENT_ID,
-      redirect_uri:  redirectUri,
-      scope:         SCOPES,
-      state,
-    });
-
-    window.location.href = `https://login.eveonline.com/v2/oauth/authorize?${params}`;
+    window.location.href =
+      `https://login.eveonline.com/v2/oauth/authorize?${new URLSearchParams({
+        response_type: 'code',
+        client_id:     EVE_CLIENT_ID,
+        redirect_uri:  redirectUri,
+        scope:         SCOPES,
+        state,
+      })}`;
   }, []);
 
   // ── logout ────────────────────────────────────────────────────────────────
@@ -615,12 +700,14 @@ export function useAuth(): AuthState & {
     setAssets([]);
     setSkills([]);
     setHasStandingsScope(false);
+    setPrimaryStandings(null);
     setError(null);
     setDataLog([]);
     setStatus('idle');
     setAltCharacters([]);
     setAddingAlt(false);
     altCancelledRef.current.clear();
+    inFlightAltsRef.current.clear();
   }, []);
 
   // ── session-expired event listener ────────────────────────────────────────
@@ -639,6 +726,7 @@ export function useAuth(): AuthState & {
     assets,
     skills,
     hasStandingsScope,
+    primaryStandings,
     error,
     loadStep,
     dataLog,

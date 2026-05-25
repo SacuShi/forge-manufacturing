@@ -1,6 +1,6 @@
 // FORGE v1.0 — App root. Auth states: idle/exchanging/loading → authed | error
 
-import { useState, useEffect, useCallback, useMemo, type FC } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, type FC } from 'react';
 import type {
   ChatMessage,
   MarketItem,
@@ -159,6 +159,10 @@ const App: FC = () => {
   const [rawResults,        setRawResults]        = useState<TopProfitableResponse['results']>([]);
   const [marketLoading,     setMarketLoading]     = useState(false);
   const [marketLoadingMore, setMarketLoadingMore] = useState(false);
+  // Ref-based guard prevents duplicate concurrent "load more" fetches.
+  // React state updates are async so the closed-over state value can be stale
+  // when two click events fire before the first re-render; a ref is set synchronously.
+  const loadingMoreRef = useRef(false);
   const [marketHasMore,     setMarketHasMore]     = useState(true);
   const [marketError,       setMarketError]       = useState<string | null>(null);
   const [selectedMarket,    setSelectedMarket]    = useState<Market>(MARKETS[0]);
@@ -239,6 +243,20 @@ const App: FC = () => {
     activeAltCharacters.reduce((s, a) => s + a.walletISK, 0),
     [primaryInScope, auth.character, activeAltCharacters]
   );
+
+  /**
+   * Stable version key for the combined session data.
+   * Covers skill level VALUES (not just count) so the re-POST fires when a skill
+   * trains up mid-session, even if the total number of skills stays the same.
+   * Using a string key avoids including large arrays in the effect dependency.
+   */
+  const combinedDataVersion = useMemo(() => {
+    const skillHash = bestSkillsArray.reduce((acc, s) => acc + s.active_skill_level, 0);
+    // Include sorted alt IDs so adding/removing a zero-asset alt (same counts) still
+    // triggers a re-POST to keep the server session in sync.
+    const altIds    = activeAltCharacters.map((a) => a.characterId).sort().join(',');
+    return `${allBlueprints.length}:${combinedAssets.length}:${bestSkillsArray.length}:${skillHash}:${altIds}`;
+  }, [allBlueprints, combinedAssets, bestSkillsArray, activeAltCharacters]);
 
   // Blueprint → owner name map (item_id → character name) — for attribution badges
   const blueprintOwnerMap = useMemo(() => {
@@ -378,6 +396,10 @@ const App: FC = () => {
   // v1.5 — Re-POST combined session to server whenever the in-scope character set changes.
   // This keeps /api/top-profitable-by-skills skill-filtering and have/needed checks
   // up-to-date with the current combined (or isolated) character data — no server changes needed.
+  //
+  // Uses combinedDataVersion (a hash string) rather than raw array lengths so the
+  // effect also fires when skill levels change without a count change.
+  // auth.primaryStandings is included so standings aren't lost when alts load.
   useEffect(() => {
     if (auth.status !== 'authed' || !auth.token) return;
     apiPost('/api/session-data', {
@@ -387,11 +409,10 @@ const App: FC = () => {
       wallet:    auth.character?.walletISK ?? 0,
       jobs:      allActiveJobs,
       skills:    bestSkillsArray,
-      standings: auth.hasStandingsScope ? undefined : null,
+      standings: auth.hasStandingsScope ? auth.primaryStandings : null,
     }, auth.token).catch(() => { /* non-fatal */ });
-  // Depend on lengths so we don't re-POST on every render, only when data actually changes
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auth.status, auth.token, allBlueprints.length, combinedAssets.length, bestSkillsArray.length]);
+  }, [auth.status, auth.token, combinedDataVersion]);
 
   useEffect(() => {
     if (auth.status !== 'authed') return;
@@ -472,7 +493,10 @@ const App: FC = () => {
   })();
 
   const handleLoadMoreMarket = useCallback(async () => {
-    if (marketLoadingMore || !marketHasMore || !auth.token) return;
+    // Use a ref guard (not state) so the check is synchronous — prevents two rapid
+    // clicks from both passing the guard before the first setState re-render fires.
+    if (loadingMoreRef.current || !marketHasMore || !auth.token) return;
+    loadingMoreRef.current = true;
     setMarketLoadingMore(true);
     try {
       const nextOffset = rawResults.length;
@@ -485,9 +509,10 @@ const App: FC = () => {
     } catch (e) {
       console.error('Load more market items failed:', e);
     } finally {
+      loadingMoreRef.current = false;
       setMarketLoadingMore(false);
     }
-  }, [marketLoadingMore, marketHasMore, auth.token, rawResults.length, selectedMarket.id, selectedSourceMarket.id]);
+  }, [marketHasMore, auth.token, rawResults.length, selectedMarket.id, selectedSourceMarket.id]);
 
   const handleToggleChat = () => {
     setChatOpen((p) => !p);

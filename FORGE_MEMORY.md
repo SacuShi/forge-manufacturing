@@ -2,7 +2,7 @@
 
 > This file is the authoritative context document for Claude sessions working on this project.
 > Read this first. Update it whenever significant decisions, changes, or discoveries are made.
-> Last updated: v1.4.0 — Corp feature: PIN-gated corp blueprints / assets / jobs viewer, admin whitelist
+> Last updated: v1.5.0 — Multi-character support: combined view across all EVE accounts
 
 ---
 
@@ -41,21 +41,24 @@ An EVE Online manufacturing intelligence web application for the **UKC corporati
 | Database | `/home/gumpy54/forge-db/forge.db` (SQLite) |
 | Proxy | Cloudflared tunnel → forge-ukc.com |
 
-### Deploy commands (run from local machine)
+### Deploy commands (run from `C:\Users\AndyMcD\Desktop\forge-manufacturing\` on the Windows PC)
+
+> **IMPORTANT:** SSH from Claude's terminal gets permission denied — all scp/ssh commands
+> must be run by the user from their own Windows terminal, not by Claude.
+
 ```bash
 # Backend
 scp server/server.js gumpy54@192.168.1.62:/home/gumpy54/forge-server/server.js
 scp server/sde-import.js gumpy54@192.168.1.62:/home/gumpy54/forge-server/sde-import.js
 
-# Frontend (ALWAYS deploy index.html + assets/ together — Vite hashes filenames on every build)
-scp forge-v1/dist/index.html gumpy54@192.168.1.62:/home/gumpy54/forge-server/public/index.html
-scp -r forge-v1/dist/assets gumpy54@192.168.1.62:/home/gumpy54/forge-server/public/
+# Frontend (ALWAYS deploy all of dist/ together — Vite hashes filenames on every build)
+scp -r forge-v1/dist/* gumpy54@192.168.1.62:/home/gumpy54/forge-server/public/
 
-# Restart
-ssh gumpy54@192.168.1.62 "pm2 restart forge"
+# Restart (PM2 process id=0; "pm2 restart forge" may fail — use id instead)
+ssh gumpy54@192.168.1.62 "pm2 restart 0"
 
 # SDE import (stop forge first — it locks the DB)
-ssh gumpy54@192.168.1.62 "pm2 stop forge && cd ~/forge-server && node sde-import.js && pm2 start forge && sleep 5 && curl -s -X POST http://localhost:3000/api/trigger-precompute"
+ssh gumpy54@192.168.1.62 "pm2 stop 0 && cd ~/forge-server && node sde-import.js && pm2 start 0 && sleep 5 && curl -s -X POST http://localhost:3000/api/trigger-precompute"
 ```
 
 ### CRITICAL deployment notes
@@ -963,30 +966,31 @@ Manual trigger: POST `/api/corp/refresh` (requires EVE token + PIN/admin access)
 ## 19. Quick Reference
 
 ### Rebuild & deploy (full)
+Run all scp/ssh commands from `C:\Users\AndyMcD\Desktop\forge-manufacturing\` on the Windows PC.
+Claude cannot run these — SSH permission denied from Claude's terminal.
+
 ```bash
 # 1. Build
-cd "C:\Users\AndyMcD\Desktop\forge-manufacturing\forge-v1" && npm run build
+cd forge-v1 && npm run build && cd ..
 
 # 2. Deploy backend
 scp server/server.js gumpy54@192.168.1.62:/home/gumpy54/forge-server/server.js
 
-# 3. Deploy frontend
-scp forge-v1/dist/index.html gumpy54@192.168.1.62:/home/gumpy54/forge-server/public/index.html
-scp -r forge-v1/dist/assets gumpy54@192.168.1.62:/home/gumpy54/forge-server/public/
+# 3. Deploy frontend (single command — copies all of dist/ including hashed assets)
+scp -r forge-v1/dist/* gumpy54@192.168.1.62:/home/gumpy54/forge-server/public/
 
-# 4. Restart
-ssh gumpy54@192.168.1.62 "pm2 restart forge"
+# 4. Restart (PM2 process id=0)
+ssh gumpy54@192.168.1.62 "pm2 restart 0"
 
 # 5. Commit & push
-cd "C:\Users\AndyMcD\Desktop\forge-manufacturing"
 git add server/server.js forge-v1/src/... forge-v1/dist/...
 git commit -m "feat: description"
-git push origin feature/v1.1-multimarket
+git push origin main
 ```
 
 ### Check server logs
 ```bash
-ssh gumpy54@192.168.1.62 "pm2 logs forge --lines 50"
+ssh gumpy54@192.168.1.62 "pm2 logs 0 --lines 50"
 ```
 
 ### Trigger precompute manually (all 6 regions)

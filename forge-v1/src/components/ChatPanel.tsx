@@ -90,9 +90,14 @@ const ChatPanel: FC<ChatPanelProps> = ({
   const messagesEndRef    = useRef<HTMLDivElement>(null);
   const textareaRef       = useRef<HTMLTextAreaElement>(null);
 
-  /* Auto-scroll to the bottom whenever messages/thinking changes */
+  /* Auto-scroll to the bottom whenever messages/thinking changes.
+     Timer is cleared on cleanup to prevent firing against an unmounted ref. */
   useEffect(() => {
-    setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 60);
+    const t = setTimeout(
+      () => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }),
+      60
+    );
+    return () => clearTimeout(t);
   }, [messages, thinking]);
 
   /* Focus textarea when panel opens */

@@ -83,8 +83,10 @@ export function useItemDetail(
       });
 
     return () => { cancelled = true; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [typeId, regionId, materialRegionId]);
+  // assets and blueprints are included so the panel refreshes if the user's
+  // holdings change while the same item is selected (e.g. after an alt loads).
+  // They are stable memoised references in App.tsx and only change when data changes.
+  }, [typeId, regionId, materialRegionId, assets, blueprints]);
 
   return { detail, loading, error };
 }

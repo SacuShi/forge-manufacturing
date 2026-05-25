@@ -50,6 +50,11 @@ interface MainContentProps {
   blueprintOwnerMap?: Map<number, string>;
 }
 
+// Stable empty map used as the default for blueprintOwnerMap.
+// Using `new Map()` inline as a default parameter creates a new reference on every
+// render, which would invalidate any memo or effect that lists it as a dependency.
+const EMPTY_BP_OWNER_MAP = new Map<number, string>();
+
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const TABS = [
@@ -82,7 +87,7 @@ const MainContent: FC<MainContentProps> = ({
   corpStatus,
   accessStatus,
   onNeedCorpPin,
-  blueprintOwnerMap = new Map(),
+  blueprintOwnerMap = EMPTY_BP_OWNER_MAP,
 }) => {
   const [sortField, setSortField] = useState<SortField>('rank');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
@@ -511,9 +516,9 @@ const MainContent: FC<MainContentProps> = ({
             aria-label="Search assets"
           />
           <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 220px)' }}>
-            {assetGroups.map(([name, { qty, typeId }], i) => (
+            {assetGroups.map(([name, { qty, typeId }]) => (
               <div
-                key={i}
+                key={typeId}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -573,11 +578,13 @@ const MainContent: FC<MainContentProps> = ({
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {activeJobs.map((job, i) => {
+              {activeJobs.map((job) => {
                 const label = activityLabel(job.activityId);
+                // Stable key: name + remaining time uniquely identifies a job row.
+                // Using index causes stale DOM state when completed jobs are removed.
                 return (
                 <div
-                  key={i}
+                  key={`${job.name}-${job.remaining}-${job.activityId ?? 0}`}
                   style={{
                     background: 'var(--color-bg-tertiary)',
                     border: '0.5px solid var(--color-border-light)',

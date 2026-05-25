@@ -368,7 +368,9 @@ const RightSidebar: FC<RightSidebarProps> = ({
                       const height = range > 0 ? ((p - min) / range) * 100 : 50;
                       return (
                         <div
-                          key={i}
+                          // Combine index with price value: switching items produces a
+                          // different set of values so React replaces bars cleanly.
+                          key={`bar-${i}-${Math.round(p)}`}
                           className="sparkline-bar"
                           style={{ height: `${Math.max(height, 4)}%` }}
                         />
@@ -468,7 +470,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
 
                 {/* Materials list — every row is clickable → drills into that item */}
                 <div className="mat-list">
-                  {apiDetail.buildInfo.materials.map((mat, i) => {
+                  {apiDetail.buildInfo.materials.map((mat) => {
                     const ok      = mat.shortage <= 0;
                     // canManufacture: set by server from blueprints DB (any game blueprint exists)
                     // isOwned: user personally owns a blueprint for this material
@@ -476,7 +478,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
                     const isOwned = ownedProductTypeIds.has(mat.materialId);
                     return (
                       <div
-                        key={i}
+                        key={mat.materialId}
                         className={`mat-row mat-row-clickable${ok ? ' mat-ok' : ' mat-bad'}`}
                         role="button"
                         tabIndex={0}
