@@ -590,6 +590,26 @@ export function useAuth(): AuthState & {
             return loadAltCharacterData(data.access_token);
           })
           .catch((e: Error) => console.warn('Alt login failed:', e.message));
+
+        // ── Critical: resume the primary session ─────────────────────────────
+        // Redirecting to EVE SSO unmounts the entire React app — all useState is
+        // gone. The primary token survives in sessionStorage but without this block
+        // the isAddingAlt branch returned before reaching the "resume saved session"
+        // section, leaving status='idle' and showing the login screen.
+        const primaryToken = sessionStorage.getItem(SESSION_TOKEN_KEY);
+        if (primaryToken) {
+          loadCharacterData(primaryToken)
+            .then(() => {
+              // Restore any other saved alts that were already loaded before the
+              // redirect (the new alt is handled by loadAltCharacterData above).
+              getSavedAltTokens().forEach((t) => loadAltCharacterData(t));
+            })
+            .catch((e: Error) => {
+              sessionStorage.removeItem(SESSION_TOKEN_KEY);
+              setError(`Session expired: ${e.message}`);
+              setStatus('idle');
+            });
+        }
         return;
       }
 
