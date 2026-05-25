@@ -12,7 +12,6 @@
 'use strict';
 
 const rateLimit = require('express-rate-limit');
-const jwt       = require('jsonwebtoken');
 
 // ── Rate limiters ─────────────────────────────────────────────────────────────
 
