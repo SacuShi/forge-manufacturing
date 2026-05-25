@@ -159,6 +159,8 @@ const App: FC = () => {
   const [rawResults,        setRawResults]        = useState<TopProfitableResponse['results']>([]);
   const [marketLoading,     setMarketLoading]     = useState(false);
   const [marketLoadingMore, setMarketLoadingMore] = useState(false);
+  // Ref: debounce timer for the combined session re-POST (prevents burst during initial load)
+  const sessionRePostTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Ref-based guard prevents duplicate concurrent "load more" fetches.
   // React state updates are async so the closed-over state value can be stale
   // when two click events fire before the first re-render; a ref is set synchronously.
@@ -397,20 +399,29 @@ const App: FC = () => {
   // This keeps /api/top-profitable-by-skills skill-filtering and have/needed checks
   // up-to-date with the current combined (or isolated) character data — no server changes needed.
   //
-  // Uses combinedDataVersion (a hash string) rather than raw array lengths so the
-  // effect also fires when skill levels change without a count change.
-  // auth.primaryStandings is included so standings aren't lost when alts load.
+  // Debounced by 1.5 s: during initial login every alt that finishes loading changes
+  // combinedDataVersion, which without debouncing fires one POST per alt in rapid
+  // succession and exhausts the server rate limit before the market call gets through.
+  // The debounce collapses the entire burst into a single POST once loading settles.
   useEffect(() => {
     if (auth.status !== 'authed' || !auth.token) return;
-    apiPost('/api/session-data', {
-      assets:    combinedAssets,
-      blueprints: allBlueprints,
-      prices:    {},
-      wallet:    auth.character?.walletISK ?? 0,
-      jobs:      allActiveJobs,
-      skills:    bestSkillsArray,
-      standings: auth.hasStandingsScope ? auth.primaryStandings : null,
-    }, auth.token).catch(() => { /* non-fatal */ });
+
+    if (sessionRePostTimerRef.current) clearTimeout(sessionRePostTimerRef.current);
+    sessionRePostTimerRef.current = setTimeout(() => {
+      apiPost('/api/session-data', {
+        assets:    combinedAssets,
+        blueprints: allBlueprints,
+        prices:    {},
+        wallet:    auth.character?.walletISK ?? 0,
+        jobs:      allActiveJobs,
+        skills:    bestSkillsArray,
+        standings: auth.hasStandingsScope ? auth.primaryStandings : null,
+      }, auth.token ?? undefined).catch(() => { /* non-fatal */ });
+    }, 1500);
+
+    return () => {
+      if (sessionRePostTimerRef.current) clearTimeout(sessionRePostTimerRef.current);
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth.status, auth.token, combinedDataVersion]);
 

@@ -504,16 +504,12 @@ export function useAuth(): AuthState & {
         standingsScopeGranted = true;
       }
 
-      // ── Cache alt session on server ───────────────────────────────────────
-      try {
-        await apiPost('/api/session-data', {
-          assets: aData, blueprints: bData, prices: {}, wallet,
-          jobs: activeJobs, skills: skillData,
-          standings: standingsScopeGranted ? standingsData : null,
-        }, acc);
-      } catch {
-        // Non-fatal — only affects AI chat context for this alt
-      }
+      // Note: we deliberately do NOT post session-data here for the alt's own token.
+      // App.tsx fires a debounced combined re-POST (under the primary's token) once
+      // all alts finish loading, which overwrites the primary's server session with
+      // the merged skills/assets/blueprints. Posting individually per alt would:
+      //   (a) fire N extra requests during login burst → hits rate limit, and
+      //   (b) get immediately overwritten by the combined re-POST anyway.
 
       const bpoCount = bData.filter((bp) => bp.quantity === -1).length;
 
