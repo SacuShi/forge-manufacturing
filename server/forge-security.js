@@ -151,6 +151,19 @@ function decodeJwt(token) {
   }
 }
 
+// ── Error handler ─────────────────────────────────────────────────────────────
+
+/**
+ * Express error-handling middleware (4-argument signature required by Express).
+ * Catches any unhandled errors thrown in route handlers.
+ */
+// eslint-disable-next-line no-unused-vars
+function errorHandler(err, req, res, next) {
+  console.error('Unhandled server error:', err);
+  const status = err.status || err.statusCode || 500;
+  res.status(status).json({ error: err.message || 'Internal server error' });
+}
+
 // ── Exports ───────────────────────────────────────────────────────────────────
 
 module.exports = {
@@ -161,4 +174,5 @@ module.exports = {
   verifyCharacterOwnership,
   validateAiChatInput,
   validateChatMessage,
+  errorHandler,
 };
