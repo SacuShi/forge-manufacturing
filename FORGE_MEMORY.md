@@ -2,7 +2,7 @@
 
 > This file is the authoritative context document for Claude sessions working on this project.
 > Read this first. Update it whenever significant decisions, changes, or discoveries are made.
-> Last updated: v1.5.0 — Multi-character support: combined view across all EVE accounts
+> Last updated: v1.5.1 — Post-v1.5 code-review fixes, OAuth resume bug, 429 rate-limit fix
 
 ---
 
@@ -23,7 +23,7 @@ An EVE Online manufacturing intelligence web application for the **UKC corporati
 
 **Live domain:** https://forge-ukc.com  
 **GitHub:** https://github.com/SacuShi/forge-manufacturing.git  
-**Current version:** v1.4.0 (branch: `main`)  
+**Current version:** v1.5.1 (branch: `main`)  
 **Version scheme:** `major.feature.change.patch`
 
 ---
@@ -50,6 +50,9 @@ An EVE Online manufacturing intelligence web application for the **UKC corporati
 # Backend
 scp server/server.js gumpy54@192.168.1.62:/home/gumpy54/forge-server/server.js
 scp server/sde-import.js gumpy54@192.168.1.62:/home/gumpy54/forge-server/sde-import.js
+
+# Security middleware (deploy whenever forge-security.js changes)
+scp server/forge-security.js gumpy54@192.168.1.62:/home/gumpy54/forge-server/forge-security.js
 
 # Frontend (ALWAYS deploy all of dist/ together — Vite hashes filenames on every build)
 scp -r forge-v1/dist/* gumpy54@192.168.1.62:/home/gumpy54/forge-server/public/
@@ -121,31 +124,31 @@ npm run build        # tsc -b && vite build → dist/
 ```
 forge-manufacturing/
 ├── server/
-│   ├── server.js           ← Express backend (v1.2.0)
+│   ├── server.js           ← Express backend (v1.5.1)
 │   ├── sde-import.js       ← SDE import script (v2)
-│   └── forge-security.js   ← Auth + rate limiting middleware
+│   └── forge-security.js   ← Auth + rate limiting middleware (NOW IN LOCAL REPO since v1.5.1)
 ├── forge-v1/
 │   ├── src/
-│   │   ├── App.tsx             ← Root: auth states, market data, chat, industry settings
+│   │   ├── App.tsx             ← Root: auth, market, chat, industry settings, multi-char aggregation
 │   │   ├── main.tsx
 │   │   ├── api/
 │   │   │   └── client.ts       ← apiGet / apiPost helpers (dispatches session-expired event)
 │   │   ├── components/
 │   │   │   ├── Header.tsx      ← Top bar; MarketSelector + ⚙ settings cog + AI toggle
 │   │   │   ├── MarketSelector.tsx ← Hub dropdown (6 trade hubs); MARKETS constant
-│   │   │   ├── IndustrySettings.tsx ← NEW v1.2.0: modal for system/structure/rigs/tax
-│   │   │   ├── LeftSidebar.tsx ← Character card, nav tabs, quick prompts, jobs
-│   │   │   ├── MainContent.tsx ← Tabs: Market, Blueprints, Assets, Jobs
-│   │   │   ├── RightSidebar.tsx← Item detail panel + True Profit 4-box (v1.2.0)
+│   │   │   ├── IndustrySettings.tsx ← Modal for system/structure/rigs/tax (v1.2.0)
+│   │   │   ├── LeftSidebar.tsx ← Character card, alt management, nav tabs, jobs (v1.5.0)
+│   │   │   ├── MainContent.tsx ← Tabs: Market, Blueprints (owner badges), Assets, Jobs
+│   │   │   ├── RightSidebar.tsx← Item detail + True Profit 4-box + fee char selector (v1.5.0)
 │   │   │   ├── ChatPanel.tsx   ← AI chat slide-in panel
 │   │   │   ├── ItemTable.tsx   ← Sortable market opportunities table
 │   │   │   ├── ItemLink.tsx    ← Clickable item token in chat messages
 │   │   │   ├── LoginScreen.tsx ← EVE SSO login page (session-expired banner)
 │   │   │   └── LoadingScreen.tsx← Step-by-step data load progress log
 │   │   ├── hooks/
-│   │   │   ├── useAuth.ts      ← Token exchange, ESI data; hasStandingsScope (v1.2.0)
+│   │   │   ├── useAuth.ts      ← Token exchange, ESI data, alt management (v1.5.0)
 │   │   │   ├── useItemDetail.ts← Item detail API calls (passes regionId)
-│   │   │   ├── useTrueCost.ts  ← NEW v1.2.0: calls /api/true-cost for True Profit data
+│   │   │   ├── useTrueCost.ts  ← Calls /api/true-cost for True Profit data (v1.2.0)
 │   │   │   └── useItemNames.ts ← Item name lookups from DB
 │   │   ├── styles/
 │   │   │   ├── variables.css   ← CSS design tokens (dark/light mode)
@@ -456,25 +459,70 @@ All endpoints require `Authorization: Bearer <eve_token>` unless noted. Rate lim
 ```
 idle → (EVE SSO redirect) → exchanging → loading → authed
                                                   ↘ error
+
+Alt login (same flow, forge_adding_alt flag routes callback):
+authed → (Add Character button) → EVE SSO → callback → alt loads in background → authed (primary unchanged)
 ```
 
-### State in `App.tsx` (v1.2.0)
+**CRITICAL — EVE SSO callback architecture:**
+`window.location.href` to EVE SSO completely unmounts React. On return, ALL React state is gone — only sessionStorage survives. The `isAddingAlt` callback branch MUST explicitly resume the primary session from `sessionStorage.getItem(SESSION_TOKEN_KEY)`. It cannot rely on the "restore saved session" block at the bottom of the useEffect because it returns early.
+
+### sessionStorage keys (`useAuth.ts`)
+| Key | Value | Purpose |
+|---|---|---|
+| `forge_token` | EVE access token | Primary character session; restored on mount |
+| `forge_alt_tokens` | JSON array of tokens | Alt access tokens; restored on mount in parallel |
+| `forge_adding_alt` | `'true'` | Set before alt SSO redirect; cleared immediately on any callback |
+
+### `useAuth.ts` internal refs
+| Ref | Type | Purpose |
+|---|---|---|
+| `inFlightAltsRef` | `useRef<Set<number>>` | Prevents duplicate concurrent alt loads (session restore race) |
+| `altCancelledRef` | `useRef<Set<number>>` | Prevents stale state updates when alt removed mid-load |
+
+### `AuthState` interface additions (v1.5.0)
+| Field | Type | Purpose |
+|---|---|---|
+| `altCharacters` | `AltCharacter[]` | Loaded alt characters with full ESI data |
+| `addingAlt` | `boolean` | True while SSO redirect in-progress for alt |
+| `addCharacter` | `() => void` | Triggers alt SSO redirect |
+| `removeCharacter` | `(id: number) => void` | Removes alt from state + sessionStorage |
+| `primaryStandings` | `StandingsData \| null` | Standings for fee calculation; exported type from useAuth.ts |
+
+### State in `App.tsx` (v1.5.0)
 | State | Type | Purpose |
 |---|---|---|
-| `theme` | `'dark'|'light'` | Persisted to localStorage |
+| `theme` | `'dark'\|'light'` | Persisted to localStorage |
 | `chatOpen` | `boolean` | Chat panel visible |
 | `chatAutoOpened` | `boolean` | Was chat auto-opened (closes on outside click) |
 | `rawResults` | `TopProfitableResponse['results']` | Raw API results for all loaded pages |
-| `marketItems` | `MarketItem[]` | **useMemo** derived from `rawResults + auth.blueprints` |
+| `marketItems` | `MarketItem[]` | useMemo derived from `rawResults + allBlueprints` |
 | `marketLoading` | `boolean` | Initial load OR market switch in progress |
 | `marketHasMore` | `boolean` | Whether more pages exist |
 | `marketLoadingMore` | `boolean` | "Load next 50" in-flight |
 | `selectedMarket` | `Market` | Currently selected hub (default Jita) |
-| `selectedTypeId` | `number|null` | Currently selected item |
+| `selectedTypeId` | `number\|null` | Currently selected item |
 | `panelHistory` | `Array<{typeId,name}>` | Back-stack for chain drill-down |
 | `chatMessages` | `ChatMessage[]` | Full conversation history |
-| `industrySettings` | `IndustrySettings|null` | **NEW v1.2.0** — loaded from `/api/industry-settings` on login |
-| `settingsOpen` | `boolean` | **NEW v1.2.0** — IndustrySettings modal open |
+| `industrySettings` | `IndustrySettings\|null` | Loaded from `/api/industry-settings` on login |
+| `settingsOpen` | `boolean` | IndustrySettings modal open |
+| `viewCharacterId` | `number\|null` | null = combined view; set = isolate one character |
+| `feeCharacterId` | `number\|null` | Which character's skills/standings to use for True Profit |
+
+### App.tsx aggregation memos (v1.5.0)
+| Memo | Purpose |
+|---|---|
+| `activeAltCharacters` | Alts in scope (all, or just one if `viewCharacterId` set) |
+| `allBlueprints` | Primary + all in-scope alt blueprints concatenated |
+| `combinedAssets` | Summed asset quantities across all in-scope characters (EsiAsset[]) |
+| `bestSkillsArray` | Max skill level per skill_id across all in-scope characters |
+| `allActiveJobs` | All jobs across in-scope characters |
+| `totalWalletISK` | Sum of wallet across in-scope characters |
+| `blueprintOwnerMap` | `Map<item_id, characterName>` — for owner badges on Blueprints tab |
+| `combinedDataVersion` | Stable hash string `"${bpLen}:${assetLen}:${skillLen}:${skillHash}:${altIds}"` — used as effect dependency |
+
+### Combined session re-POST (App.tsx)
+After any change to combined data, App.tsx re-POSTs merged skills/assets/blueprints to `/api/session-data` under the primary token so all server-side endpoints reflect the combined view automatically. **Debounced 1500 ms** via `sessionRePostTimerRef` to collapse burst when multiple alts load simultaneously. Triggered by `combinedDataVersion` changing.
 
 ### Market hub switching (`handleMarketChange`)
 ```typescript
@@ -710,6 +758,82 @@ wallet, blueprints, assets, active jobs, trained skills.
 | `1713c9e` | Quick prompt chips: remove 40-char truncation |
 | `7fb861a` | Load-more pagination: offset param; "Load next 50" button |
 
+### v1.5.1 (commits `633ab3c`→`1c9c33c`, pushed to `main` 2026-05-25) — deployed ✓
+
+**Post-v1.5.0 code review — 12 confirmed issues fixed + bug fixes**
+
+**Code quality fixes (from full codebase review):**
+- `useAuth.ts`: `decodeJwtPayload` now uses `TextDecoder` (fixes non-ASCII character names); `resolveTypeNames()` deduplicates with `Set` before fetching (fixes N+1 ESI pattern); `loadAltCharacterData` uses `Promise.allSettled` for all 7 ESI calls in parallel (~7× faster); null guard on `product_type_id` before job mapping
+- `useAuth.ts`: `loadCharacterData` standings catch now differentiates 403 (scope denied) vs transient ESI error — only clears `hasStandingsScope` on 403
+- `useAuth.ts`: `sessionStorage.removeItem(ADDING_ALT_KEY)` moved unconditionally BEFORE `if (code && state)` — prevents stale flag if user cancels SSO mid-flow
+- `server/server.js`: `clientErrMsg(err)` helper strips filesystem paths from SQLite errors; all 27+ `res.status(500).json({ error: err.message })` → use `clientErrMsg`
+- `server/server.js`: `/api/diagnose-t2/:characterId` now has `security.verifyEveToken`; internal self-call passes `Authorization` header
+- `server/server.js`: `/api/production-chain` itemName sanitised against SQL LIKE wildcards (`[%_\\]`)
+- `useItemDetail.ts`: added `assets` and `blueprints` to effect dependency array (removed eslint-disable)
+- `ChatPanel.tsx`: auto-scroll `setTimeout` stores ID and cleans up on unmount
+- `MainContent.tsx`: `EMPTY_BP_OWNER_MAP` module-level constant for stable Map default prop; stable `key` props on assets list (`key={typeId}`) and jobs list
+- `RightSidebar.tsx`: stable `key` props on sparkline bars and materials list
+
+**Bug fix — Add Character causes logout (critical):**
+- Root cause: `isAddingAlt` branch in `useEffect` called `return` without restoring primary session from sessionStorage. React is fully unmounted during EVE SSO redirect; on return ALL state is gone. The resume block at the bottom of the effect was unreachable.
+- Fix: After starting alt load in `isAddingAlt` branch, explicitly call `loadCharacterData(primaryToken)` then restore other saved alts in `.then()`.
+
+**Bug fix — Market 429 Too Many Requests:**
+- Root cause: Each alt load fired its own `POST /api/session-data` + triggered `combinedDataVersion` change → another `POST /api/session-data`. With N alts = 2N+1 rapid-fire calls to a tight rate limiter.
+- Fix 1 (frontend): Debounced combined re-POST 1500 ms via `sessionRePostTimerRef` — collapses N bursts to 1.
+- Fix 2 (frontend): Removed redundant `POST /api/session-data` from inside `loadAltCharacterData`.
+- Fix 3 (server): `forge-security.js` brought into local repo with `apiLimiter` set to 300 req/5 min.
+- Fix 4 (server): Added missing `errorHandler` export (was causing "app.use() requires a middleware function" crash).
+
+---
+
+### v1.5.0 (commit `7e7431f`) — deployed ✓
+
+**Multi-character support — combined view across all EVE accounts**
+
+**Architecture decisions:**
+- Zero server changes — pure frontend feature. `/api/item-details` uses POSTed assets; `/api/top-profitable-by-skills` uses session cache; fee endpoints identify character from Bearer token.
+- Combined view by default; toggle to isolate one character.
+- Fee calculations: user selects which character's skills/standings apply in True Profit.
+- Wallet: combined total in sidebar; per-character breakdown per card.
+
+**New `AltCharacter` interface (types/index.ts):**
+```typescript
+{ characterId, name, token, blueprints, assets, skills, activeJobs,
+  walletISK, blueprintCount, bpoCount, activeJobCount, hasStandingsScope,
+  loading, error }
+```
+
+**`useAuth.ts` changes:**
+- `addCharacter()` — sets `forge_adding_alt` flag, redirects to EVE SSO (same scopes as primary)
+- `loadAltCharacterData(token)` — guards against primary-as-alt and in-flight duplicates; loads all ESI data in parallel; stores token in `forge_alt_tokens`
+- `removeCharacter(characterId)` — removes from state + `forge_alt_tokens`
+- On mount: restores alts from `forge_alt_tokens` in parallel after primary
+- `StandingsData` type exported; `primaryStandings` state added
+
+**`App.tsx` changes:**
+- `viewCharacterId` / `feeCharacterId` state for isolation and fee character selection
+- Aggregation memos: `allBlueprints`, `combinedAssets`, `bestSkillsArray`, `allActiveJobs`, `totalWalletISK`, `blueprintOwnerMap`, `combinedDataVersion`
+- `feeToken` resolves to selected fee character's token (passed to `useTrueCost` and fee-rate fetch)
+- Combined re-POST sends `auth.primaryStandings` (not undefined)
+
+**`LeftSidebar.tsx` additions:**
+- Character view toggle chips (All / per-alt)
+- Alt character cards (portrait, name, wallet, BP count, job count, remove button)
+- "Add Character" button (disabled + spinner while `addingAlt`)
+- "Total ISK" label when alts loaded
+
+**`RightSidebar.tsx` additions:**
+- Fee character `<select>` next to True Profit heading (only shown when alts loaded)
+
+**`MainContent.tsx` additions:**
+- `blueprintOwnerMap` prop — owner badge on each blueprint card when alts loaded
+
+**`components.css` additions:**
+- `.char-view-toggle`, `.alt-card`, `.alt-card-info`, `.alt-card-name`, `.alt-card-stats`, `.alt-card-remove`, `.char-add-btn`, `.fee-char-select`, `.bp-owner-badge`
+
+---
+
 ### v1.2.0 (latest commit `b1bf051`) — branch: `feature/v1.2.0-true-profit`
 
 **True Profit feature — local ESI calculation, standings-aware fees, industry settings**
@@ -886,6 +1010,21 @@ ssh gumpy54@192.168.1.62 "echo 'FORGE_CORP_KEY=<generated-key>' >> /home/gumpy54
 - Helmet CSP configured for EVE SSO + ESI domains
 - Cloudflared proxy (`app.set('trust proxy', 1)`)
 - Nothing sensitive sent from client — server injects from session cache
+- `clientErrMsg(err)` — strips filesystem paths from SQLite errors before sending to client
+
+### `forge-security.js` exports & rate limits (v1.5.1)
+| Export | Type | Limit |
+|---|---|---|
+| `apiLimiter` | Rate limiter | **300 req / 5 min** per IP (generous for multi-char burst) |
+| `authLimiter` | Rate limiter | 20 req / 15 min per IP |
+| `aiLimiter` | Rate limiter | 30 req / 10 min per IP |
+| `verifyEveToken` | Middleware | Validates Bearer token; sets `req.eveCharacter.{characterId,characterName}` |
+| `verifyCharacterOwnership` | Middleware | verifyEveToken + checks route `:characterId` matches token |
+| `validateAiChatInput` | Middleware | Validates `{message, history}` body; message ≤2000 chars, history ≤50 |
+| `validateChatMessage` | Middleware | Validates single message string |
+| `errorHandler` | 4-arg middleware | `app.use(security.errorHandler)` — global catch-all |
+
+`forge-security.js` is now in the **local repo** at `server/forge-security.js`. Always deploy it alongside `server.js`.
 
 ---
 
@@ -976,14 +1115,17 @@ cd forge-v1 && npm run build && cd ..
 # 2. Deploy backend
 scp server/server.js gumpy54@192.168.1.62:/home/gumpy54/forge-server/server.js
 
-# 3. Deploy frontend (single command — copies all of dist/ including hashed assets)
+# 3. Deploy security middleware (whenever forge-security.js changes)
+scp server/forge-security.js gumpy54@192.168.1.62:/home/gumpy54/forge-server/forge-security.js
+
+# 4. Deploy frontend (single command — copies all of dist/ including hashed assets)
 scp -r forge-v1/dist/* gumpy54@192.168.1.62:/home/gumpy54/forge-server/public/
 
-# 4. Restart (PM2 process id=0)
+# 5. Restart (PM2 process id=0)
 ssh gumpy54@192.168.1.62 "pm2 restart 0"
 
-# 5. Commit & push
-git add server/server.js forge-v1/src/... forge-v1/dist/...
+# 6. Commit & push
+git add server/server.js server/forge-security.js forge-v1/src/... forge-v1/dist/...
 git commit -m "feat: description"
 git push origin main
 ```
