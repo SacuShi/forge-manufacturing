@@ -42,4 +42,15 @@ ecosystem.config.js
 *.pem
 *.key
 *.crt
-.claude/skills/wizard/
+
+# AI agent session data (worktrees, plans, local runtime files)
+.claude/
+.clone/
+.agents/
+
+# Cloudflared credentials
+*.json
+!package.json
+!package-lock.json
+!tsconfig*.json
+!vite.config.ts
