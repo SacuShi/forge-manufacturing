@@ -2,7 +2,7 @@
 
 > This file is the authoritative context document for Claude sessions working on this project.
 > Read this first. Update it whenever significant decisions, changes, or discoveries are made.
-> Last updated: v1.7.0 — Haulage Phase 2 in progress (method selectors, Red/Black Frog/PushX rate tables, self-haul, market haul column, jump counts)
+> Last updated: v1.7.0 — Haulage Phase 2 complete ✓ — method selectors, Red/Black Frog/PushX rate tables, self-haul ship selector, market haul column, EVE route API jump counts
 
 ---
 
@@ -804,29 +804,54 @@ wallet, blueprints, assets, active jobs, trained skills.
 - `RightSidebar`: runs selector (× 1/2/5/10/20/50/100 runs) in True Profit heading
 - `App.tsx`: `buildRuns` state → passed to `useTrueCost` hook
 
-### v1.7.0 — Haulage Phase 2 (IN PROGRESS)
+### v1.7.0 — Haulage Phase 2 ✓ BUILT + PUSHED (commit `a2f5dc5`)
 
-**Design brief:** `C:\Users\AndyMcD\Desktop\New Text Document (3).txt`
+**Design brief source:** `C:\Users\AndyMcD\Desktop\New Text Document (3).txt`
 
-**Phase 2 adds:**
-- **Method selector per leg** — User-Defined, Red Frog, Black Frog, PushX, Self-Haul
-- **Embedded rate formulas** for Red Frog (400 ISK/m³ + 0.5% collateral, min 1M), Black Frog (1200 + 1%, min 1.5M), PushX (380 + 0.5%, min 1M) — rates as of Jun 2025
-- **EVE route API** `getJumpCount(originId, destId)` — permanent server-side cache; called for leg1 (sourceHub→mfg) and leg2 (mfg→sellHub)
-- **HUB_SYSTEM_IDS** map added to server.js (region_id → system_id for all 6 hubs)
-- **`calcLegHaulCost(cfg, volumeM3, jumpCount, collateral)`** helper — handles all methods
-- **`calcProviderFee(provider, m3, collateral)`** — splits oversized loads into multiple contracts
-- **Market table Haul/unit column** — `haul_cost_per_unit` + `haul_isk_per_m3` added to top-profitable-by-skills results
-- **Self-haul** — ship selector (character + ship from hardcoded freight table), cargo at skill level, trip count, fuel cost input, break-even vs Red Frog
-- **Updated Haul tooltip** — shows jump count, effective ISK/m³, contracts count, rates-as-of date
+**Deployed via:**
+```bash
+scp C:\Users\AndyMcD\Desktop\forge-manufacturing\server\server.js gumpy54@192.168.1.62:/home/gumpy54/forge-server/server.js
+scp -r C:\Users\AndyMcD\Desktop\forge-manufacturing\forge-v1\dist\* gumpy54@192.168.1.62:/home/gumpy54/forge-server/public/
+ssh gumpy54@192.168.1.62 "pm2 restart 0"
+```
+> No sde-import.js redeploy needed — packaged_volume already populated in Phase 1.
+> DB migrations run automatically on pm2 restart (16 new ALTER TABLE columns).
 
-**New DB columns (v1.7.0 migration):**
-`leg1_method`, `leg2_method`, `leg1_collateral`, `leg2_collateral`, `leg1_isk_per_jump`, `leg2_isk_per_jump`, `leg1_flat_total`, `leg2_flat_total`, `leg1_service_label`, `leg2_service_label`, `leg1_self_char_id`, `leg1_self_ship`, `leg1_self_fuel`, `leg2_self_char_id`, `leg2_self_ship`, `leg2_self_fuel`
+#### What Phase 2 adds
 
-**Freight ship table** (hardcoded in IndustrySettings.tsx + types):
-Skill IDs: Amarr Freighter=20522, Caldari Freighter=20524, Gallente Freighter=20525, Minmatar Freighter=20526
-Ships: Providence (Amarr), Charon (Caldari), Obelisk (Gallente), Fenrir (Minmatar), plus T1 industrials
+**server.js:**
+- `HUB_SYSTEM_IDS` — region_id → solar system_id for all 6 trade hubs
+- `HAUL_PROVIDERS` — embedded rate tables:
+  - Red Frog: 400 ISK/m³ + 0.5% collateral, min 1M ISK, max 860k m³ (rates as of Jun 2025)
+  - Black Frog: 1200 ISK/m³ + 1% collateral, min 1.5M ISK
+  - PushX: 380 ISK/m³ + 0.5% collateral, min 1M ISK
+- `calcProviderFee(provider, volumeM3, collateral)` — splits oversized loads into multiple contracts automatically
+- `calcLegHaulCost(cfg, volumeM3, jumpCount, collateral)` — handles all 5 methods; user_defined uses max of all filled cost inputs (ISK/m³, ISK/jump, flat total)
+- `getJumpCount(originId, destId)` — calls `GET https://esi.evetech.net/latest/route/{origin}/{destination}/`, permanent in-memory cache (`jumpCountCache` Map), returns array.length − 1
+- `/api/true-cost`: full Phase 2 haul; returns `leg1_method`, `leg2_method`, `leg1_jumps`, `leg2_jumps`, `leg1_isk_per_m3_effective`, `leg2_isk_per_m3_effective`, `leg1_contracts`, `leg2_contracts`, `provider_rates_as_of`
+- `/api/top-profitable-by-skills`: adds `haul_cost_per_unit`, `haul_isk_per_m3`, `haul_volume_m3` per result row (goods-out leg, 1 unit of product)
+- v1.7.0 migrations (16 new columns on `character_industry_settings`): `leg1_method`, `leg2_method`, `leg1_collateral`, `leg2_collateral`, `leg1_isk_per_jump`, `leg2_isk_per_jump`, `leg1_flat_total`, `leg2_flat_total`, `leg1_service_label`, `leg2_service_label`, `leg1_self_char_id`, `leg1_self_ship`, `leg1_self_fuel`, `leg2_self_char_id`, `leg2_self_ship`, `leg2_self_fuel`
 
-**User-defined method** supports: ISK/m³, ISK/jump×jumpCount, flat total — uses max of all filled fields.
+**Frontend:**
+- `types/index.ts`: `HaulMethod` type; `IndustrySettings` extended with all Phase 2 fields; `TrueCostResponse.haul_cost` extended with Phase 2 fields; `MarketItem` + `TopProfitableItem` get `haulCostPerUnit`, `haulIskPerM3`, `haulVolumeM3`
+- `IndustrySettings.tsx`: per-leg method dropdown (User-Defined / Red Frog / Black Frog / PushX / Self-Haul); sub-inputs per method; freight ship table filtered to ships character can fly (skills checked client-side); break-even advisory vs Red Frog equivalent; provider rate preview line; collateral input for contract haulers; `characters` prop added (passed from App.tsx with primary + alt skill data)
+- `RightSidebar.tsx`: Haul tooltip updated — shows jump count, method label, effective ISK/m³, contracts, rates-as-of date
+- `ItemTable.tsx`: conditional `Haul/unit` column (ISK + ISK/m³ sub-line, amber colour); shown when `showHaulColumn=true`
+- `MainContent.tsx`: accepts `haulConfigured` prop, passes `showHaulColumn` to ItemTable
+- `App.tsx`: maps `haul_cost_per_unit` into `MarketItem`; passes `haulConfigured={!!industrySettings?.haul_enabled}` to MainContent; passes `characters` array (primary + non-loading alts with skills) to IndustrySettingsModal
+
+**Freight ship table** (hardcoded in `IndustrySettings.tsx`):
+| Ship | Skill ID | Cargo at L5 |
+|------|----------|-------------|
+| Bestower | 3388 (Amarr Industrial) | 6,800 m³ |
+| Sigil | 3388 | 5,600 m³ |
+| Badger | 3387 (Caldari Industrial) | 7,600 m³ |
+| Iteron Mark V | 3389 (Gallente Industrial L5) | 62,500 m³ |
+| Hoarder | 3390 (Minmatar Industrial) | 7,900 m³ |
+| Providence | 20522 (Amarr Freighter) | 895,000 m³ |
+| Charon | 20524 (Caldari Freighter) | 900,000 m³ |
+| Obelisk | 20525 (Gallente Freighter) | 995,000 m³ |
+| Fenrir | 20526 (Minmatar Freighter) | 800,000 m³ |
 
 ---
 
