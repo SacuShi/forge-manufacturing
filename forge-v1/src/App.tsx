@@ -111,6 +111,9 @@ function mapToMarketItems(
       canBuild:         owned !== '—',
       priceSource:      item.price_source ?? null,
       avg30dPrice:      item.avg_30d_price ?? null,
+      haulCostPerUnit:  item.haul_cost_per_unit ?? 0,
+      haulIskPerM3:     item.haul_isk_per_m3    ?? 0,
+      haulVolumeM3:     item.haul_volume_m3      ?? 0,
     } as MarketItem;
   });
 }
@@ -859,6 +862,7 @@ const App: FC = () => {
           onLoadMoreMarket={handleLoadMoreMarket}
           marketLoadingMore={marketLoadingMore}
           marketHasMore={marketHasMore}
+          haulConfigured={!!(industrySettings?.haul_enabled)}
           token={auth.token}
           corpStatus={corpStatus}
           accessStatus={corpAccessStatus}
@@ -922,6 +926,18 @@ const App: FC = () => {
           setIndustrySettings(settings);
           setSettingsOpen(false);
         }}
+        characters={[
+          ...(auth.character ? [{
+            characterId: auth.character.characterId,
+            name:        auth.character.name,
+            skills:      auth.skills,
+          }] : []),
+          ...auth.altCharacters.filter(a => !a.loading && !a.error).map(a => ({
+            characterId: a.characterId,
+            name:        a.name,
+            skills:      a.skills,
+          })),
+        ]}
       />
 
     </div>

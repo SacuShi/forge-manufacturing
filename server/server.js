@@ -276,6 +276,24 @@ async function runMigrations() {
   try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN leg2_haul_rate REAL DEFAULT 0`);     } catch (_) {}
   try { await dbRun(`ALTER TABLE items ADD COLUMN packaged_volume REAL DEFAULT NULL`);                        } catch (_) {}
 
+  // v1.7.0 migration: haulage Phase 2 — method selectors, collateral, per-jump, flat total, self-haul
+  try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN leg1_method       TEXT    DEFAULT 'user_defined'`); } catch (_) {}
+  try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN leg2_method       TEXT    DEFAULT 'user_defined'`); } catch (_) {}
+  try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN leg1_collateral   REAL    DEFAULT 0`); } catch (_) {}
+  try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN leg2_collateral   REAL    DEFAULT 0`); } catch (_) {}
+  try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN leg1_isk_per_jump REAL    DEFAULT 0`); } catch (_) {}
+  try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN leg2_isk_per_jump REAL    DEFAULT 0`); } catch (_) {}
+  try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN leg1_flat_total   REAL    DEFAULT 0`); } catch (_) {}
+  try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN leg2_flat_total   REAL    DEFAULT 0`); } catch (_) {}
+  try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN leg1_service_label TEXT   DEFAULT NULL`); } catch (_) {}
+  try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN leg2_service_label TEXT   DEFAULT NULL`); } catch (_) {}
+  try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN leg1_self_char_id  INTEGER DEFAULT NULL`); } catch (_) {}
+  try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN leg1_self_ship     TEXT    DEFAULT NULL`); } catch (_) {}
+  try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN leg1_self_fuel     REAL    DEFAULT 0`); } catch (_) {}
+  try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN leg2_self_char_id  INTEGER DEFAULT NULL`); } catch (_) {}
+  try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN leg2_self_ship     TEXT    DEFAULT NULL`); } catch (_) {}
+  try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN leg2_self_fuel     REAL    DEFAULT 0`); } catch (_) {}
+
   // ── v1.4.0 Corp Feature migrations ─────────────────────────────────────────
   //
   // corp_config         — one row per corporation; stores encrypted director refresh token + PIN hash
@@ -1129,6 +1147,143 @@ const HUB_STANDINGS = {
   10000030: { corp_id: 1000006, faction_id: 500002 }, // Rens — Brutor Tribe / Minmatar Republic
   10000041: { corp_id: 1000462, faction_id: 500010 }, // Syndicate — Intaki Syndicate (null-sec, no faction bonus)
 };
+
+// Hub region → main station solar system ID (for jump-count API and auto-zero haul legs)
+const HUB_SYSTEM_IDS = {
+  10000002: 30000142, // Jita IV – Moon 4 – Caldari Navy Assembly Plant
+  10000043: 30002187, // Amarr VIII (Oris) – Emperor Family Academy
+  10000032: 30002659, // Dodixie IX – Moon 20 – Federation Navy Assembly Plant
+  10000042: 30002053, // Hek VIII – Moon 12 – Boundless Creation Factory
+  10000030: 30002510, // Rens VI – Moon 8 – Brutor Tribe Treasury
+  10000041: 30045331, // Syndicate – Poitot
+};
+
+// ── Haulage provider rate tables (Phase 2) ────────────────────────────────────
+// Approximate published rates — versioned. Users should verify against provider
+// websites for current pricing; these are embedded for quick calculation only.
+const HAUL_PROVIDERS = {
+  red_frog: {
+    name:            'Red Frog',
+    max_volume_m3:   860_000,
+    max_collateral:  1_000_000_000,
+    min_fee:         1_000_000,
+    isk_per_m3:      400,
+    collateral_rate: 0.005,    // 0.5%
+    rates_as_of:     'Jun 2025',
+    note:            'Highsec only',
+  },
+  black_frog: {
+    name:            'Black Frog',
+    max_volume_m3:   860_000,
+    max_collateral:  10_000_000_000,
+    min_fee:         1_500_000,
+    isk_per_m3:      1_200,
+    collateral_rate: 0.01,     // 1%
+    rates_as_of:     'Jun 2025',
+    note:            'Lowsec / Null / WH',
+  },
+  pushx: {
+    name:            'PushX',
+    max_volume_m3:   860_000,
+    max_collateral:  1_500_000_000,
+    min_fee:         1_000_000,
+    isk_per_m3:      380,
+    collateral_rate: 0.005,    // 0.5%
+    rates_as_of:     'Jun 2025',
+    note:            'Highsec + some lowsec/null',
+  },
+};
+
+/**
+ * Calculate the total haul fee for a contract hauler provider.
+ * Handles splitting oversized loads into multiple contracts automatically.
+ *
+ * @param {string} provider - 'red_frog' | 'black_frog' | 'pushx'
+ * @param {number} volumeM3
+ * @param {number} collateral - declared cargo value in ISK (used for rate calc)
+ * @returns {{ cost: number, effectiveIskPerM3: number, contracts: number }}
+ */
+function calcProviderFee(provider, volumeM3, collateral) {
+  const p = HAUL_PROVIDERS[provider];
+  if (!p || volumeM3 <= 0) return { cost: 0, effectiveIskPerM3: 0, contracts: 1 };
+  const contracts    = Math.ceil(volumeM3 / p.max_volume_m3);
+  const volPerCon    = volumeM3   / contracts;
+  const collPerCon   = (collateral || 0) / contracts;
+  const feePerCon    = Math.max(p.min_fee, p.isk_per_m3 * volPerCon + p.collateral_rate * collPerCon);
+  const totalFee     = feePerCon * contracts;
+  const effectiveM3  = totalFee / volumeM3;
+  return { cost: totalFee, effectiveIskPerM3: effectiveM3, contracts };
+}
+
+/**
+ * Calculate haulage cost for one leg given method and volumes.
+ *
+ * @param {Object} cfg - leg config from character_industry_settings
+ * @param {number} volumeM3 - total m³ for this leg
+ * @param {number} jumpCount - jumps between origin and destination
+ * @param {number} collateral - ISK value declared (for contract providers)
+ * @returns {{ cost: number, effectiveIskPerM3: number, contracts: number, method: string }}
+ */
+function calcLegHaulCost(cfg, volumeM3, jumpCount, collateral) {
+  if (volumeM3 <= 0) return { cost: 0, effectiveIskPerM3: 0, contracts: 1, method: cfg.method };
+  const method = cfg.method || 'user_defined';
+
+  if (method === 'red_frog' || method === 'black_frog' || method === 'pushx') {
+    const result = calcProviderFee(method, volumeM3, collateral || 0);
+    return { ...result, method };
+  }
+
+  if (method === 'self_haul') {
+    const fuelCost = cfg.self_fuel || 0;
+    return {
+      cost: fuelCost,
+      effectiveIskPerM3: volumeM3 > 0 ? fuelCost / volumeM3 : 0,
+      contracts: 1,
+      method,
+    };
+  }
+
+  // user_defined — use max of whichever pricing inputs are filled
+  const rate     = cfg.rate       || 0;
+  const perJump  = cfg.isk_per_jump || 0;
+  const flat     = cfg.flat_total   || 0;
+
+  const m3Cost   = rate    > 0 ? rate    * volumeM3           : 0;
+  const jumpCost = perJump > 0 ? perJump * (jumpCount || 0)   : 0;
+
+  // "most conservative" = highest of all filled inputs
+  const candidates = [m3Cost, jumpCost, flat].filter((v) => v > 0);
+  const cost = candidates.length > 0 ? Math.max(...candidates) : 0;
+
+  return {
+    cost,
+    effectiveIskPerM3: volumeM3 > 0 ? cost / volumeM3 : rate,
+    contracts: 1,
+    method,
+  };
+}
+
+// ── Jump-count helper ──────────────────────────────────────────────────────────
+// EVE solar-system topology is static — cache jump counts permanently.
+const jumpCountCache = new Map(); // key: 'originId:destId'
+
+async function getJumpCount(originId, destId) {
+  if (!originId || !destId || originId === destId) return 0;
+  const key = `${originId}:${destId}`;
+  if (jumpCountCache.has(key)) return jumpCountCache.get(key);
+  try {
+    const url = `https://esi.evetech.net/latest/route/${originId}/${destId}/?datasource=tranquility`;
+    const resp = await fetch(url, { headers: { 'User-Agent': 'FORGE Manufacturing Intelligence/1.5' } });
+    if (!resp.ok) { console.warn(`Jump count API ${resp.status} for ${originId}→${destId}`); return 0; }
+    const route = await resp.json();
+    const jumps = Array.isArray(route) ? Math.max(0, route.length - 1) : 0;
+    jumpCountCache.set(key, jumps);
+    return jumps;
+  } catch (err) {
+    console.warn(`Jump count fetch failed ${originId}→${destId}:`, err.message);
+    return 0;
+  }
+}
 
 // ── ESI adjusted-price cache ───────────────────────────────────────────────────
 // ESI /markets/prices/ returns CCP's adjusted_price for every type_id.
@@ -4181,6 +4336,52 @@ app.get('/api/top-profitable-by-skills', security.apiLimiter, security.verifyEve
       }
     }
 
+    // ── Add haul_cost_per_unit to each result (Phase 2) ──────────────────────
+    // Uses leg2 method + rate to estimate goods-out haul cost per unit of product.
+    // Requires packaged_volume populated by sde-import.js.
+    const haulSettings = await dbGet(
+      'SELECT haul_enabled, leg2_method, leg2_haul_rate, leg2_isk_per_jump, leg2_flat_total, leg2_self_fuel, leg2_collateral, system_id FROM character_industry_settings WHERE character_id = ?',
+      [characterId]
+    );
+    const haulActive = !!(haulSettings?.haul_enabled);
+
+    if (haulActive && results.length > 0) {
+      const productIds = [...new Set(results.map(r => r.product_id))];
+      const ph = productIds.map(() => '?').join(',');
+      const volRows = await dbAll(
+        `SELECT type_id, packaged_volume FROM items WHERE type_id IN (${ph})`, productIds
+      );
+      const volMap = new Map(volRows.map(r => [r.type_id, r.packaged_volume || 0]));
+
+      // Jump count for leg2 (mfg system → sell hub)
+      const mfgSysId     = haulSettings?.system_id || 30000142;
+      const sellHubSysId = HUB_SYSTEM_IDS[regionId] || HUB_SYSTEM_IDS[10000002];
+      const leg2Jumps    = await getJumpCount(mfgSysId, sellHubSysId);
+
+      const leg2Cfg = {
+        method:       haulSettings?.leg2_method       || 'user_defined',
+        rate:         haulSettings?.leg2_haul_rate     || 0,
+        isk_per_jump: haulSettings?.leg2_isk_per_jump  || 0,
+        flat_total:   haulSettings?.leg2_flat_total    || 0,
+        self_fuel:    haulSettings?.leg2_self_fuel     || 0,
+      };
+      const leg2Col = haulSettings?.leg2_collateral || 0;
+
+      for (const item of results) {
+        const unitVol = volMap.get(item.product_id) || 0;
+        if (unitVol > 0 && leg2Jumps > 0) {
+          const r = calcLegHaulCost(leg2Cfg, unitVol, leg2Jumps, leg2Col);
+          item.haul_cost_per_unit    = r.cost;
+          item.haul_isk_per_m3       = r.effectiveIskPerM3;
+          item.haul_volume_m3        = unitVol;
+        } else {
+          item.haul_cost_per_unit    = 0;
+          item.haul_isk_per_m3       = 0;
+          item.haul_volume_m3        = unitVol;
+        }
+      }
+    }
+
     console.log(`✓ Top ${results.length} profitable items (filtered by skills for character ${characterId})`);
 
     // Get last run info
@@ -4651,8 +4852,26 @@ app.get('/api/industry-settings', security.apiLimiter, security.verifyEveToken, 
       material_region_id:   10000002,
       material_region_name: 'Jita',
       haul_enabled:         0,
+      // Phase 1 — flat rate fields (kept for backward compat)
       leg1_haul_rate:       0,
       leg2_haul_rate:       0,
+      // Phase 2 — method + per-method params
+      leg1_method:          'user_defined',
+      leg2_method:          'user_defined',
+      leg1_collateral:      0,
+      leg2_collateral:      0,
+      leg1_isk_per_jump:    0,
+      leg2_isk_per_jump:    0,
+      leg1_flat_total:      0,
+      leg2_flat_total:      0,
+      leg1_service_label:   null,
+      leg2_service_label:   null,
+      leg1_self_char_id:    null,
+      leg1_self_ship:       null,
+      leg1_self_fuel:       0,
+      leg2_self_char_id:    null,
+      leg2_self_ship:       null,
+      leg2_self_fuel:       0,
     });
   } catch (err) {
     console.error('Industry settings GET error:', err.message);
@@ -4776,8 +4995,26 @@ app.post('/api/industry-settings', security.apiLimiter, security.verifyEveToken,
       material_region_id   = 10000002,
       material_region_name = 'Jita',
       haul_enabled         = false,
+      // Phase 1 — flat rate (user_defined ISK/m³)
       leg1_haul_rate       = 0,
       leg2_haul_rate       = 0,
+      // Phase 2 — method + per-method params
+      leg1_method          = 'user_defined',
+      leg2_method          = 'user_defined',
+      leg1_collateral      = 0,
+      leg2_collateral      = 0,
+      leg1_isk_per_jump    = 0,
+      leg2_isk_per_jump    = 0,
+      leg1_flat_total      = 0,
+      leg2_flat_total      = 0,
+      leg1_service_label   = null,
+      leg2_service_label   = null,
+      leg1_self_char_id    = null,
+      leg1_self_ship       = null,
+      leg1_self_fuel       = 0,
+      leg2_self_char_id    = null,
+      leg2_self_ship       = null,
+      leg2_self_fuel       = 0,
     } = req.body;
 
     // Validate: facility_tax must be 0–100
@@ -4788,15 +5025,26 @@ app.post('/api/industry-settings', security.apiLimiter, security.verifyEveToken,
       ? parseInt(material_region_id)
       : 10000002;
 
-    const leg1Rate = Math.max(0, parseFloat(leg1_haul_rate) || 0);
-    const leg2Rate = Math.max(0, parseFloat(leg2_haul_rate) || 0);
+    const VALID_METHODS = ['user_defined', 'red_frog', 'black_frog', 'pushx', 'self_haul'];
+    const leg1Rate  = Math.max(0, parseFloat(leg1_haul_rate)    || 0);
+    const leg2Rate  = Math.max(0, parseFloat(leg2_haul_rate)    || 0);
+    const l1method  = VALID_METHODS.includes(leg1_method) ? leg1_method : 'user_defined';
+    const l2method  = VALID_METHODS.includes(leg2_method) ? leg2_method : 'user_defined';
 
     await dbRun(`
       INSERT INTO character_industry_settings
         (character_id, system_id, system_name, structure_type_id,
          rig_ids, facility_tax, material_region_id, material_region_name,
-         haul_enabled, leg1_haul_rate, leg2_haul_rate, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         haul_enabled, leg1_haul_rate, leg2_haul_rate,
+         leg1_method, leg2_method,
+         leg1_collateral, leg2_collateral,
+         leg1_isk_per_jump, leg2_isk_per_jump,
+         leg1_flat_total, leg2_flat_total,
+         leg1_service_label, leg2_service_label,
+         leg1_self_char_id, leg1_self_ship, leg1_self_fuel,
+         leg2_self_char_id, leg2_self_ship, leg2_self_fuel,
+         updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(character_id) DO UPDATE SET
         system_id            = excluded.system_id,
         system_name          = excluded.system_name,
@@ -4808,6 +5056,22 @@ app.post('/api/industry-settings', security.apiLimiter, security.verifyEveToken,
         haul_enabled         = excluded.haul_enabled,
         leg1_haul_rate       = excluded.leg1_haul_rate,
         leg2_haul_rate       = excluded.leg2_haul_rate,
+        leg1_method          = excluded.leg1_method,
+        leg2_method          = excluded.leg2_method,
+        leg1_collateral      = excluded.leg1_collateral,
+        leg2_collateral      = excluded.leg2_collateral,
+        leg1_isk_per_jump    = excluded.leg1_isk_per_jump,
+        leg2_isk_per_jump    = excluded.leg2_isk_per_jump,
+        leg1_flat_total      = excluded.leg1_flat_total,
+        leg2_flat_total      = excluded.leg2_flat_total,
+        leg1_service_label   = excluded.leg1_service_label,
+        leg2_service_label   = excluded.leg2_service_label,
+        leg1_self_char_id    = excluded.leg1_self_char_id,
+        leg1_self_ship       = excluded.leg1_self_ship,
+        leg1_self_fuel       = excluded.leg1_self_fuel,
+        leg2_self_char_id    = excluded.leg2_self_char_id,
+        leg2_self_ship       = excluded.leg2_self_ship,
+        leg2_self_fuel       = excluded.leg2_self_fuel,
         updated_at           = excluded.updated_at
     `, [
       characterId,
@@ -4821,6 +5085,21 @@ app.post('/api/industry-settings', security.apiLimiter, security.verifyEveToken,
       haul_enabled ? 1 : 0,
       leg1Rate,
       leg2Rate,
+      l1method, l2method,
+      Math.max(0, parseFloat(leg1_collateral)   || 0),
+      Math.max(0, parseFloat(leg2_collateral)   || 0),
+      Math.max(0, parseFloat(leg1_isk_per_jump) || 0),
+      Math.max(0, parseFloat(leg2_isk_per_jump) || 0),
+      Math.max(0, parseFloat(leg1_flat_total)   || 0),
+      Math.max(0, parseFloat(leg2_flat_total)   || 0),
+      leg1_service_label || null,
+      leg2_service_label || null,
+      leg1_self_char_id  || null,
+      leg1_self_ship     || null,
+      Math.max(0, parseFloat(leg1_self_fuel)    || 0),
+      leg2_self_char_id  || null,
+      leg2_self_ship     || null,
+      Math.max(0, parseFloat(leg2_self_fuel)    || 0),
       new Date().toISOString(),
     ]);
 
@@ -5035,48 +5314,95 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
     const transactionTax = sellPrice * transactionTaxRate;
     const totalSalesTax  = brokerFee + transactionTax;
 
-    // ── Haulage (Box 5) ───────────────────────────────────────────────────
-    // Phase 1: user-defined ISK/m³ rates only.
-    // Requires packaged_volume in the items table (populated by sde-import.js).
-    // Silently returns 0 costs when volumes or rates are unavailable.
+    // ── Haulage (Box 5) — Phase 2 ─────────────────────────────────────────
+    // Supports user_defined (ISK/m³, ISK/jump, flat), red_frog, black_frog,
+    // pushx, and self_haul methods.
+    // Requires packaged_volume in items table (populated by sde-import.js).
+    // Silently returns 0 when volumes or rates are absent — no breaking change.
     const haulEnabled  = !!(settings?.haul_enabled);
-    const leg1Rate     = settings?.leg1_haul_rate || 0;
-    const leg2Rate     = settings?.leg2_haul_rate || 0;
 
-    let leg1VolM3 = 0;
-    let leg2VolM3 = 0;
-    let leg1Cost  = 0;
-    let leg2Cost  = 0;
+    let leg1VolM3 = 0, leg2VolM3 = 0;
+    let leg1Cost  = 0, leg2Cost  = 0;
+    let leg1EffM3 = 0, leg2EffM3 = 0;
+    let leg1Contracts = 1, leg2Contracts = 1;
+    let leg1Jumps = 0, leg2Jumps = 0;
 
-    if (haulEnabled && (leg1Rate > 0 || leg2Rate > 0)) {
-      // Fetch packaged volumes for all materials in one query
-      if (leg1Rate > 0 && materials.length > 0) {
+    if (haulEnabled) {
+      // Determine system IDs for jump-count lookups
+      const sourceHubSysId = HUB_SYSTEM_IDS[matRegionId]  || HUB_SYSTEM_IDS[10000002];
+      const sellHubSysId   = HUB_SYSTEM_IDS[sellRegionId] || HUB_SYSTEM_IDS[10000002];
+      const mfgSysId       = settings?.system_id || 30000142;
+
+      // Fetch jump counts (cached permanently; only called once per unique pair)
+      [leg1Jumps, leg2Jumps] = await Promise.all([
+        getJumpCount(sourceHubSysId, mfgSysId),
+        getJumpCount(mfgSysId, sellHubSysId),
+      ]);
+
+      // Build leg configs from settings
+      const leg1Cfg = {
+        method:       settings?.leg1_method        || 'user_defined',
+        rate:         settings?.leg1_haul_rate      || 0,
+        isk_per_jump: settings?.leg1_isk_per_jump   || 0,
+        flat_total:   settings?.leg1_flat_total      || 0,
+        self_fuel:    settings?.leg1_self_fuel       || 0,
+        self_ship:    settings?.leg1_self_ship       || null,
+      };
+      const leg2Cfg = {
+        method:       settings?.leg2_method        || 'user_defined',
+        rate:         settings?.leg2_haul_rate      || 0,
+        isk_per_jump: settings?.leg2_isk_per_jump   || 0,
+        flat_total:   settings?.leg2_flat_total      || 0,
+        self_fuel:    settings?.leg2_self_fuel       || 0,
+        self_ship:    settings?.leg2_self_ship       || null,
+      };
+      const leg1Col = settings?.leg1_collateral || 0;
+      const leg2Col = settings?.leg2_collateral || 0;
+
+      // Leg 1: material volumes (all materials, ME-adjusted, × runs)
+      const isLeg1Active = leg1Cfg.method !== 'user_defined'
+        || leg1Cfg.rate > 0 || leg1Cfg.isk_per_jump > 0 || leg1Cfg.flat_total > 0;
+
+      if (isLeg1Active && leg1Jumps > 0 && materials.length > 0) {
         const matIds = materials.map(m => m.material_id);
         const ph = matIds.map(() => '?').join(',');
         const volRows = await dbAll(
-          `SELECT type_id, packaged_volume FROM items WHERE type_id IN (${ph})`,
-          matIds
+          `SELECT type_id, packaged_volume FROM items WHERE type_id IN (${ph})`, matIds
         );
         const volMap = new Map(volRows.map(r => [r.type_id, r.packaged_volume || 0]));
         for (const mat of materials) {
           const adjQty = Math.max(1, Math.ceil(mat.quantity * meFactor)) * runs;
           leg1VolM3 += (volMap.get(mat.material_id) || 0) * adjQty;
         }
-        leg1Cost = leg1VolM3 * leg1Rate;
+        const l1result = calcLegHaulCost(leg1Cfg, leg1VolM3, leg1Jumps, leg1Col);
+        leg1Cost = l1result.cost; leg1EffM3 = l1result.effectiveIskPerM3; leg1Contracts = l1result.contracts;
+      } else if (isLeg1Active && leg1Jumps === 0 && leg1Cfg.method === 'self_haul') {
+        // Self-haul with same-location — fuel cost still applies if entered
+        const l1result = calcLegHaulCost(leg1Cfg, 1, 0, leg1Col);
+        leg1Cost = l1result.cost;
       }
 
-      // Product volume × runs
-      if (leg2Rate > 0) {
+      // Leg 2: finished product volume × runs
+      const isLeg2Active = leg2Cfg.method !== 'user_defined'
+        || leg2Cfg.rate > 0 || leg2Cfg.isk_per_jump > 0 || leg2Cfg.flat_total > 0;
+
+      if (isLeg2Active && leg2Jumps > 0) {
         const productVolRow = await dbGet(
           'SELECT packaged_volume FROM items WHERE type_id = ?', [product_id]
         );
         const productQty = (blueprint.product_quantity || 1) * runs;
         leg2VolM3 = (productVolRow?.packaged_volume || 0) * productQty;
-        leg2Cost  = leg2VolM3 * leg2Rate;
+        const l2result = calcLegHaulCost(leg2Cfg, leg2VolM3, leg2Jumps, leg2Col);
+        leg2Cost = l2result.cost; leg2EffM3 = l2result.effectiveIskPerM3; leg2Contracts = l2result.contracts;
+      } else if (isLeg2Active && leg2Jumps === 0 && leg2Cfg.method === 'self_haul') {
+        const l2result = calcLegHaulCost(leg2Cfg, 1, 0, leg2Col);
+        leg2Cost = l2result.cost;
       }
     }
 
     const totalHaulCost = leg1Cost + leg2Cost;
+    const leg1Method = settings?.leg1_method || 'user_defined';
+    const leg2Method = settings?.leg2_method || 'user_defined';
 
     // ── True profit ────────────────────────────────────────────────────────
     const trueProfit = sellPrice - brokerFee - transactionTax - totalMaterialCost - totalJobCost - totalHaulCost;
@@ -5119,17 +5445,34 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
         accounting_level:         accounting,
       },
 
-      // Box 5 — haulage
+      // Box 5 — haulage (Phase 2)
       haul_cost: {
-        total:                    totalHaulCost,
-        leg1_cost:                leg1Cost,
-        leg2_cost:                leg2Cost,
-        leg1_volume_m3:           leg1VolM3,
-        leg2_volume_m3:           leg2VolM3,
-        leg1_rate:                leg1Rate,
-        leg2_rate:                leg2Rate,
-        leg1_isk_per_m3_effective: leg1Rate,
-        leg2_isk_per_m3_effective: leg2Rate,
+        total:                     totalHaulCost,
+        leg1_cost:                 leg1Cost,
+        leg2_cost:                 leg2Cost,
+        leg1_volume_m3:            leg1VolM3,
+        leg2_volume_m3:            leg2VolM3,
+        // Phase 1 compat: leg1_rate / leg2_rate = raw ISK/m³ from user_defined
+        leg1_rate:                 settings?.leg1_haul_rate || 0,
+        leg2_rate:                 settings?.leg2_haul_rate || 0,
+        // Phase 2 fields
+        leg1_method:               leg1Method,
+        leg2_method:               leg2Method,
+        leg1_jumps:                leg1Jumps,
+        leg2_jumps:                leg2Jumps,
+        leg1_isk_per_m3_effective: leg1EffM3,
+        leg2_isk_per_m3_effective: leg2EffM3,
+        leg1_contracts:            leg1Contracts,
+        leg2_contracts:            leg2Contracts,
+        leg1_collateral:           settings?.leg1_collateral || 0,
+        leg2_collateral:           settings?.leg2_collateral || 0,
+        leg1_service_label:        settings?.leg1_service_label || null,
+        leg2_service_label:        settings?.leg2_service_label || null,
+        leg1_self_ship:            settings?.leg1_self_ship || null,
+        leg2_self_ship:            settings?.leg2_self_ship || null,
+        provider_rates_as_of:      leg1Method in HAUL_PROVIDERS || leg2Method in HAUL_PROVIDERS
+                                     ? (HAUL_PROVIDERS[leg1Method] || HAUL_PROVIDERS[leg2Method])?.rates_as_of
+                                     : null,
       },
 
       // Box 4 + summary — true profit

@@ -2,7 +2,7 @@
 
 > This file is the authoritative context document for Claude sessions working on this project.
 > Read this first. Update it whenever significant decisions, changes, or discoveries are made.
-> Last updated: v1.5.5 — AI chat fix, clickable jobs, server-side market search, tooltip fix; haulage proposal pending
+> Last updated: v1.7.0 — Haulage Phase 2 in progress (method selectors, Red/Black Frog/PushX rate tables, self-haul, market haul column, jump counts)
 
 ---
 
@@ -794,31 +794,39 @@ wallet, blueprints, assets, active jobs, trained skills.
 
 ---
 
-### Pending feature proposal — Haulage Costs (NOT YET IMPLEMENTED — awaiting approval)
+### v1.6.0 — Haulage Phase 1 ✓ DEPLOYED
 
-**Summary:** Add ISK/m³ haul rates for two legs (materials in, goods out) to the Industry Settings modal. Server computes haul cost using packaged item volumes from the SDE and adds a 5th "Haulage" box to the True Profit panel.
+- `packaged_volume REAL` added to `items` table via sde-import.js
+- `haul_enabled`, `leg1_haul_rate`, `leg2_haul_rate` columns in `character_industry_settings`
+- `/api/true-cost` computes haul cost using packaged volumes × ISK/m³ rate
+- `RightSidebar`: 5th "Haulage" cost box with tooltip
+- `IndustrySettings`: Haulage section with two rate inputs + auto-zero when mfg = hub
+- `RightSidebar`: runs selector (× 1/2/5/10/20/50/100 runs) in True Profit heading
+- `App.tsx`: `buildRuns` state → passed to `useTrueCost` hook
 
-**Two haul legs:**
-- Leg 1: source hub → manufacturing system (raw materials, volume = Σ material packaged volumes)
-- Leg 2: manufacturing system → sell hub (finished product, volume = product packaged volume × runs)
+### v1.7.0 — Haulage Phase 2 (IN PROGRESS)
 
-**User inputs (in ⚙ Mfg Setup modal):**
-- Leg 1 ISK/m³ rate (auto-labelled with route, e.g. "Jita → Amarr III")
-- Leg 2 ISK/m³ rate (auto-set to 0 if mfg system = sell hub)
+**Design brief:** `C:\Users\AndyMcD\Desktop\New Text Document (3).txt`
 
-**Required code changes:**
-1. `sde-import.js` — add `packaged_volume REAL` to `items` table; populate from `types.json`
-2. `server.js` — add `leg1_haul_rate`, `leg2_haul_rate` columns to `character_industry_settings`; update `/api/industry-settings` GET/POST; extend `/api/true-cost` to compute haul cost
-3. `IndustrySettings.tsx` — add Haulage section with two rate inputs and auto-labelled routes
-4. `RightSidebar.tsx` — add 5th "Haulage" cost box; update True Profit formula tooltip
-5. `types/index.ts` — add `haul_cost`, `leg1_haul_cost`, `leg2_haul_cost` to `TrueCostResponse`
+**Phase 2 adds:**
+- **Method selector per leg** — User-Defined, Red Frog, Black Frog, PushX, Self-Haul
+- **Embedded rate formulas** for Red Frog (400 ISK/m³ + 0.5% collateral, min 1M), Black Frog (1200 + 1%, min 1.5M), PushX (380 + 0.5%, min 1M) — rates as of Jun 2025
+- **EVE route API** `getJumpCount(originId, destId)` — permanent server-side cache; called for leg1 (sourceHub→mfg) and leg2 (mfg→sellHub)
+- **HUB_SYSTEM_IDS** map added to server.js (region_id → system_id for all 6 hubs)
+- **`calcLegHaulCost(cfg, volumeM3, jumpCount, collateral)`** helper — handles all methods
+- **`calcProviderFee(provider, m3, collateral)`** — splits oversized loads into multiple contracts
+- **Market table Haul/unit column** — `haul_cost_per_unit` + `haul_isk_per_m3` added to top-profitable-by-skills results
+- **Self-haul** — ship selector (character + ship from hardcoded freight table), cargo at skill level, trip count, fuel cost input, break-even vs Red Frog
+- **Updated Haul tooltip** — shows jump count, effective ISK/m³, contracts count, rates-as-of date
 
-**One-time server action required after deploy:** Re-run `node sde-import.js` to populate `packaged_volume`. True Profit silently returns 0 haul cost if volume data is absent — no breaking change.
+**New DB columns (v1.7.0 migration):**
+`leg1_method`, `leg2_method`, `leg1_collateral`, `leg2_collateral`, `leg1_isk_per_jump`, `leg2_isk_per_jump`, `leg1_flat_total`, `leg2_flat_total`, `leg1_service_label`, `leg2_service_label`, `leg1_self_char_id`, `leg1_self_ship`, `leg1_self_fuel`, `leg2_self_char_id`, `leg2_self_ship`, `leg2_self_fuel`
 
-**Open questions (pending user answers before implementation):**
-1. Auto-set leg to 0 when manufacturing location = sell hub?
-2. Haulage as a 5th box, or folded as a sub-line under Mfg Fees?
-3. Show haul-adjusted column in Market Opportunities table, or detail panel only?
+**Freight ship table** (hardcoded in IndustrySettings.tsx + types):
+Skill IDs: Amarr Freighter=20522, Caldari Freighter=20524, Gallente Freighter=20525, Minmatar Freighter=20526
+Ships: Providence (Amarr), Charon (Caldari), Obelisk (Gallente), Fenrir (Minmatar), plus T1 industrials
+
+**User-defined method** supports: ISK/m³, ISK/jump×jumpCount, flat total — uses max of all filled fields.
 
 ---
 

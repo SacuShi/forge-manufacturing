@@ -30,6 +30,8 @@ interface MainContentProps {
   onLoadMoreMarket?: () => void;
   marketLoadingMore?: boolean;
   marketHasMore?: boolean;
+  /** v1.7 — show Haul/unit column when true (haulage configured in industry settings) */
+  haulConfigured?: boolean;
   /** Controlled search query — parent handles the server-side search */
   marketSearchQuery: string;
   marketSearching: boolean;
@@ -80,6 +82,7 @@ const MainContent: FC<MainContentProps> = ({
   onLoadMoreMarket,
   marketLoadingMore,
   marketHasMore,
+  haulConfigured = false,
   blueprints,
   assets,
   activeJobs,
@@ -343,6 +346,7 @@ const MainContent: FC<MainContentProps> = ({
                 sortDirection={sortDirection}
                 onSort={handleSort}
                 onSelect={onMarketSelect}
+                showHaulColumn={haulConfigured}
               />
               {!marketSearchQuery && (marketHasMore || marketLoadingMore) && (
                 <div style={{

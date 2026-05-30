@@ -962,89 +962,101 @@ const RightSidebar: FC<RightSidebarProps> = ({
               </div>
             )}
 
-            {/* ── Haul box row — shown whenever haul rates are configured ── */}
-            {trueCostData && !trueCostLoading &&
-              (trueCostData.haul_cost.leg1_rate > 0 || trueCostData.haul_cost.leg2_rate > 0) && (
-              <div className="cost-breakdown-row" style={{ marginTop: 4 }}>
+            {/* ── Haul box row — shown when any haul is configured ── */}
+            {trueCostData && !trueCostLoading && (() => {
+              const h = trueCostData.haul_cost;
+              // Show box if any method is non-default or rates > 0
+              const leg1Active = h.leg1_method !== 'user_defined' || h.leg1_rate > 0;
+              const leg2Active = h.leg2_method !== 'user_defined' || h.leg2_rate > 0;
+              if (!leg1Active && !leg2Active) return null;
 
-                {/* Box 5 — Haulage */}
-                <div className="cost-box haulage" style={{ flex: '0 0 calc(50% - 4px)' }}>
-                  <span className="cost-box-label">Haulage</span>
-                  <span className="cost-box-value">
-                    {trueCostData.haul_cost.total > 0
-                      ? formatISK(trueCostData.haul_cost.total)
-                      : '—'}
-                  </span>
-                  {/* Tooltip */}
-                  <div className="cost-tooltip">
-                    {trueCostData.haul_cost.leg1_rate > 0 && (
-                      <>
+              const methodLabel = (m: string, ship: string | null, label: string | null) => {
+                if (m === 'red_frog')   return 'Red Frog';
+                if (m === 'black_frog') return 'Black Frog';
+                if (m === 'pushx')      return 'PushX';
+                if (m === 'self_haul')  return ship ? `Self — ${ship}` : 'Self-Haul';
+                return label || 'User-Defined';
+              };
+
+              const jumpStr = (j: number) => j > 0 ? ` · ${j} jump${j !== 1 ? 's' : ''}` : '';
+
+              return (
+                <div className="cost-breakdown-row" style={{ marginTop: 4 }}>
+                  <div className="cost-box haulage" style={{ flex: '0 0 calc(50% - 4px)' }}>
+                    <span className="cost-box-label">Haulage</span>
+                    <span className="cost-box-value">
+                      {h.total > 0 ? formatISK(h.total) : '—'}
+                    </span>
+                    <div className="cost-tooltip">
+                      {/* Leg 1 */}
+                      {leg1Active && h.leg1_jumps > 0 ? (
+                        <>
+                          <div className="cost-tooltip-row">
+                            <span>Materials in{jumpStr(h.leg1_jumps)}</span>
+                            <span>{h.leg1_cost > 0 ? formatISK(h.leg1_cost) : '—'}</span>
+                          </div>
+                          <div className="cost-tooltip-sub">
+                            {methodLabel(h.leg1_method, h.leg1_self_ship, h.leg1_service_label)}
+                            {h.leg1_volume_m3 > 0 && ` · ${Math.round(h.leg1_volume_m3).toLocaleString()} m³`}
+                            {h.leg1_isk_per_m3_effective > 0 && ` · ${Math.round(h.leg1_isk_per_m3_effective).toLocaleString()} ISK/m³`}
+                            {h.leg1_contracts > 1 && ` · ${h.leg1_contracts} contracts`}
+                          </div>
+                        </>
+                      ) : (
                         <div className="cost-tooltip-row">
                           <span>Materials in</span>
-                          <span>{trueCostData.haul_cost.leg1_cost > 0
-                            ? formatISK(trueCostData.haul_cost.leg1_cost)
-                            : '—'}</span>
+                          <span style={{ color: 'var(--color-text-tertiary)' }}>
+                            {leg1Active && h.leg1_jumps === 0 ? 'Same location' : 'Not configured'}
+                          </span>
                         </div>
-                        <div className="cost-tooltip-sub">
-                          {trueCostData.haul_cost.leg1_volume_m3 > 0
-                            ? `${trueCostData.haul_cost.leg1_volume_m3.toLocaleString(undefined, { maximumFractionDigits: 0 })} m³ · `
-                            : 'Volume pending SDE import · '}
-                          {trueCostData.haul_cost.leg1_rate.toLocaleString()} ISK/m³
-                        </div>
-                      </>
-                    )}
-                    {trueCostData.haul_cost.leg1_rate === 0 && (
-                      <div className="cost-tooltip-row">
-                        <span>Materials in</span>
-                        <span style={{ color: 'var(--color-text-tertiary)' }}>Same location</span>
-                      </div>
-                    )}
-                    {trueCostData.haul_cost.leg2_rate > 0 && (
-                      <>
+                      )}
+                      {/* Leg 2 */}
+                      {leg2Active && h.leg2_jumps > 0 ? (
+                        <>
+                          <div className="cost-tooltip-row">
+                            <span>Goods out{jumpStr(h.leg2_jumps)}</span>
+                            <span>{h.leg2_cost > 0 ? formatISK(h.leg2_cost) : '—'}</span>
+                          </div>
+                          <div className="cost-tooltip-sub">
+                            {methodLabel(h.leg2_method, h.leg2_self_ship, h.leg2_service_label)}
+                            {h.leg2_volume_m3 > 0 && ` · ${Math.round(h.leg2_volume_m3).toLocaleString()} m³`}
+                            {h.leg2_isk_per_m3_effective > 0 && ` · ${Math.round(h.leg2_isk_per_m3_effective).toLocaleString()} ISK/m³`}
+                            {h.leg2_contracts > 1 && ` · ${h.leg2_contracts} contracts`}
+                          </div>
+                        </>
+                      ) : (
                         <div className="cost-tooltip-row">
                           <span>Goods out</span>
-                          <span>{trueCostData.haul_cost.leg2_cost > 0
-                            ? formatISK(trueCostData.haul_cost.leg2_cost)
-                            : '—'}</span>
+                          <span style={{ color: 'var(--color-text-tertiary)' }}>
+                            {leg2Active && h.leg2_jumps === 0 ? 'Same location' : 'Not configured'}
+                          </span>
                         </div>
-                        <div className="cost-tooltip-sub">
-                          {trueCostData.haul_cost.leg2_volume_m3 > 0
-                            ? `${trueCostData.haul_cost.leg2_volume_m3.toLocaleString(undefined, { maximumFractionDigits: 0 })} m³ · `
-                            : 'Volume pending SDE import · '}
-                          {trueCostData.haul_cost.leg2_rate.toLocaleString()} ISK/m³
+                      )}
+                      <div className="cost-tooltip-divider" />
+                      <div className="cost-tooltip-row total">
+                        <span>Total Haul</span>
+                        <span style={{ color: 'var(--color-warning)' }}>
+                          {h.total > 0 ? formatISK(h.total) : '— awaiting volume data'}
+                        </span>
+                      </div>
+                      {h.total === 0 && (
+                        <div className="cost-tooltip-setup" style={{ color: 'var(--color-warning)', opacity: 0.8 }}>
+                          ⟳ Run node sde-import.js on the server to calculate volumes.
                         </div>
-                      </>
-                    )}
-                    {trueCostData.haul_cost.leg2_rate === 0 && (
-                      <div className="cost-tooltip-row">
-                        <span>Goods out</span>
-                        <span style={{ color: 'var(--color-text-tertiary)' }}>Same location</span>
+                      )}
+                      {h.provider_rates_as_of && (
+                        <div className="cost-tooltip-setup">
+                          Provider rates as of {h.provider_rates_as_of} — verify at provider website.
+                        </div>
+                      )}
+                      <div className="cost-tooltip-setup">
+                        Haul cost deducted from True Profit. Adjust in ⚙ Mfg Setup → Haulage.
                       </div>
-                    )}
-                    <div className="cost-tooltip-divider" />
-                    <div className="cost-tooltip-row total">
-                      <span>Total Haul</span>
-                      <span style={{ color: 'var(--color-warning)' }}>
-                        {trueCostData.haul_cost.total > 0
-                          ? formatISK(trueCostData.haul_cost.total)
-                          : '— awaiting SDE import'}
-                      </span>
-                    </div>
-                    {trueCostData.haul_cost.total === 0 && (
-                      <div className="cost-tooltip-setup" style={{ color: 'var(--color-warning)', opacity: 0.8 }}>
-                        ⟳ Rates configured but item volumes not yet loaded.
-                        Run node sde-import.js on the server to calculate exact haul costs.
-                      </div>
-                    )}
-                    <div className="cost-tooltip-setup">
-                      Haul cost deducted from True Profit.
-                      Adjust rates in ⚙ Mfg Setup → Haulage.
                     </div>
                   </div>
                 </div>
-
-              </div>
-            )}
+              );
+            })()}
 
             {!trueCostData && !trueCostLoading && !trueCostError && (
               <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', padding: '6px 0' }}>

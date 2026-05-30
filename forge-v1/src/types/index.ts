@@ -42,6 +42,12 @@ export interface MarketItem {
   priceSource?: string | null;
   /** 30-day average price when sell orders are absent (display reference only) */
   avg30dPrice?: number | null;
+  /** v1.7 — haul cost for 1 finished unit (goods-out leg) */
+  haulCostPerUnit?: number;
+  /** v1.7 — effective ISK/m³ for the goods-out leg */
+  haulIskPerM3?: number;
+  /** v1.7 — packaged volume of the product in m³ */
+  haulVolumeM3?: number;
 }
 
 export interface Material {
@@ -182,6 +188,10 @@ export interface TopProfitableItem {
   price_source?: string | null;
   /** 30-day average trade price from ESI history (0 if unavailable) */
   avg_30d_price?: number | null;
+  /** v1.7 — haul cost per unit of finished product (goods-out leg) */
+  haul_cost_per_unit?: number;
+  haul_isk_per_m3?: number;
+  haul_volume_m3?: number;
 }
 
 export interface TopProfitableResponse {
@@ -295,6 +305,8 @@ export interface SystemSearchResult {
   system_name: string;
 }
 
+export type HaulMethod = 'user_defined' | 'red_frog' | 'black_frog' | 'pushx' | 'self_haul';
+
 /** Character manufacturing setup — stored in character_industry_settings */
 export interface IndustrySettings {
   system_id:            number | null;
@@ -307,10 +319,27 @@ export interface IndustrySettings {
   /** Region ID of the hub where materials are sourced (default 10000002 = Jita) */
   material_region_id?:   number;
   material_region_name?: string | null;
-  /** v1.6 — Haulage rates (ISK per m³). 0 = no haul on that leg. */
+  /** v1.6 — Haulage (Phase 1 compat) */
   haul_enabled:          boolean;
-  leg1_haul_rate:        number;   // materials in: source hub → mfg system
-  leg2_haul_rate:        number;   // goods out:   mfg system → sell hub
+  leg1_haul_rate:        number;   // ISK/m³ (user_defined)
+  leg2_haul_rate:        number;
+  /** v1.7 — Phase 2 method + per-method params */
+  leg1_method?:          HaulMethod;
+  leg2_method?:          HaulMethod;
+  leg1_collateral?:      number;
+  leg2_collateral?:      number;
+  leg1_isk_per_jump?:    number;
+  leg2_isk_per_jump?:    number;
+  leg1_flat_total?:      number;
+  leg2_flat_total?:      number;
+  leg1_service_label?:   string | null;
+  leg2_service_label?:   string | null;
+  leg1_self_char_id?:    number | null;
+  leg1_self_ship?:       string | null;
+  leg1_self_fuel?:       number;
+  leg2_self_char_id?:    number | null;
+  leg2_self_ship?:       string | null;
+  leg2_self_fuel?:       number;
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -442,17 +471,32 @@ export interface TrueCostResponse {
     accounting_level:       number;
   };
 
-  /** v1.6 — Haulage (Box 5). Zero values when haul not configured. */
+  /** v1.6/v1.7 — Haulage (Box 5). Zero values when haul not configured. */
   haul_cost: {
     total:          number;
-    leg1_cost:      number;   // materials in
-    leg2_cost:      number;   // goods out
-    leg1_volume_m3: number;   // total m³ of materials (ME-adjusted, × runs)
-    leg2_volume_m3: number;   // product packaged volume × runs
-    leg1_rate:      number;   // ISK/m³ applied
+    leg1_cost:      number;
+    leg2_cost:      number;
+    leg1_volume_m3: number;
+    leg2_volume_m3: number;
+    /** Phase 1 compat — raw ISK/m³ for user_defined; 0 for provider methods */
+    leg1_rate:      number;
     leg2_rate:      number;
-    leg1_isk_per_m3_effective: number;  // same as leg1_rate in Phase 1; differs in Phase 2 (Red Frog)
+    /** Phase 2 */
+    leg1_method:               string;
+    leg2_method:               string;
+    leg1_jumps:                number;
+    leg2_jumps:                number;
+    leg1_isk_per_m3_effective: number;
     leg2_isk_per_m3_effective: number;
+    leg1_contracts:            number;
+    leg2_contracts:            number;
+    leg1_collateral:           number;
+    leg2_collateral:           number;
+    leg1_service_label:        string | null;
+    leg2_service_label:        string | null;
+    leg1_self_ship:            string | null;
+    leg2_self_ship:            string | null;
+    provider_rates_as_of:      string | null;
   };
 
   true_profit:  number;

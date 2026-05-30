@@ -40,6 +40,8 @@ interface ItemTableProps {
   sortDirection: SortDirection;
   onSort: (field: SortField) => void;
   onSelect: (typeId: number) => void;
+  /** v1.7 — show Haul/unit column when haulage is configured */
+  showHaulColumn?: boolean;
 }
 
 interface ColDef {
@@ -53,7 +55,7 @@ interface ColDef {
 
 const ICON_BASE = 'https://images.evetech.net/types';
 
-const COLUMNS: ColDef[] = [
+const BASE_COLUMNS: ColDef[] = [
   { label: '#',          field: 'rank',            align: 'center' },
   { label: 'Item',       field: null                               },
   { label: 'Profit/Run', field: 'profitPerRun',    align: 'right'  },
@@ -63,6 +65,8 @@ const COLUMNS: ColDef[] = [
   { label: 'Owned',      field: null,               align: 'center' },
   { label: 'Action',     field: null,               align: 'center' },
 ];
+
+const HAUL_COLUMN: ColDef = { label: 'Haul/unit', field: null, align: 'right' };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -82,12 +86,19 @@ const ItemTable: FC<ItemTableProps> = ({
   sortDirection,
   onSort,
   onSelect,
-}) => (
+  showHaulColumn = false,
+}) => {
+  // Insert Haul/unit before 'Owned' when enabled
+  const columns = showHaulColumn
+    ? [...BASE_COLUMNS.slice(0, 6), HAUL_COLUMN, ...BASE_COLUMNS.slice(6)]
+    : BASE_COLUMNS;
+
+  return (
   <div className="table-wrap" role="region" aria-label="Market opportunities table">
     <table>
       <thead>
         <tr>
-          {COLUMNS.map((col) => {
+          {columns.map((col) => {
             const isSorted  = col.field === sortField;
             const ariaSort  = isSorted
               ? (sortDirection === 'asc' ? 'ascending' : 'descending')
@@ -186,6 +197,26 @@ const ItemTable: FC<ItemTableProps> = ({
                 <span className="num">{item.buildTime}</span>
               </td>
 
+              {/* Haul/unit — only rendered when showHaulColumn */}
+              {showHaulColumn && (
+                <td className="align-right">
+                  {(item.haulCostPerUnit ?? 0) > 0 ? (
+                    <div style={{ lineHeight: 1.3 }}>
+                      <span className="num" style={{ color: 'var(--color-warning)', display: 'block' }}>
+                        {formatISK(item.haulCostPerUnit ?? 0)}
+                      </span>
+                      {(item.haulIskPerM3 ?? 0) > 0 && (
+                        <span style={{ fontSize: 10, color: 'var(--color-text-tertiary)' }}>
+                          {Math.round(item.haulIskPerM3 ?? 0).toLocaleString()}/m³
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    <span style={{ color: 'var(--color-text-tertiary)', fontSize: 11 }}>—</span>
+                  )}
+                </td>
+              )}
+
               {/* Owned badge */}
               <td className="align-center">
                 <span className={ownedBadgeClass(item.owned)}>{item.owned}</span>
@@ -215,6 +246,7 @@ const ItemTable: FC<ItemTableProps> = ({
       </tbody>
     </table>
   </div>
-);
+  );
+};
 
 export default ItemTable;
