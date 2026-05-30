@@ -707,9 +707,13 @@ const RightSidebar: FC<RightSidebarProps> = ({
             )}
 
             {trueCostError && !trueCostLoading && (
-              <div style={{ color: 'var(--color-danger)', fontSize: 11,
-                padding: '8px 0', textAlign: 'center' }}>
-                ⚠ {trueCostError}
+              <div style={{
+                color: trueCostError.startsWith('Not manufacturable')
+                  ? 'var(--color-text-tertiary)'
+                  : 'var(--color-danger)',
+                fontSize: 11, padding: '8px 0', textAlign: 'center'
+              }}>
+                {trueCostError.startsWith('Not manufacturable') ? 'ℹ' : '⚠'} {trueCostError}
               </div>
             )}
 

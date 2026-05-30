@@ -90,9 +90,13 @@ export function useTrueCost(
           const raw = (e as Error).message;
           // If the error body is HTML (Cloudflare 502 / gateway timeout), show a clean message.
           const isHtml = raw.includes('<!DOCTYPE') || raw.includes('<html');
+          // 404 "No blueprint found" → item is a drop / LP store reward, not manufacturable.
+          const noBlueprint = raw.includes('404') && raw.includes('No blueprint found');
           setError(isHtml
             ? 'Server gateway timeout — wait a moment and try again.'
-            : raw
+            : noBlueprint
+              ? 'Not manufacturable — this item comes from the LP store, drops, or contracts only.'
+              : raw
           );
         }
       } finally {
