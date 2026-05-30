@@ -713,7 +713,9 @@ const RightSidebar: FC<RightSidebarProps> = ({
                   : 'var(--color-danger)',
                 fontSize: 11, padding: '8px 0', textAlign: 'center'
               }}>
-                {trueCostError.startsWith('Not manufacturable') ? 'ℹ' : '⚠'} {trueCostError}
+                {trueCostError.startsWith('Not manufacturable')
+                  ? <>ℹ Not manufacturable — this item comes from the LP store,<br/>drops, or contracts only.</>
+                  : <>⚠ {trueCostError}</>}
               </div>
             )}
 
