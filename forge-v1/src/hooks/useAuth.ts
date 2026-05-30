@@ -59,7 +59,8 @@ const SCOPES =
   'esi-skills.read_skills.v1 ' +
   'esi-markets.structure_markets.v1 ' +
   'esi-characters.read_standings.v1 ' +
-  'esi-characters.read_corporation_roles.v1';
+  'esi-characters.read_corporation_roles.v1 ' +
+  'esi-corporations.read_corporation_membership.v1';
 
 const SESSION_TOKEN_KEY = 'forge_token';
 const SESSION_STATE_KEY = 'forge_oauth_state';
