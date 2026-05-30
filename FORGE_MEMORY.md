@@ -2,7 +2,7 @@
 
 > This file is the authoritative context document for Claude sessions working on this project.
 > Read this first. Update it whenever significant decisions, changes, or discoveries are made.
-> Last updated: v1.5.1 — Post-v1.5 code-review fixes, OAuth resume bug, 429 rate-limit fix
+> Last updated: v1.5.4 — Corp director-role access, full security audit + fixes, simplify pass
 
 ---
 
@@ -23,7 +23,7 @@ An EVE Online manufacturing intelligence web application for the **UKC corporati
 
 **Live domain:** https://forge-ukc.com  
 **GitHub:** https://github.com/SacuShi/forge-manufacturing.git  
-**Current version:** v1.5.1 (branch: `main`)  
+**Current version:** v1.5.4 (branch: `main`)  
 **Version scheme:** `major.feature.change.patch`
 
 ---
@@ -758,6 +758,47 @@ wallet, blueprints, assets, active jobs, trained skills.
 | `1713c9e` | Quick prompt chips: remove 40-char truncation |
 | `7fb861a` | Load-more pagination: offset param; "Load next 50" button |
 
+### v1.5.4 (commits `f2c0b93`→`0dd434f`) — deployed ✓
+
+**Corp director-role access + full security audit + simplify pass**
+
+#### v1.5.2 — Corp PIN removed; ESI Director role check
+- **Access model change:** Corp tab now auto-grants access to any EVE character with the `Director` role in the configured corp. No PIN entry required.
+- Server: `requireDirectorRole` middleware calls `GET /characters/{id}/roles/` + `GET /characters/{id}/` in parallel; result cached 5 min in general `cache` under `director:<charId>` key.
+- Server: Falls back to `director_char_id` match (stored at setup) if `esi-characters.read_corporation_roles.v1` scope not yet granted.
+- Frontend: `CorpPinModal` removed; `useCorpData` simplified (no `verifyPin`/`pinError`); `CorpTab` shows "not a director" message on denial.
+- New OAuth scopes: `esi-characters.read_corporation_roles.v1`, `esi-corporations.read_corporation_membership.v1`
+- `POST /api/corp/setup` no longer requires `pin` field.
+- `POST /api/corp/verify-pin` endpoint removed.
+
+#### v1.5.3 — Comprehensive security audit fixes
+Critical/High fixes applied after full codebase audit:
+- **CRITICAL:** `req.characterId` was never set by `verifyEveToken` — all auth routes read `undefined`; every user shared one session. Fixed.
+- **CRITICAL:** `verifyEveToken` now verifies JWT RS256 signature against EVE's JWKS (`login.eveonline.com/oauth/jwks`) using Node 18 Web Crypto API. Previously decoded without verification.
+- **CRITICAL:** `/api/eve-token` now returns only `{ access_token }` — previously sent full EVE token response including `refresh_token` to client.
+- **HIGH:** `validateAiChatInput` and `validateChatMessage` were plain functions used as Express middleware — validation silently skipped. Rewritten as proper `(req, res, next)` middleware.
+- **HIGH:** `adminLimiter` (10 req/15 min) added to all `/api/admin/*` and `/api/corp/admin/*` routes.
+- **HIGH:** `isAdminRequest` uses `crypto.timingSafeEqual` — prevents timing attack on admin key.
+- **HIGH:** `esiFetch()` wrapper added — applies `User-Agent: FORGE Manufacturing Intelligence/1.5` to all ESI outbound calls (required by EVE ESI policy).
+- **HIGH:** `calculateMaterialCost` async — depth guard (> 10) prevents unbounded recursion on circular blueprint data.
+- JWKS fetch: 5s AbortController timeout; thundering-herd guard (dedup in-flight promise).
+- `Web Crypto unavailable` is hard reject (wrong Node version), not a fallback trigger.
+- `process.on('unhandledRejection')` + `process.on('uncaughtException')` handlers added.
+- 15-min cache sweep timer on general `cache` Map; `directorRoleCache` created (later merged in v1.5.4).
+- All remaining `err.message` in 500 responses → `clientErrMsg(err)`.
+- OAuth error log: only `error`/`error_description` logged, not full tokenData.
+
+#### v1.5.4 — Simplify / memory efficiency pass
+- `extractCharacterFromToken(authHeader)` pure helper extracted — shared by `verifyEveToken` and `verifyCharacterOwnership`; eliminates ~35 lines of duplicate token-extraction logic.
+- `verifyCharacterOwnership` short-circuits RS256 crypto when `req.characterId` already set from a prior `verifyEveToken` call on the same request — halves `importKey+verify` cost on ownership-checked routes.
+- `directorRoleCache` Map removed — merged into general `cache` with `director:<id>` key prefix; one fewer Map + one fewer sweep timer.
+- All 10 remaining bare `fetch()` calls to `esi.evetech.net` replaced with `esiFetch()`.
+- Dead `require('crypto')` removed from `forge-security.js` (Web Crypto accessed via `globalThis.crypto.subtle`).
+- 3 JWKS state vars (`_jwksCache`, `_jwksCacheAt`, `_jwksFetchInFlight`) consolidated into `_jwks = { data, fetchedAt, inFlight }`.
+- `verifyEveJwt` key-retry loop: two-pass `for (const force of [false, true])` replaces duplicated `find()`.
+
+---
+
 ### v1.5.1 (commits `633ab3c`→`1c9c33c`, pushed to `main` 2026-05-25) — deployed ✓
 
 **Post-v1.5.0 code review — 12 confirmed issues fixed + bug fixes**
@@ -1012,23 +1053,41 @@ ssh gumpy54@192.168.1.62 "echo 'FORGE_CORP_KEY=<generated-key>' >> /home/gumpy54
 - Nothing sensitive sent from client — server injects from session cache
 - `clientErrMsg(err)` — strips filesystem paths from SQLite errors before sending to client
 
-### `forge-security.js` exports & rate limits (v1.5.1)
-| Export | Type | Limit |
+### `forge-security.js` exports & rate limits (v1.5.4)
+| Export | Type | Limit / Notes |
 |---|---|---|
-| `apiLimiter` | Rate limiter | **300 req / 5 min** per IP (generous for multi-char burst) |
+| `apiLimiter` | Rate limiter | 300 req / 5 min per IP |
 | `authLimiter` | Rate limiter | 20 req / 15 min per IP |
+| `adminLimiter` | Rate limiter | **10 req / 15 min** per IP — on all `/api/admin/*` and `/api/corp/admin/*` routes |
 | `aiLimiter` | Rate limiter | 30 req / 10 min per IP |
-| `verifyEveToken` | Middleware | Validates Bearer token; sets `req.eveCharacter.{characterId,characterName}` |
-| `verifyCharacterOwnership` | Middleware | verifyEveToken + checks route `:characterId` matches token |
-| `validateAiChatInput` | Middleware | Validates `{message, history}` body; message ≤2000 chars, history ≤50 |
-| `validateChatMessage` | Middleware | Validates single message string |
-| `errorHandler` | 4-arg middleware | `app.use(security.errorHandler)` — global catch-all |
+| `verifyEveToken` | Middleware | Verifies RS256 JWT against EVE JWKS; sets `req.characterId`, `req.eveCharacter`, `req._evePayload` |
+| `verifyCharacterOwnership` | Middleware | Short-circuits if `req.characterId` already set; else verifies token + checks `:characterId` param |
+| `validateAiChatInput` | Middleware | Proper Express middleware — validates `{message, history}`; message ≤2000, history ≤50 |
+| `validateChatMessage` | Middleware | Proper Express middleware — validates single message string |
+| `errorHandler` | 4-arg middleware | `app.use(security.errorHandler)` — global catch-all; strips file paths from errors |
 
-`forge-security.js` is now in the **local repo** at `server/forge-security.js`. Always deploy it alongside `server.js`.
+**Key security internals (forge-security.js v1.5.4):**
+- `extractCharacterFromToken(authHeader)` — shared pure helper; both `verifyEveToken` and `verifyCharacterOwnership` call this to avoid duplicating RS256 verify logic
+- JWKS state consolidated into `_jwks = { data, fetchedAt, inFlight }` — single object, thundering-herd guard, 5s AbortController timeout on fetch
+- JWKS fallback: only `'JWKS fetch failed'` (network outage) triggers unsigned decode; `'Web Crypto unavailable'` is a hard reject (wrong Node version)
+- `verifyEveToken` caches result on `req._evePayload`; `verifyCharacterOwnership` reuses it, halving RS256 crypto on ownership-checked routes
+
+**Key security internals (server.js v1.5.4):**
+- `esiFetch(url, opts)` — wraps all ESI calls; User-Agent applied last (cannot be overridden by caller)
+- `isAdminRequest(req)` — uses `crypto.timingSafeEqual`; returns false if FORGE_ADMIN_KEY not set
+- `directorRoleCache` removed — director role results stored in general `cache` under `director:<characterId>` key with 5-min TTL (1-min on fallback/error)
+- `clientErrMsg(err)` — strips filesystem paths from all 500 responses
+- `process.on('unhandledRejection')` + `process.on('uncaughtException')` handlers registered at startup
+- General `cache` Map has a 15-min sweep timer (`.unref()`) — only one cache Map now
+- `/api/eve-token` returns only `{ access_token }` — refresh_token never sent to client
+
+`forge-security.js` is in the **local repo** at `server/forge-security.js`. Always deploy alongside `server.js`.
 
 ---
 
-## 17. Corp Feature Setup Guide (v1.4.0)
+## 17. Corp Feature Setup Guide (v1.5.2+)
+
+**Access model (v1.5.2):** Corp data is accessible to any EVE character with the **Director role** in the configured corporation. No PIN required. The server verifies the Director role via ESI `/characters/{id}/roles/` on each request (result cached 5 min). Users must log out and back in once after the scope change to grant `esi-characters.read_corporation_roles.v1`.
 
 ### Prerequisites
 1. Add `FORGE_CORP_KEY` to server `.env` (see Section 15)
@@ -1036,27 +1095,15 @@ ssh gumpy54@192.168.1.62 "echo 'FORGE_CORP_KEY=<generated-key>' >> /home/gumpy54
    - `esi-corporations.read_blueprints.v1`
    - `esi-corporations.read_assets.v1`
    - `esi-corporations.read_industry_jobs.v1`
-   The director who uses the setup URL MUST have Director or Factory_Manager role in EVE.
 
-### Corp Setup (director flow)
-The director needs to authenticate with the corp scopes. Build the OAuth URL manually:
-```
-https://login.eveonline.com/v2/oauth/authorize
-  ?response_type=code
-  &client_id=<EVE_CLIENT_ID>
-  &redirect_uri=<redirect_uri>
-  &scope=esi-corporations.read_blueprints.v1+esi-corporations.read_assets.v1+esi-corporations.read_industry_jobs.v1+offline_access
-  &state=<random>
-```
-After the director authorises and is redirected, extract the `code` from the URL query string.
-Then call the setup endpoint (requires FORGE_ADMIN_KEY):
+### Corp Setup (director flow — no PIN needed since v1.5.2)
 ```bash
 curl -X POST https://forge-ukc.com/api/corp/setup \
   -H "X-Admin-Key: <FORGE_ADMIN_KEY>" \
   -H "Content-Type: application/json" \
-  -d '{ "code": "<code_from_callback>", "redirect_uri": "<same_uri_used_above>", "pin": "123456" }'
+  -d '{ "code": "<code_from_callback>", "redirect_uri": "<same_uri_used_above>" }'
 ```
-This stores the encrypted refresh token, hashes the PIN, and triggers an initial ESI data pull.
+No `pin` field required. Stores encrypted refresh token and triggers initial ESI data pull.
 
 ### Add developer/tester to admin whitelist (bypass PIN)
 ```bash
