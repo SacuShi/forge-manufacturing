@@ -2,7 +2,7 @@
 
 > This file is the authoritative context document for Claude sessions working on this project.
 > Read this first. Update it whenever significant decisions, changes, or discoveries are made.
-> Last updated: v1.5.4 — Corp director-role access, full security audit + fixes, simplify pass
+> Last updated: v1.5.5 — AI chat fix, clickable jobs, server-side market search, tooltip fix; haulage proposal pending
 
 ---
 
@@ -23,7 +23,7 @@ An EVE Online manufacturing intelligence web application for the **UKC corporati
 
 **Live domain:** https://forge-ukc.com  
 **GitHub:** https://github.com/SacuShi/forge-manufacturing.git  
-**Current version:** v1.5.4 (branch: `main`)  
+**Current version:** v1.5.5 (branch: `main`)  
 **Version scheme:** `major.feature.change.patch`
 
 ---
@@ -757,6 +757,70 @@ wallet, blueprints, assets, active jobs, trained skills.
 | `8729ad8` | AI button label; pulse glow animation; auto-open chat on login |
 | `1713c9e` | Quick prompt chips: remove 40-char truncation |
 | `7fb861a` | Load-more pagination: offset param; "Load next 50" button |
+
+### v1.5.5 (commits `23a3a78`→`334733e`) — deployed ✓
+
+**Bug fixes, UX improvements, server-side market search**
+
+**Fix — AI chat broken (`message must be a non-empty string`):**
+- `validateAiChatInput` was checking `req.body.message` (string) but `/api/ai-chat` receives `{ messages: [{role,content}…] }` (array). Rewritten to validate `messages` array correctly.
+- `validateChatMessage` was checking `req.body.message` but `/api/save-message` receives `{ role, content }`. Rewritten to validate `role` + `content`.
+- Content limit raised to 8000 chars to accommodate AI assistant responses.
+
+**Fix — Tooltip overflow (True Profit panel):**
+- `.cost-tooltip` for boxes 1–2 (Materials, Mfg Fees) left-anchors from box edge.
+- `.cost-tooltip` for boxes 3–4 (Sales Tax, True Profit) right-anchors — no longer clips under adjacent column.
+- z-index raised to 300; shadow deepened.
+- Materials tooltip reworded in EVE terms (ME research reduces consumption).
+- True Profit tooltip explains why it differs from the Profit/Run figure: *ME research, SCC levy, facility fee, broker cut, transaction tax based on skills/standings.*
+
+**Feat — Active Jobs rows are clickable:**
+- `ActiveJob` interface gains `typeId: number` (= ESI `product_type_id`).
+- Both primary and alt character job-mapping paths in `useAuth.ts` populate it.
+- Job rows in the Jobs tab now call `onSelectItem(job.typeId, job.name)` on click — opens the right sidebar detail panel identical to Blueprints/Assets/Market tabs.
+- Hover highlight (cyan border + bg shift) and item portrait icon added to each row.
+
+**Feat — Server-side market search (full database):**
+- Previously the search box filtered only the ~50 already-loaded items; items outside the top batch (e.g. Drake if ranked lower) returned no results.
+- `/api/search-profitable` now accepts `regionId` param (validated against `VALID_REGIONS`, defaults Jita); filters by `region_id` in query; returns up to 30 results; includes `price_source`.
+- `App.tsx`: `handleMarketSearch()` debounced 300ms, calls `/api/search-profitable`, maps results through `mapToMarketItems` (same ownership/fee logic as paginated list).
+- `marketItems` in App.tsx now sources from `marketSearchResults` when a search is active, otherwise from `rawResults`.
+- Search box shows × clear button; meta line shows *"5 results for 'Drake'"* when searching.
+- Load More button hidden while search is active.
+- Switching hub clears search state.
+
+**Known data gap — `items.volume` / `items.mass`:**
+- `server.js` queries `SELECT volume, mass FROM items` in `/api/item-details` but SDE import does NOT populate these columns. They are likely NULL for all rows. This will need fixing in the haulage feature (see pending proposal below).
+
+---
+
+### Pending feature proposal — Haulage Costs (NOT YET IMPLEMENTED — awaiting approval)
+
+**Summary:** Add ISK/m³ haul rates for two legs (materials in, goods out) to the Industry Settings modal. Server computes haul cost using packaged item volumes from the SDE and adds a 5th "Haulage" box to the True Profit panel.
+
+**Two haul legs:**
+- Leg 1: source hub → manufacturing system (raw materials, volume = Σ material packaged volumes)
+- Leg 2: manufacturing system → sell hub (finished product, volume = product packaged volume × runs)
+
+**User inputs (in ⚙ Mfg Setup modal):**
+- Leg 1 ISK/m³ rate (auto-labelled with route, e.g. "Jita → Amarr III")
+- Leg 2 ISK/m³ rate (auto-set to 0 if mfg system = sell hub)
+
+**Required code changes:**
+1. `sde-import.js` — add `packaged_volume REAL` to `items` table; populate from `types.json`
+2. `server.js` — add `leg1_haul_rate`, `leg2_haul_rate` columns to `character_industry_settings`; update `/api/industry-settings` GET/POST; extend `/api/true-cost` to compute haul cost
+3. `IndustrySettings.tsx` — add Haulage section with two rate inputs and auto-labelled routes
+4. `RightSidebar.tsx` — add 5th "Haulage" cost box; update True Profit formula tooltip
+5. `types/index.ts` — add `haul_cost`, `leg1_haul_cost`, `leg2_haul_cost` to `TrueCostResponse`
+
+**One-time server action required after deploy:** Re-run `node sde-import.js` to populate `packaged_volume`. True Profit silently returns 0 haul cost if volume data is absent — no breaking change.
+
+**Open questions (pending user answers before implementation):**
+1. Auto-set leg to 0 when manufacturing location = sell hub?
+2. Haulage as a 5th box, or folded as a sub-line under Mfg Fees?
+3. Show haul-adjusted column in Market Opportunities table, or detail panel only?
+
+---
 
 ### v1.5.4 (commits `f2c0b93`→`0dd434f`) — deployed ✓
 
