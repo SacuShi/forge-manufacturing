@@ -13,7 +13,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef, type FC } from 'react';
-import type { IndustrySettings, SystemSearchResult } from '../types';
+import type { IndustrySettings, Market, SystemSearchResult } from '../types';
 import { apiGet, apiPost } from '../api/client';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -70,18 +70,30 @@ const MAX_RIGS = 3;
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
+// Hub system IDs — used to auto-zero haul legs when mfg system matches a hub
+const HUB_SYSTEM_IDS: Record<number, number> = {
+  10000002: 30000142, // Jita
+  10000043: 30002187, // Amarr
+  10000032: 30002659, // Dodixie
+  10000042: 30002053, // Hek
+  10000030: 30002510, // Rens
+  10000041: 30045331, // Syndicate (Poitot)
+};
+
 interface IndustrySettingsProps {
-  open:     boolean;
-  token:    string | null;
-  initial:  IndustrySettings | null;
-  onClose:  () => void;
-  onSaved:  (settings: IndustrySettings) => void;
+  open:         boolean;
+  token:        string | null;
+  initial:      IndustrySettings | null;
+  sourceMarket: Market;   // where materials are bought — for haul leg 1 label
+  sellMarket:   Market;   // where goods are sold — for haul leg 2 label
+  onClose:      () => void;
+  onSaved:      (settings: IndustrySettings) => void;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
 const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
-  open, token, initial, onClose, onSaved,
+  open, token, initial, sourceMarket, sellMarket, onClose, onSaved,
 }) => {
   // ── Form state ─────────────────────────────────────────────────────────────
   const [systemQuery,    setSystemQuery]    = useState('');
@@ -91,6 +103,11 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
   const [selectedRigs,   setSelectedRigs]   = useState<number[]>([]);
   const [facilityTax,    setFacilityTax]    = useState(0);
   const [expandedCats,   setExpandedCats]   = useState<Set<string>>(new Set());
+
+  // ── Haulage state ──────────────────────────────────────────────────────────
+  const [haulEnabled,  setHaulEnabled]  = useState(false);
+  const [leg1Rate,     setLeg1Rate]     = useState(0);
+  const [leg2Rate,     setLeg2Rate]     = useState(0);
 
   // ── Autocomplete state ─────────────────────────────────────────────────────
   const [suggestions,    setSuggestions]    = useState<SystemSearchResult[]>([]);
@@ -115,6 +132,9 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
       setStructureId(initial.structure_type_id);
       setSelectedRigs(JSON.parse(initial.rig_ids || '[]') as number[]);
       setFacilityTax(initial.facility_tax ?? 0);
+      setHaulEnabled(initial.haul_enabled ?? false);
+      setLeg1Rate(initial.leg1_haul_rate ?? 0);
+      setLeg2Rate(initial.leg2_haul_rate ?? 0);
     } else {
       setSystemId(null);
       setSystemName(null);
@@ -122,6 +142,9 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
       setStructureId(null);
       setSelectedRigs([]);
       setFacilityTax(0);
+      setHaulEnabled(false);
+      setLeg1Rate(0);
+      setLeg2Rate(0);
     }
   }, [open, initial]);
 
@@ -182,7 +205,13 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
 
   // ── Save ───────────────────────────────────────────────────────────────────
   const isNpc    = structureId === null;
-  const canSave  = !!systemId;  // system must be resolved before saving
+  const canSave  = !!systemId;
+
+  // Auto-zero: if mfg system matches the source or sell hub's main station
+  const leg1AutoZero = !!(systemId && HUB_SYSTEM_IDS[sourceMarket.id] === systemId);
+  const leg2AutoZero = !!(systemId && HUB_SYSTEM_IDS[sellMarket.id]   === systemId);
+  const effectiveLeg1Rate = leg1AutoZero ? 0 : leg1Rate;
+  const effectiveLeg2Rate = leg2AutoZero ? 0 : leg2Rate;
 
   const handleSave = useCallback(async () => {
     if (!canSave || !token) return;
@@ -195,6 +224,9 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
         structure_type_id: structureId,
         rig_ids:           isNpc ? [] : selectedRigs,
         facility_tax:      isNpc ? 0 : facilityTax,
+        haul_enabled:      haulEnabled,
+        leg1_haul_rate:    effectiveLeg1Rate,
+        leg2_haul_rate:    effectiveLeg2Rate,
       }, token);
       const newSettings: IndustrySettings = {
         system_id:         systemId,
@@ -202,6 +234,9 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
         structure_type_id: structureId,
         rig_ids:           JSON.stringify(isNpc ? [] : selectedRigs),
         facility_tax:      isNpc ? 0 : facilityTax,
+        haul_enabled:      haulEnabled,
+        leg1_haul_rate:    effectiveLeg1Rate,
+        leg2_haul_rate:    effectiveLeg2Rate,
       };
       onSaved(newSettings);
       setSaved(true);
@@ -210,7 +245,8 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
     } finally {
       setSaving(false);
     }
-  }, [canSave, token, systemId, systemName, structureId, isNpc, selectedRigs, facilityTax, onSaved]);
+  }, [canSave, token, systemId, systemName, structureId, isNpc, selectedRigs,
+      facilityTax, haulEnabled, effectiveLeg1Rate, effectiveLeg2Rate, onSaved]);
 
   if (!open) return null;
 
@@ -364,6 +400,84 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
               />
               <span style={{ color: 'var(--color-text-secondary)', fontSize: 13 }}>%</span>
             </div>
+          </div>
+
+          {/* ── Haulage ───────────────────────────────────────────────────── */}
+          <div className="settings-section">
+            <div className="settings-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={haulEnabled}
+                  onChange={(e) => setHaulEnabled(e.target.checked)}
+                />
+                Haulage Costs
+              </label>
+              <span className="settings-label-sub">— included in True Profit when enabled</span>
+            </div>
+
+            {haulEnabled && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 8 }}>
+
+                {/* Leg 1 — Materials in */}
+                <div className="haul-leg">
+                  <div className="haul-leg-label">
+                    <span className="haul-leg-title">Materials in</span>
+                    <span className="haul-leg-route">
+                      {sourceMarket.name} → {systemName ?? '(set mfg system above)'}
+                    </span>
+                  </div>
+                  {leg1AutoZero ? (
+                    <div className="haul-leg-autozero">Same location — no haul needed · 0 ISK/m³</div>
+                  ) : (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <input
+                        type="number"
+                        className="settings-input settings-input-short"
+                        value={leg1Rate}
+                        min={0}
+                        step={100}
+                        placeholder="0"
+                        onChange={(e) => setLeg1Rate(Math.max(0, parseFloat(e.target.value) || 0))}
+                        aria-label="Leg 1 haul rate ISK per m³"
+                      />
+                      <span className="haul-leg-unit">ISK / m³</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Leg 2 — Goods out */}
+                <div className="haul-leg">
+                  <div className="haul-leg-label">
+                    <span className="haul-leg-title">Goods out</span>
+                    <span className="haul-leg-route">
+                      {systemName ?? '(set mfg system above)'} → {sellMarket.name}
+                    </span>
+                  </div>
+                  {leg2AutoZero ? (
+                    <div className="haul-leg-autozero">Same location — no haul needed · 0 ISK/m³</div>
+                  ) : (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <input
+                        type="number"
+                        className="settings-input settings-input-short"
+                        value={leg2Rate}
+                        min={0}
+                        step={100}
+                        placeholder="0"
+                        onChange={(e) => setLeg2Rate(Math.max(0, parseFloat(e.target.value) || 0))}
+                        aria-label="Leg 2 haul rate ISK per m³"
+                      />
+                      <span className="haul-leg-unit">ISK / m³</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="haul-leg-note">
+                  Enter your contracted rate. Red Frog ~500–700 ISK/m³ · Jump Freighter ~1,000–2,000 · Self-haul: 0.
+                </div>
+              </div>
+            )}
           </div>
         </div>
 

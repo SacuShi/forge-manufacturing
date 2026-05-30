@@ -193,6 +193,7 @@ const App: FC = () => {
   // feeCharacterId:  null = use primary character's token for fee/true-cost calls
   const [viewCharacterId, setViewCharacterId] = useState<number | null>(null);
   const [feeCharacterId,  setFeeCharacterId]  = useState<number | null>(null);
+  const [buildRuns,       setBuildRuns]       = useState(1);
 
   // ── v1.5 Aggregation ──────────────────────────────────────────────────────
   // Derive combined/isolated datasets from primary + alts based on viewCharacterId.
@@ -382,6 +383,7 @@ const App: FC = () => {
     selectedBlueprintME,
     selectedBlueprintTE,
     feeToken,
+    buildRuns,
   );
 
   useEffect(() => {
@@ -893,6 +895,8 @@ const App: FC = () => {
           feeCharacterId={feeCharacterId}
           feeCharacterName={feeCharacterName}
           onFeeCharacterChange={setFeeCharacterId}
+          buildRuns={buildRuns}
+          onBuildRunsChange={setBuildRuns}
         />
 
         <ChatPanel
@@ -911,6 +915,8 @@ const App: FC = () => {
         open={settingsOpen}
         token={auth.token}
         initial={industrySettings}
+        sourceMarket={selectedSourceMarket}
+        sellMarket={selectedMarket}
         onClose={() => setSettingsOpen(false)}
         onSaved={(settings) => {
           setIndustrySettings(settings);

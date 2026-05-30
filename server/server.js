@@ -270,6 +270,12 @@ async function runMigrations() {
   try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN material_region_id   INTEGER DEFAULT 10000002`); } catch (_) {}
   try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN material_region_name TEXT    DEFAULT 'Jita'`);    } catch (_) {}
 
+  // v1.6.0 migration: haulage columns on industry settings + packaged_volume on items
+  try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN haul_enabled  INTEGER DEFAULT 0`);   } catch (_) {}
+  try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN leg1_haul_rate REAL DEFAULT 0`);     } catch (_) {}
+  try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN leg2_haul_rate REAL DEFAULT 0`);     } catch (_) {}
+  try { await dbRun(`ALTER TABLE items ADD COLUMN packaged_volume REAL DEFAULT NULL`);                        } catch (_) {}
+
   // ── v1.4.0 Corp Feature migrations ─────────────────────────────────────────
   //
   // corp_config         — one row per corporation; stores encrypted director refresh token + PIN hash
@@ -4642,8 +4648,11 @@ app.get('/api/industry-settings', security.apiLimiter, security.verifyEveToken, 
       structure_type_id:    null,
       rig_ids:              '[]',
       facility_tax:         0,
-      material_region_id:   10000002,   // default: Jita
+      material_region_id:   10000002,
       material_region_name: 'Jita',
+      haul_enabled:         0,
+      leg1_haul_rate:       0,
+      leg2_haul_rate:       0,
     });
   } catch (err) {
     console.error('Industry settings GET error:', err.message);
@@ -4766,6 +4775,9 @@ app.post('/api/industry-settings', security.apiLimiter, security.verifyEveToken,
       structure_type_id, rig_ids, facility_tax,
       material_region_id   = 10000002,
       material_region_name = 'Jita',
+      haul_enabled         = false,
+      leg1_haul_rate       = 0,
+      leg2_haul_rate       = 0,
     } = req.body;
 
     // Validate: facility_tax must be 0–100
@@ -4776,11 +4788,15 @@ app.post('/api/industry-settings', security.apiLimiter, security.verifyEveToken,
       ? parseInt(material_region_id)
       : 10000002;
 
+    const leg1Rate = Math.max(0, parseFloat(leg1_haul_rate) || 0);
+    const leg2Rate = Math.max(0, parseFloat(leg2_haul_rate) || 0);
+
     await dbRun(`
       INSERT INTO character_industry_settings
         (character_id, system_id, system_name, structure_type_id,
-         rig_ids, facility_tax, material_region_id, material_region_name, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         rig_ids, facility_tax, material_region_id, material_region_name,
+         haul_enabled, leg1_haul_rate, leg2_haul_rate, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(character_id) DO UPDATE SET
         system_id            = excluded.system_id,
         system_name          = excluded.system_name,
@@ -4789,6 +4805,9 @@ app.post('/api/industry-settings', security.apiLimiter, security.verifyEveToken,
         facility_tax         = excluded.facility_tax,
         material_region_id   = excluded.material_region_id,
         material_region_name = excluded.material_region_name,
+        haul_enabled         = excluded.haul_enabled,
+        leg1_haul_rate       = excluded.leg1_haul_rate,
+        leg2_haul_rate       = excluded.leg2_haul_rate,
         updated_at           = excluded.updated_at
     `, [
       characterId,
@@ -4799,6 +4818,9 @@ app.post('/api/industry-settings', security.apiLimiter, security.verifyEveToken,
       tax,
       validMatRegion,
       material_region_name || REGION_HUB_NAMES[validMatRegion] || 'Jita',
+      haul_enabled ? 1 : 0,
+      leg1Rate,
+      leg2Rate,
       new Date().toISOString(),
     ]);
 
@@ -5013,8 +5035,51 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
     const transactionTax = sellPrice * transactionTaxRate;
     const totalSalesTax  = brokerFee + transactionTax;
 
+    // ── Haulage (Box 5) ───────────────────────────────────────────────────
+    // Phase 1: user-defined ISK/m³ rates only.
+    // Requires packaged_volume in the items table (populated by sde-import.js).
+    // Silently returns 0 costs when volumes or rates are unavailable.
+    const haulEnabled  = !!(settings?.haul_enabled);
+    const leg1Rate     = settings?.leg1_haul_rate || 0;
+    const leg2Rate     = settings?.leg2_haul_rate || 0;
+
+    let leg1VolM3 = 0;
+    let leg2VolM3 = 0;
+    let leg1Cost  = 0;
+    let leg2Cost  = 0;
+
+    if (haulEnabled && (leg1Rate > 0 || leg2Rate > 0)) {
+      // Fetch packaged volumes for all materials in one query
+      if (leg1Rate > 0 && materials.length > 0) {
+        const matIds = materials.map(m => m.material_id);
+        const ph = matIds.map(() => '?').join(',');
+        const volRows = await dbAll(
+          `SELECT type_id, packaged_volume FROM items WHERE type_id IN (${ph})`,
+          matIds
+        );
+        const volMap = new Map(volRows.map(r => [r.type_id, r.packaged_volume || 0]));
+        for (const mat of materials) {
+          const adjQty = Math.max(1, Math.ceil(mat.quantity * meFactor)) * runs;
+          leg1VolM3 += (volMap.get(mat.material_id) || 0) * adjQty;
+        }
+        leg1Cost = leg1VolM3 * leg1Rate;
+      }
+
+      // Product volume × runs
+      if (leg2Rate > 0) {
+        const productVolRow = await dbGet(
+          'SELECT packaged_volume FROM items WHERE type_id = ?', [product_id]
+        );
+        const productQty = (blueprint.product_quantity || 1) * runs;
+        leg2VolM3 = (productVolRow?.packaged_volume || 0) * productQty;
+        leg2Cost  = leg2VolM3 * leg2Rate;
+      }
+    }
+
+    const totalHaulCost = leg1Cost + leg2Cost;
+
     // ── True profit ────────────────────────────────────────────────────────
-    const trueProfit = sellPrice - brokerFee - transactionTax - totalMaterialCost - totalJobCost;
+    const trueProfit = sellPrice - brokerFee - transactionTax - totalMaterialCost - totalJobCost - totalHaulCost;
     const trueMargin = sellPrice > 0 ? (trueProfit / sellPrice) * 100 : 0;
 
     const STRUCTURE_LABELS = { 35825: 'Raitaru', 35826: 'Azbel', 35827: 'Sotiyo' };
@@ -5027,17 +5092,17 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
       runs,
       sell_price: sellPrice,
 
-      // Box 1 — materials (Jita market sell price, ME-adjusted)
+      // Box 1 — materials (source hub sell price, ME-adjusted)
       total_material_cost: totalMaterialCost,
 
       // Box 2 — manufacturing fees
       mfg_fees: {
         total:                totalJobCost,
-        system_cost_index:    systemJobCost,       // EIV × SCI
-        system_cost_bonuses:  0,                   // rig bonuses not yet category-matched
+        system_cost_index:    systemJobCost,
+        system_cost_bonuses:  0,
         facility_tax:         facilityTaxCost,
         scc_surcharge:        sccSurcharge,
-        alpha_clone_tax:      0,                   // Omega accounts only
+        alpha_clone_tax:      0,
         estimated_item_value: eiv,
       },
 
@@ -5054,13 +5119,25 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
         accounting_level:         accounting,
       },
 
-      // Box 4 — true profit
+      // Box 5 — haulage
+      haul_cost: {
+        total:                    totalHaulCost,
+        leg1_cost:                leg1Cost,
+        leg2_cost:                leg2Cost,
+        leg1_volume_m3:           leg1VolM3,
+        leg2_volume_m3:           leg2VolM3,
+        leg1_rate:                leg1Rate,
+        leg2_rate:                leg2Rate,
+        leg1_isk_per_m3_effective: leg1Rate,
+        leg2_isk_per_m3_effective: leg2Rate,
+      },
+
+      // Box 4 + summary — true profit
       true_profit: trueProfit,
       true_margin: trueMargin,
 
-      // Context
       region_id:        regionId,
-      prices_warm:      pricesWarm,   // true only when both sell and source hub caches are live
+      prices_warm:      pricesWarm,
       setup_configured: !!(settings?.system_id),
       manufacturing_setup: {
         system_id:          settings?.system_id         || null,

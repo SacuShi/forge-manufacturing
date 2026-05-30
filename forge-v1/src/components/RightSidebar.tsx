@@ -61,6 +61,9 @@ interface RightSidebarProps {
   feeCharacterId:       number | null;
   feeCharacterName:     string;
   onFeeCharacterChange: (characterId: number | null) => void;
+  // v1.6 — Build runs selector
+  buildRuns:            number;
+  onBuildRunsChange:    (runs: number) => void;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -109,6 +112,8 @@ const RightSidebar: FC<RightSidebarProps> = ({
   feeCharacterId,
   feeCharacterName,
   onFeeCharacterChange,
+  buildRuns,
+  onBuildRunsChange,
 }) => {
   const isJita       = selectedMarket.id === 10000002;
   const marketLabel  = `${selectedMarket.name}${selectedMarket.type === 'nullsec' ? ' [NULLSEC]' : ''}`;
@@ -672,10 +677,24 @@ const RightSidebar: FC<RightSidebarProps> = ({
                   ))}
                 </select>
               )}
-              <span style={{ marginLeft: 'auto', fontSize: 10, fontWeight: 400,
-                color: 'var(--color-text-tertiary)', letterSpacing: 0 }}>
-                incl. all fees &amp; taxes
-              </span>
+              {/* v1.6 — Build runs selector */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 'auto' }}>
+                <span style={{ fontSize: 10, color: 'var(--color-text-tertiary)' }}>×</span>
+                <select
+                  className="fee-char-select"
+                  value={buildRuns}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    onBuildRunsChange(v === 'custom' ? buildRuns : Number(v));
+                  }}
+                  aria-label="Number of manufacturing runs"
+                  title="Number of manufacturing runs"
+                >
+                  {[1, 2, 5, 10, 20, 50, 100].map((n) => (
+                    <option key={n} value={n}>{n} run{n !== 1 ? 's' : ''}</option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             {trueCostLoading && (
@@ -937,6 +956,71 @@ const RightSidebar: FC<RightSidebarProps> = ({
                         and system for a complete picture.
                       </div>
                     )}
+                  </div>
+                </div>
+
+              </div>
+            )}
+
+            {/* ── Haul box row (only when haul costs are configured) ─────── */}
+            {trueCostData && !trueCostLoading && trueCostData.haul_cost.total > 0 && (
+              <div className="cost-breakdown-row" style={{ marginTop: 4 }}>
+
+                {/* Box 5 — Haulage */}
+                <div className="cost-box haulage" style={{ flex: '0 0 calc(50% - 4px)' }}>
+                  <span className="cost-box-label">Haulage</span>
+                  <span className="cost-box-value">
+                    {formatISK(trueCostData.haul_cost.total)}
+                  </span>
+                  {/* Tooltip */}
+                  <div className="cost-tooltip">
+                    {trueCostData.haul_cost.leg1_cost > 0 && (
+                      <>
+                        <div className="cost-tooltip-row">
+                          <span>Materials in</span>
+                          <span>{formatISK(trueCostData.haul_cost.leg1_cost)}</span>
+                        </div>
+                        <div className="cost-tooltip-sub">
+                          {trueCostData.haul_cost.leg1_volume_m3.toLocaleString(undefined, { maximumFractionDigits: 0 })} m³
+                          {' · '}{trueCostData.haul_cost.leg1_rate.toLocaleString()} ISK/m³
+                        </div>
+                      </>
+                    )}
+                    {trueCostData.haul_cost.leg1_cost === 0 && (
+                      <div className="cost-tooltip-row">
+                        <span>Materials in</span>
+                        <span style={{ color: 'var(--color-text-tertiary)' }}>Same location</span>
+                      </div>
+                    )}
+                    {trueCostData.haul_cost.leg2_cost > 0 && (
+                      <>
+                        <div className="cost-tooltip-row">
+                          <span>Goods out</span>
+                          <span>{formatISK(trueCostData.haul_cost.leg2_cost)}</span>
+                        </div>
+                        <div className="cost-tooltip-sub">
+                          {trueCostData.haul_cost.leg2_volume_m3.toLocaleString(undefined, { maximumFractionDigits: 0 })} m³
+                          {' · '}{trueCostData.haul_cost.leg2_rate.toLocaleString()} ISK/m³
+                        </div>
+                      </>
+                    )}
+                    {trueCostData.haul_cost.leg2_cost === 0 && (
+                      <div className="cost-tooltip-row">
+                        <span>Goods out</span>
+                        <span style={{ color: 'var(--color-text-tertiary)' }}>Same location</span>
+                      </div>
+                    )}
+                    <div className="cost-tooltip-divider" />
+                    <div className="cost-tooltip-row total">
+                      <span>Total Haul</span>
+                      <span style={{ color: 'var(--color-warning)' }}>
+                        {formatISK(trueCostData.haul_cost.total)}
+                      </span>
+                    </div>
+                    <div className="cost-tooltip-setup">
+                      Haul cost deducted from True Profit.
+                      Configure rates in ⚙ Mfg Setup → Haulage.
+                    </div>
                   </div>
                 </div>
 

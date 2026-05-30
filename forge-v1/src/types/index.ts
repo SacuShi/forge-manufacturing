@@ -307,6 +307,10 @@ export interface IndustrySettings {
   /** Region ID of the hub where materials are sourced (default 10000002 = Jita) */
   material_region_id?:   number;
   material_region_name?: string | null;
+  /** v1.6 — Haulage rates (ISK per m³). 0 = no haul on that leg. */
+  haul_enabled:          boolean;
+  leg1_haul_rate:        number;   // materials in: source hub → mfg system
+  leg2_haul_rate:        number;   // goods out:   mfg system → sell hub
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -438,10 +442,23 @@ export interface TrueCostResponse {
     accounting_level:       number;
   };
 
+  /** v1.6 — Haulage (Box 5). Zero values when haul not configured. */
+  haul_cost: {
+    total:          number;
+    leg1_cost:      number;   // materials in
+    leg2_cost:      number;   // goods out
+    leg1_volume_m3: number;   // total m³ of materials (ME-adjusted, × runs)
+    leg2_volume_m3: number;   // product packaged volume × runs
+    leg1_rate:      number;   // ISK/m³ applied
+    leg2_rate:      number;
+    leg1_isk_per_m3_effective: number;  // same as leg1_rate in Phase 1; differs in Phase 2 (Red Frog)
+    leg2_isk_per_m3_effective: number;
+  };
+
   true_profit:  number;
   true_margin:  number;
   region_id:    number;
-  prices_warm:  boolean;   // false = precompute still loading; sell/profit are 0
+  prices_warm:  boolean;
   setup_configured: boolean;
 
   manufacturing_setup: {
@@ -451,6 +468,6 @@ export interface TrueCostResponse {
     structure_label:   string;
     rig_ids:           number[];
     facility_tax_pct:  number;
-    sci_raw:           number;   // raw system cost index (0–1) for display
+    sci_raw:           number;
   };
 }

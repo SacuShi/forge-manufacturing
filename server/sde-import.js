@@ -399,16 +399,20 @@ async function importAllTypes(typesData) {
     await dbRun('BEGIN TRANSACTION');
     for (const type of chunk) {
       if (!type.type_id) continue;
-      const name      = typeof type.name === 'string' ? type.name : (type.name?.en ?? null);
+      const name           = typeof type.name === 'string' ? type.name : (type.name?.en ?? null);
       if (!name) continue; // skip types with no English name (unpublished/internal)
-      const metaLevel = metaMap[type.type_id] ?? 0;
+      const metaLevel      = metaMap[type.type_id] ?? 0;
+      // packaged_volume is what haulers care about — the m³ the item occupies in a
+      // freight container. Falls back to the assembled volume if not separately specified.
+      const packagedVolume = type.packaged_volume ?? type.volume ?? null;
       try {
         const r = await dbRun(
-          `INSERT INTO items (type_id, name, meta_level) VALUES (?, ?, ?)
+          `INSERT INTO items (type_id, name, meta_level, packaged_volume) VALUES (?, ?, ?, ?)
            ON CONFLICT(type_id) DO UPDATE SET
-             name = CASE WHEN excluded.name IS NOT NULL THEN excluded.name ELSE name END,
-             meta_level = excluded.meta_level`,
-          [type.type_id, name, metaLevel]
+             name             = CASE WHEN excluded.name IS NOT NULL THEN excluded.name ELSE name END,
+             meta_level       = excluded.meta_level,
+             packaged_volume  = excluded.packaged_volume`,
+          [type.type_id, name, metaLevel, packagedVolume]
         );
         if (r.changes === 1) inserted++;
         else updated++;

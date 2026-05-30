@@ -1668,6 +1668,65 @@ tbody td.align-center { text-align: center; }
   line-height: 1.4;
 }
 
+/* Haulage box colour */
+.cost-box.haulage .cost-box-value { color: var(--color-warning, #ff9800); }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   v1.6.0 — HAULAGE SETTINGS (in Industry Settings modal)
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.haul-leg {
+  background: var(--color-bg-secondary);
+  border: 0.5px solid var(--color-border-light);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+}
+
+.haul-leg-label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.haul-leg-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.haul-leg-route {
+  font-size: 10px;
+  color: var(--color-accent-primary);
+}
+
+.haul-leg-unit {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.haul-leg-hint {
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+}
+
+.haul-leg-autozero {
+  font-size: 11px;
+  color: var(--color-success);
+  padding: 2px 0;
+}
+
+.haul-leg-note {
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+  line-height: 1.5;
+  border-top: 0.5px solid var(--color-border-light);
+  padding-top: 8px;
+  margin-top: 2px;
+}
+
 /* ══════════════════════════════════════════════════════════════════════════
    v1.2.0 — INDUSTRY SETTINGS MODAL
    ══════════════════════════════════════════════════════════════════════════ */

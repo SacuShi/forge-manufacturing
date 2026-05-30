@@ -37,6 +37,7 @@ export function useTrueCost(
   me:               number,       // material efficiency from the character's best blueprint (0 if unknown)
   te:               number,       // time efficiency — passed through to server for future use
   token:            string | null,
+  runs:             number = 1,   // number of manufacturing runs
 ): UseTrueCostResult {
   const [data,    setData]    = useState<TrueCostResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -69,9 +70,9 @@ export function useTrueCost(
           product_id:       productTypeId,
           me,
           te,
-          runs:             1,
-          regionId:         sellRegionId,       // sell hub (backward-compat param name)
-          materialRegionId: materialRegionId,   // source hub
+          runs:             Math.max(1, runs),
+          regionId:         sellRegionId,
+          materialRegionId: materialRegionId,
         }, token);
 
         if (!cancelled) {
@@ -108,9 +109,9 @@ export function useTrueCost(
       }
     };
 
-  // Re-fetch when item, either hub, or blueprint ME/TE changes
+  // Re-fetch when item, hub, blueprint ME/TE, or runs count changes
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [productTypeId, sellRegionId, materialRegionId, token, me, te]);
+  }, [productTypeId, sellRegionId, materialRegionId, token, me, te, runs]);
 
   return { data, loading, error };
 }
