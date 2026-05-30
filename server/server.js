@@ -1529,6 +1529,69 @@ app.get('/api/item-names', security.apiLimiter, async (req, res) => {
   }
 });
 
+// Resolve type names via ESI for any type_ids missing from the items table.
+// Saves resolved names back to the DB so subsequent calls are instant.
+app.post('/api/resolve-type-names', security.apiLimiter, async (req, res) => {
+  try {
+    const { typeIds } = req.body;
+    if (!Array.isArray(typeIds) || typeIds.length === 0) {
+      return res.json({ names: {} });
+    }
+
+    const uniqueIds = [...new Set(typeIds.filter(id => Number.isInteger(id) && id > 0))].slice(0, 1000);
+
+    // Check DB first
+    const ph = uniqueIds.map(() => '?').join(',');
+    const rows = await dbAll(
+      `SELECT type_id, name FROM items WHERE type_id IN (${ph}) AND name IS NOT NULL AND name != ''`,
+      uniqueIds
+    );
+
+    const names = {};
+    const foundIds = new Set();
+    for (const row of rows) {
+      names[row.type_id] = row.name;
+      foundIds.add(row.type_id);
+    }
+
+    // ESI fallback for any still-missing ids
+    const missingIds = uniqueIds.filter(id => !foundIds.has(id));
+    if (missingIds.length > 0) {
+      try {
+        const esiRes = await esiFetch(
+          'https://esi.evetech.net/latest/universe/names/?datasource=tranquility',
+          { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(missingIds) }
+        );
+        if (esiRes.ok) {
+          const esiItems = await esiRes.json();
+          await dbRun('BEGIN TRANSACTION');
+          for (const item of esiItems) {
+            if (item.category === 'inventory_type' && item.name) {
+              names[item.id] = item.name;
+              // Persist to DB so future calls (and next /api/item-names load) get it from the table
+              await dbRun(
+                `INSERT INTO items (type_id, name) VALUES (?, ?)
+                 ON CONFLICT(type_id) DO UPDATE SET name = excluded.name
+                   WHERE items.name IS NULL OR items.name = ''`,
+                [item.id, item.name]
+              ).catch(() => {});
+            }
+          }
+          await dbRun('COMMIT');
+          // Invalidate the item_names cache so the next /api/item-names reload includes new names
+          if (missingIds.length > 0) cache.delete('item_names');
+        }
+      } catch (esiErr) {
+        console.warn('ESI name resolve fallback failed:', esiErr.message);
+      }
+    }
+
+    res.json({ names });
+  } catch (err) {
+    res.status(500).json({ error: clientErrMsg(err), names: {} });
+  }
+});
+
 // BLUEPRINT DATABASE - From SQLite with Materials
 app.get('/api/blueprint-database', security.apiLimiter, async (req, res) => {
   try {

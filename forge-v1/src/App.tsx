@@ -139,7 +139,7 @@ function toItemDetail(
 
 const App: FC = () => {
   const auth = useAuth();
-  const { names: itemNames } = useItemNames();
+  const { names: itemNames, loading: itemNamesLoading, resolveUnknown } = useItemNames();
 
   const [theme, setTheme] = useState<string>(
     () => localStorage.getItem('forge-theme') ?? 'dark'
@@ -266,6 +266,19 @@ const App: FC = () => {
     const altIds    = activeAltCharacters.map((a) => a.characterId).sort().join(',');
     return `${allBlueprints.length}:${combinedAssets.length}:${bestSkillsArray.length}:${skillHash}:${altIds}`;
   }, [allBlueprints, combinedAssets, bestSkillsArray, activeAltCharacters]);
+
+  // Resolve names for any asset/blueprint type_ids missing from the DB-sourced name map.
+  // Runs once after both the character data and the name map have fully loaded.
+  useEffect(() => {
+    if (auth.status !== 'authed' || itemNamesLoading) return;
+    const unknown = new Set<number>();
+    combinedAssets.forEach(a => { if (!itemNames.has(a.type_id)) unknown.add(a.type_id); });
+    allBlueprints.forEach(bp => { if (!itemNames.has(bp.type_id)) unknown.add(bp.type_id); });
+    if (unknown.size > 0) resolveUnknown([...unknown]);
+  // resolveUnknown changes identity when names changes, so omit it to avoid infinite loop;
+  // the auth.status + itemNamesLoading gate ensures this only runs once per login.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auth.status, itemNamesLoading, combinedAssets, allBlueprints]);
 
   // Blueprint → owner name map (item_id → character name) — for attribution badges
   const blueprintOwnerMap = useMemo(() => {
