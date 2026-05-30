@@ -17,6 +17,23 @@ const app = express();
 app.set('trust proxy', 1); // Trust Cloudflared proxy
 const PORT = process.env.PORT || 3000;
 
+// ── ESI HTTP helper ───────────────────────────────────────────────────────────
+// EVE ESI policy requires a descriptive User-Agent on every outbound request.
+const ESI_USER_AGENT = 'FORGE Manufacturing Intelligence/1.5 (forge-ukc.com)';
+function esiFetch(url, opts = {}) {
+  const headers = Object.assign({ 'User-Agent': ESI_USER_AGENT }, opts.headers || {});
+  return fetch(url, Object.assign({}, opts, { headers }));
+}
+
+// ── Global process error handlers ────────────────────────────────────────────
+process.on('unhandledRejection', (reason) => {
+  console.error('⚠ Unhandled promise rejection:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('⚠ Uncaught exception:', err);
+  process.exit(1);
+});
+
 // Security middleware
 app.use(helmet({
   contentSecurityPolicy: {
@@ -392,8 +409,13 @@ function clientErrMsg(err) {
 const CACHE_TTL_MS     = 60 * 60 * 1000;      // 1 hour
 const CACHE_TTL_ADJ_MS = 6 * CACHE_TTL_MS;    // 6 hours — for ESI adjusted prices
 
-// Simple cache
+// Simple cache with periodic sweep to prevent unbounded growth
 const cache = new Map();
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of cache) { if (v.expiry < now) cache.delete(k); }
+}, 15 * 60 * 1000).unref(); // .unref() so the timer doesn't prevent clean process exit
+
 const getCached = (key) => {
   const item = cache.get(key);
   if (!item) return null;
@@ -524,7 +546,7 @@ async function esiCorpFetchAll(path, accessToken) {
   const results = [];
   for (let page = 1; page <= 200; page++) {
     const sep = path.includes('?') ? '&' : '?';
-    const res = await fetch(`https://esi.evetech.net${path}${sep}datasource=tranquility&page=${page}`, {
+    const res = await esiFetch(`https://esi.evetech.net${path}${sep}datasource=tranquility&page=${page}`, {
       headers: { 'Authorization': `Bearer ${accessToken}` },
     });
     if (!res.ok) {
@@ -620,7 +642,7 @@ async function refreshCorpData(corpId) {
       for (let i = 0; i < installerIds.length; i += BATCH) {
         const batch = installerIds.slice(i, i + BATCH);
         try {
-          const r = await fetch('https://esi.evetech.net/latest/universe/names/?datasource=tranquility', {
+          const r = await esiFetch('https://esi.evetech.net/latest/universe/names/?datasource=tranquility', {
             method:  'POST',
             headers: { 'Content-Type': 'application/json' },
             body:    JSON.stringify(batch),
@@ -708,8 +730,12 @@ async function refreshCorpData(corpId) {
  * Must be used AFTER security.verifyEveToken (which sets req.characterId).
  */
 
-// 5-minute ESI director-role result cache
+// 5-minute ESI director-role result cache (swept every 15 min)
 const directorRoleCache = new Map();
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of directorRoleCache) { if (v.expires < now) directorRoleCache.delete(k); }
+}, 15 * 60 * 1000).unref();
 const DIRECTOR_CACHE_TTL_MS = 5 * 60 * 1000;
 
 /**
@@ -951,12 +977,13 @@ app.post('/api/eve-token', security.authLimiter, async (req, res) => {
 
     const tokenData = await tokenRes.json();
     if (!tokenRes.ok) {
-      console.error("EVE OAuth error:", tokenData);
+      console.error("EVE OAuth error:", tokenData.error, tokenData.error_description);
       return res.status(400).json({ error: tokenData.error_description || "Token exchange failed" });
     }
 
     console.log("✓ EVE OAuth successful");
-    res.json(tokenData);
+    // Return ONLY the access token — never send refresh_token to the client
+    res.json({ access_token: tokenData.access_token });
 
   } catch (err) {
     console.error("OAuth error:", err.message);
@@ -1071,7 +1098,7 @@ app.get('/api/jita-prices', security.apiLimiter, async (req, res) => {
     if (jitaPricesCache) {
       return res.json({ prices: jitaPricesCache, stale: true });
     }
-    res.status(500).json({ error: err.message, prices: {} });
+    res.status(500).json({ error: clientErrMsg(err), prices: {} });
   }
 });
 
@@ -1192,7 +1219,7 @@ async function fetchCostIndices() {
   const nameResults = await Promise.all(
     batches.map(async (batch) => {
       try {
-        const r = await fetch('https://esi.evetech.net/latest/universe/names/', {
+        const r = await esiFetch('https://esi.evetech.net/latest/universe/names/', {
           method:  'POST',
           headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
           body:    JSON.stringify(batch),
@@ -1347,7 +1374,7 @@ app.get('/api/item-names', security.apiLimiter, async (req, res) => {
 
   } catch (err) {
     console.error('Item names error:', err.message);
-    res.status(500).json({ error: err.message, items: {} });
+    res.status(500).json({ error: clientErrMsg(err), items: {} });
   }
 });
 
@@ -1395,7 +1422,7 @@ app.get('/api/blueprint-database', security.apiLimiter, async (req, res) => {
 
   } catch (err) {
     console.error('Blueprint database error:', err.message);
-    res.status(500).json({ error: err.message, blueprints: {} });
+    res.status(500).json({ error: clientErrMsg(err), blueprints: {} });
   }
 });
 
@@ -1481,21 +1508,23 @@ app.post('/api/calculate-profitability', security.apiLimiter, async (req, res) =
 });
 
 // Helper: Calculate material cost (checks if it can be manufactured)
-async function calculateMaterialCost(materialId, quantity, prices) {
+// depth guard prevents infinite recursion on circular blueprint data
+async function calculateMaterialCost(materialId, quantity, prices, depth = 0) {
+  if (depth > 10) return (prices[materialId]?.buy || 0) * quantity;
   const bp = await dbGet('SELECT blueprint_id FROM blueprints WHERE product_id = ?', [materialId]);
-  
+
   if (bp) {
     const subMats = await dbAll(
       'SELECT material_id, quantity FROM blueprint_materials WHERE blueprint_id = ?',
       [bp.blueprint_id]
     );
-    
+
     let mfgCost = 0;
     for (const sub of subMats) {
-      const subCost = await calculateMaterialCost(sub.material_id, sub.quantity, prices);
+      const subCost = await calculateMaterialCost(sub.material_id, sub.quantity, prices, depth + 1);
       mfgCost += subCost;
     }
-    
+
     const buyCost = (prices[materialId]?.buy || 0) * quantity;
     return Math.min(mfgCost * quantity, buyCost);
   } else {
@@ -1743,7 +1772,7 @@ app.post('/api/get-blueprint', security.apiLimiter, async (req, res) => {
         // If not in database, try to fetch from ESI
         if (!matItem) {
           try {
-            const esiRes = await fetch(`https://esi.evetech.net/latest/universe/types/${mat.material_id}/?datasource=tranquility`);
+            const esiRes = await esiFetch(`https://esi.evetech.net/latest/universe/types/${mat.material_id}/?datasource=tranquility`);
             if (esiRes.ok) {
               const esiData = await esiRes.json();
               matName = esiData.name || `Unknown Item ${mat.material_id}`;
@@ -1953,7 +1982,7 @@ app.post('/api/item-details', security.apiLimiter, async (req, res) => {
           if (!matName) {
             // Fallback: ESI lookup and cache
             try {
-              const esiRes = await fetch(`https://esi.evetech.net/latest/universe/types/${mat.material_id}/?datasource=tranquility`);
+              const esiRes = await esiFetch(`https://esi.evetech.net/latest/universe/types/${mat.material_id}/?datasource=tranquility`);
               if (esiRes.ok) {
                 const esiData = await esiRes.json();
                 matName = esiData.name || `Unknown Material ${mat.material_id}`;
@@ -3962,7 +3991,7 @@ app.get('/api/top-profitable', security.apiLimiter, async (req, res) => {
 
   } catch (err) {
     console.error('Top profitable error:', err.message);
-    res.status(500).json({ error: err.message, results: [] });
+    res.status(500).json({ error: clientErrMsg(err), results: [] });
   }
 });
 
@@ -4188,7 +4217,7 @@ app.get('/api/top-profitable-by-skills', security.apiLimiter, security.verifyEve
 
   } catch (err) {
     console.error('Top profitable by skills error:', err.message);
-    res.status(500).json({ error: err.message, results: [] });
+    res.status(500).json({ error: clientErrMsg(err), results: [] });
   }
 });
 
@@ -4235,12 +4264,12 @@ app.get('/api/search-profitable', security.apiLimiter, async (req, res) => {
 
   } catch (err) {
     console.error('Search profitable error:', err.message);
-    res.status(500).json({ error: err.message, results: [] });
+    res.status(500).json({ error: clientErrMsg(err), results: [] });
   }
 });
 
 // Admin: Manually trigger pre-compute
-app.post('/api/admin/precompute', async (req, res) => {
+app.post('/api/admin/precompute', security.adminLimiter, async (req, res) => {
   // Simple API key auth for admin endpoints
   const adminKey = process.env.FORGE_ADMIN_KEY;
   const providedKey = req.headers['x-admin-key'];
@@ -4261,7 +4290,7 @@ app.post('/api/admin/precompute', async (req, res) => {
 });
 
 // Admin: View pre-compute run history
-app.get('/api/admin/precompute-status', async (req, res) => {
+app.get('/api/admin/precompute-status', security.adminLimiter, async (req, res) => {
   const adminKey = process.env.FORGE_ADMIN_KEY;
   const providedKey = req.headers['x-admin-key'];
 
@@ -4307,7 +4336,7 @@ app.get('/api/admin/precompute-status', async (req, res) => {
 });
 
 // Admin: Manually trigger volume enrichment (v0.9.1)
-app.post('/api/admin/volume-enrichment', async (req, res) => {
+app.post('/api/admin/volume-enrichment', security.adminLimiter, async (req, res) => {
   const adminKey = process.env.FORGE_ADMIN_KEY;
   const providedKey = req.headers['x-admin-key'];
 
@@ -4501,7 +4530,7 @@ async function trackAiUsage(characterId, model, usage) {
 }
 
 // Admin: View AI costs
-app.get('/api/admin/ai-costs', async (req, res) => {
+app.get('/api/admin/ai-costs', security.adminLimiter, async (req, res) => {
   const adminKey = process.env.FORGE_ADMIN_KEY;
   const providedKey = req.headers['x-admin-key'];
 
@@ -5074,10 +5103,16 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
 
 // ── Admin helper ────────────────────────────────────────────────────────────
 
-/** Validate X-Admin-Key header.  Returns true if the key matches FORGE_ADMIN_KEY. */
+/**
+ * Validate X-Admin-Key header using a timing-safe comparison.
+ * Returns true if the key matches FORGE_ADMIN_KEY.
+ */
 function isAdminRequest(req) {
   const adminKey = process.env.FORGE_ADMIN_KEY;
-  return adminKey && req.headers['x-admin-key'] === adminKey;
+  if (!adminKey) return false;
+  const provided = req.headers['x-admin-key'] || '';
+  if (provided.length !== adminKey.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(adminKey));
 }
 
 // ── GET /api/corp/status ─────────────────────────────────────────────────────
@@ -5481,7 +5516,7 @@ app.post('/api/corp/refresh',
 // ── Admin: whitelist management ──────────────────────────────────────────────
 
 // GET /api/corp/admin/whitelist — list all whitelisted characters
-app.get('/api/corp/admin/whitelist', async (req, res) => {
+app.get('/api/corp/admin/whitelist', security.adminLimiter, async (req, res) => {
   if (!isAdminRequest(req)) return res.status(403).json({ error: 'Admin key required' });
   try {
     const rows = await dbAll('SELECT * FROM corp_admin_access ORDER BY added_at DESC');
@@ -5493,7 +5528,7 @@ app.get('/api/corp/admin/whitelist', async (req, res) => {
 
 // POST /api/corp/admin/whitelist — add a character to the whitelist
 // Body: { character_id, note? }
-app.post('/api/corp/admin/whitelist', async (req, res) => {
+app.post('/api/corp/admin/whitelist', security.adminLimiter, async (req, res) => {
   if (!isAdminRequest(req)) return res.status(403).json({ error: 'Admin key required' });
 
   const { character_id, note } = req.body;
@@ -5517,7 +5552,7 @@ app.post('/api/corp/admin/whitelist', async (req, res) => {
 });
 
 // DELETE /api/corp/admin/whitelist/:characterId — remove from whitelist
-app.delete('/api/corp/admin/whitelist/:characterId', async (req, res) => {
+app.delete('/api/corp/admin/whitelist/:characterId', security.adminLimiter, async (req, res) => {
   if (!isAdminRequest(req)) return res.status(403).json({ error: 'Admin key required' });
 
   const characterId = parseInt(req.params.characterId);
@@ -5533,7 +5568,7 @@ app.delete('/api/corp/admin/whitelist/:characterId', async (req, res) => {
 });
 
 // Admin: delete corp config entirely (for reset/re-setup)
-app.delete('/api/corp/admin/config', async (req, res) => {
+app.delete('/api/corp/admin/config', security.adminLimiter, async (req, res) => {
   if (!isAdminRequest(req)) return res.status(403).json({ error: 'Admin key required' });
   try {
     await dbRun('DELETE FROM corp_config');
