@@ -21,7 +21,8 @@ const PORT = process.env.PORT || 3000;
 // EVE ESI policy requires a descriptive User-Agent on every outbound request.
 const ESI_USER_AGENT = 'FORGE Manufacturing Intelligence/1.5 (forge-ukc.com)';
 function esiFetch(url, opts = {}) {
-  const headers = Object.assign({ 'User-Agent': ESI_USER_AGENT }, opts.headers || {});
+  // User-Agent is set LAST so callers cannot accidentally override the ESI-required header
+  const headers = Object.assign({}, opts.headers || {}, { 'User-Agent': ESI_USER_AGENT });
   return fetch(url, Object.assign({}, opts, { headers }));
 }
 
@@ -5150,7 +5151,7 @@ app.get('/api/corp/status', security.apiLimiter, async (req, res) => {
 //  4. Encrypt refresh_token
 //  5. Upsert corp_config
 //  6. Trigger initial ESI data refresh in background
-app.post('/api/corp/setup', async (req, res) => {
+app.post('/api/corp/setup', security.adminLimiter, async (req, res) => {
   if (!isAdminRequest(req)) {
     return res.status(403).json({ error: 'Admin key required' });
   }

@@ -65,17 +65,35 @@ const JWKS_TTL_MS    = 60 * 60 * 1000;     // 1 hour
 let _jwksCache    = null;
 let _jwksCacheAt  = 0;
 
+// In-flight JWKS promise — deduplicated so concurrent cold-start requests share one fetch
+let _jwksFetchInFlight = null;
+
 async function fetchJwks(force = false) {
   if (!force && _jwksCache && (Date.now() - _jwksCacheAt) < JWKS_TTL_MS) {
     return _jwksCache;
   }
-  const res = await fetch(EVE_JWKS_URI, {
-    headers: { 'User-Agent': 'FORGE Manufacturing Intelligence / forge-ukc.com' },
-  });
-  if (!res.ok) throw new Error(`JWKS fetch failed: ${res.status}`);
-  _jwksCache   = await res.json();
-  _jwksCacheAt = Date.now();
-  return _jwksCache;
+  // Deduplicate concurrent fetches (thundering-herd guard)
+  if (!force && _jwksFetchInFlight) return _jwksFetchInFlight;
+
+  _jwksFetchInFlight = (async () => {
+    const controller = new AbortController();
+    const timeout    = setTimeout(() => controller.abort(), 5000); // 5s hard timeout
+    try {
+      const res = await fetch(EVE_JWKS_URI, {
+        signal:  controller.signal,
+        headers: { 'User-Agent': 'FORGE Manufacturing Intelligence / forge-ukc.com' },
+      });
+      if (!res.ok) throw new Error(`JWKS fetch failed: ${res.status}`);
+      _jwksCache   = await res.json();
+      _jwksCacheAt = Date.now();
+      return _jwksCache;
+    } finally {
+      clearTimeout(timeout);
+      _jwksFetchInFlight = null;
+    }
+  })();
+
+  return _jwksFetchInFlight;
 }
 
 /**
@@ -169,10 +187,9 @@ async function verifyEveToken(req, res, next) {
     } catch (verifyErr) {
       // If JWKS cannot be reached (network outage), fall back with a warning.
       // Any other verification failure (bad signature, expired) is a hard reject.
-      const isNetworkError = (
-        verifyErr.message.startsWith('JWKS fetch failed') ||
-        verifyErr.message.startsWith('Web Crypto unavailable')
-      );
+      // Only transient network failures trigger the fallback — NOT local config errors
+      // (Web Crypto unavailable = wrong Node version; that must be a hard failure)
+      const isNetworkError = verifyErr.message.startsWith('JWKS fetch failed');
       if (isNetworkError) {
         console.warn('⚠ JWKS unavailable — using decode-only fallback:', verifyErr.message);
         payload = _decodeJwtUnsafe(token);
@@ -216,7 +233,7 @@ async function verifyCharacterOwnership(req, res, next) {
   let payload;
   try {
     payload = await verifyEveJwt(token).catch(async (err) => {
-      if (err.message.startsWith('JWKS fetch failed') || err.message.startsWith('Web Crypto unavailable')) {
+      if (err.message.startsWith('JWKS fetch failed')) {
         console.warn('⚠ JWKS unavailable — using decode-only fallback:', err.message);
         return _decodeJwtUnsafe(token);
       }
