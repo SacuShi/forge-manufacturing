@@ -255,57 +255,54 @@ async function verifyCharacterOwnership(req, res, next) {
 
 /**
  * Express middleware: validates the AI chat request body.
- * Expects { message: string, history?: ChatMessage[] }
+ * Expects { messages: Array<{ role: 'user'|'assistant', content: string }> }
+ * Matches the shape sent by the frontend and read by /api/ai-chat handler.
  */
 function validateAiChatInput(req, res, next) {
   const body = req.body;
   if (!body || typeof body !== 'object') {
     return res.status(400).json({ error: 'Request body must be a JSON object' });
   }
-  const { message, history } = body;
 
-  if (typeof message !== 'string' || message.trim().length === 0) {
-    return res.status(400).json({ error: 'message must be a non-empty string' });
+  const { messages } = body;
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return res.status(400).json({ error: 'messages must be a non-empty array' });
   }
-  if (message.length > 2000) {
-    return res.status(400).json({ error: 'message exceeds 2000 character limit' });
+  if (messages.length > 60) {
+    return res.status(400).json({ error: 'messages exceeds 60 entry limit' });
   }
-
-  if (history !== undefined) {
-    if (!Array.isArray(history)) {
-      return res.status(400).json({ error: 'history must be an array' });
+  for (const msg of messages) {
+    if (!msg || typeof msg !== 'object') {
+      return res.status(400).json({ error: 'each message must be an object' });
     }
-    if (history.length > 50) {
-      return res.status(400).json({ error: 'history exceeds 50 message limit' });
+    if (msg.role !== 'user' && msg.role !== 'assistant') {
+      return res.status(400).json({ error: 'message role must be "user" or "assistant"' });
     }
-    for (const msg of history) {
-      if (!msg || typeof msg !== 'object') {
-        return res.status(400).json({ error: 'each history entry must be an object' });
-      }
-      if (msg.role !== 'user' && msg.role !== 'assistant') {
-        return res.status(400).json({ error: 'history role must be "user" or "assistant"' });
-      }
-      if (typeof msg.content !== 'string') {
-        return res.status(400).json({ error: 'history content must be a string' });
-      }
-      if (msg.content.length > 4000) {
-        return res.status(400).json({ error: 'history message exceeds 4000 character limit' });
-      }
+    if (typeof msg.content !== 'string' || msg.content.trim().length === 0) {
+      return res.status(400).json({ error: 'message content must be a non-empty string' });
+    }
+    if (msg.content.length > 8000) {
+      return res.status(400).json({ error: 'message content exceeds 8000 character limit' });
     }
   }
   next();
 }
 
 /**
- * Express middleware: validates a single message string in req.body.message.
+ * Express middleware: validates a chat message save body.
+ * Expects { role: 'user'|'assistant', content: string, conversationId?: string }
+ * Matches the shape sent by the frontend and read by /api/save-message handler.
  */
 function validateChatMessage(req, res, next) {
-  const { message } = req.body || {};
-  if (typeof message !== 'string' || message.trim().length === 0) {
-    return res.status(400).json({ error: 'message must be a non-empty string' });
+  const { role, content } = req.body || {};
+  if (role !== 'user' && role !== 'assistant') {
+    return res.status(400).json({ error: 'role must be "user" or "assistant"' });
   }
-  if (message.length > 2000) {
-    return res.status(400).json({ error: 'message exceeds 2000 character limit' });
+  if (typeof content !== 'string' || content.trim().length === 0) {
+    return res.status(400).json({ error: 'content must be a non-empty string' });
+  }
+  if (content.length > 8000) {
+    return res.status(400).json({ error: 'content exceeds 8000 character limit' });
   }
   next();
 }
