@@ -25,10 +25,10 @@ export const MOCK_CHARACTER: CharacterInfo = {
   blueprintCount: 143,
   bpoCount: 62,
   activeJobs: [
-    { name: 'Hammerhead II',           quantity: 5,  remaining: '1h 42m',  done: false },
-    { name: 'Drake',                   quantity: 1,  remaining: '6h 11m',  done: false },
-    { name: 'Medium Shield Ext II',    quantity: 10, remaining: '22h 05m', done: false },
-    { name: 'Vagabond',               quantity: 1,  remaining: 'Done',     done: true  },
+    { name: 'Hammerhead II',        typeId: 2185,  quantity: 5,  remaining: '1h 42m',  done: false },
+    { name: 'Drake',                typeId: 24698, quantity: 1,  remaining: '6h 11m',  done: false },
+    { name: 'Medium Shield Ext II', typeId: 2281,  quantity: 10, remaining: '22h 05m', done: false },
+    { name: 'Vagabond',             typeId: 11999, quantity: 1,  remaining: 'Done',     done: true  },
   ],
 };
 

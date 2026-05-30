@@ -287,6 +287,7 @@ export function useAuth(): AuthState & {
           const { label, done } = formatTimeRemaining(job.end_date);
           return {
             name:       nameMap.get(job.product_type_id) ?? `Item #${job.product_type_id}`,
+            typeId:     job.product_type_id,
             quantity:   job.runs,
             remaining:  label,
             done,
@@ -488,6 +489,7 @@ export function useAuth(): AuthState & {
         const { label, done } = formatTimeRemaining(job.end_date);
         return {
           name:       nameMap.get(job.product_type_id) ?? `Item #${job.product_type_id}`,
+          typeId:     job.product_type_id,
           quantity:   job.runs,
           remaining:  label,
           done,

@@ -84,6 +84,7 @@ export type SortDirection = 'asc' | 'desc';
 
 export interface ActiveJob {
   name: string;
+  typeId: number;       // product type_id — used to open the detail panel on click
   quantity: number;
   remaining: string;
   done: boolean;

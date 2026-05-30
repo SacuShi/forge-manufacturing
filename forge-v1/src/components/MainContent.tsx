@@ -577,11 +577,14 @@ const MainContent: FC<MainContentProps> = ({
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {activeJobs.map((job) => {
                 const label = activityLabel(job.activityId);
-                // Stable key: name + remaining time uniquely identifies a job row.
-                // Using index causes stale DOM state when completed jobs are removed.
                 return (
                 <div
                   key={`${job.name}-${job.remaining}-${job.activityId ?? 0}`}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`View details for ${job.name}`}
+                  onClick={() => onSelectItem(job.typeId, job.name)}
+                  onKeyDown={(e) => e.key === 'Enter' && onSelectItem(job.typeId, job.name)}
                   style={{
                     background: 'var(--color-bg-tertiary)',
                     border: '0.5px solid var(--color-border-light)',
@@ -590,19 +593,38 @@ const MainContent: FC<MainContentProps> = ({
                     display: 'flex',
                     justifyContent: 'space-between',
                     alignItems: 'center',
+                    cursor: 'pointer',
+                    transition: 'border-color 0.1s, background 0.1s',
+                  }}
+                  onMouseEnter={(e) => {
+                    (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--color-accent-primary)';
+                    (e.currentTarget as HTMLDivElement).style.background  = 'var(--color-bg-secondary)';
+                  }}
+                  onMouseLeave={(e) => {
+                    (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--color-border-light)';
+                    (e.currentTarget as HTMLDivElement).style.background  = 'var(--color-bg-tertiary)';
                   }}
                 >
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    {label && (
-                      <div style={{ fontSize: 10, color: 'var(--color-text-tertiary)',
-                        letterSpacing: '0.5px', marginBottom: 2, textTransform: 'uppercase' }}>
-                        {label}
-                      </div>
-                    )}
-                    <span style={{ fontSize: 13, color: 'var(--color-text-secondary)',
-                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>
-                      {job.quantity > 1 ? `×${job.quantity} ` : ''}{job.name}
-                    </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 }}>
+                    <img
+                      src={`https://images.evetech.net/types/${job.typeId}/icon?size=32`}
+                      alt={job.name}
+                      loading="lazy"
+                      crossOrigin="anonymous"
+                      style={{ width: 32, height: 32, flexShrink: 0, borderRadius: 2, opacity: 0.9 }}
+                    />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      {label && (
+                        <div style={{ fontSize: 10, color: 'var(--color-text-tertiary)',
+                          letterSpacing: '0.5px', marginBottom: 2, textTransform: 'uppercase' }}>
+                          {label}
+                        </div>
+                      )}
+                      <span style={{ fontSize: 13, color: 'var(--color-text-secondary)',
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>
+                        {job.quantity > 1 ? `×${job.quantity} ` : ''}{job.name}
+                      </span>
+                    </div>
                   </div>
                   <span style={{
                     fontSize: 12,
