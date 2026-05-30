@@ -52,7 +52,7 @@ import { esiFetchAll, esiGet, apiPost } from '../api/client';
 
 // ── EVE OAuth constants (must match EVE Developer Portal registration) ────────
 
-const EVE_CLIENT_ID = '5be8a3b3444a4413b7f82b45c2c54a26';
+const EVE_CLIENT_ID = import.meta.env.VITE_EVE_CLIENT_ID as string;
 const SCOPES =
   'esi-assets.read_assets.v1 esi-characters.read_blueprints.v1 ' +
   'esi-wallet.read_character_wallet.v1 esi-industry.read_character_jobs.v1 ' +

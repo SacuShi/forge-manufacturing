@@ -7,6 +7,9 @@ node_modules/
 .env.production
 config/secrets.js
 
+# Local deployment credentials (server IP, SSH user — never commit these)
+.forge-deploy
+
 # Database files
 *.db
 *.db-shm

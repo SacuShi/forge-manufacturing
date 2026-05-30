@@ -33,48 +33,48 @@ An EVE Online manufacturing intelligence web application for the **UKC corporati
 ### Server
 | Property | Value |
 |---|---|
-| Host | 192.168.1.62 |
-| User | gumpy54 |
-| Process manager | PM2 (`pm2 restart forge`) |
-| Server directory | `/home/gumpy54/forge-server/` |
-| Frontend static files | `/home/gumpy54/forge-server/public/` |
-| Database | `/home/gumpy54/forge-db/forge.db` (SQLite) |
+| Host | see local `.forge-deploy` (not committed) |
+| User | see local `.forge-deploy` (not committed) |
+| Process manager | PM2 (`pm2 restart 0`) |
+| Server directory | `/home/<server-user>/forge-server/` |
+| Frontend static files | `/home/<server-user>/forge-server/public/` |
+| Database | `/home/<server-user>/forge-db/forge.db` (SQLite) |
 | Proxy | Cloudflared tunnel → forge-ukc.com |
 
-### Deploy commands (run from `C:\Users\AndyMcD\Desktop\forge-manufacturing\` on the Windows PC)
+### Deploy commands (run from the repo root on the Windows PC)
 
 > **IMPORTANT:** SSH from Claude's terminal gets permission denied — all scp/ssh commands
 > must be run by the user from their own Windows terminal, not by Claude.
 
 ```bash
 # Backend
-scp server/server.js gumpy54@192.168.1.62:/home/gumpy54/forge-server/server.js
-scp server/sde-import.js gumpy54@192.168.1.62:/home/gumpy54/forge-server/sde-import.js
+scp server/server.js <server-user>@<server-ip>:/home/<server-user>/forge-server/server.js
+scp server/sde-import.js <server-user>@<server-ip>:/home/<server-user>/forge-server/sde-import.js
 
 # Security middleware (deploy whenever forge-security.js changes)
-scp server/forge-security.js gumpy54@192.168.1.62:/home/gumpy54/forge-server/forge-security.js
+scp server/forge-security.js <server-user>@<server-ip>:/home/<server-user>/forge-server/forge-security.js
 
 # Frontend (ALWAYS deploy all of dist/ together — Vite hashes filenames on every build)
-scp -r forge-v1/dist/* gumpy54@192.168.1.62:/home/gumpy54/forge-server/public/
+scp -r forge-v1/dist/* <server-user>@<server-ip>:/home/<server-user>/forge-server/public/
 
 # Restart (PM2 process id=0; "pm2 restart forge" may fail — use id instead)
-ssh gumpy54@192.168.1.62 "pm2 restart 0"
+ssh <server-user>@<server-ip> "pm2 restart 0"
 
 # SDE import (stop forge first — it locks the DB)
-ssh gumpy54@192.168.1.62 "pm2 stop 0 && cd ~/forge-server && node sde-import.js && pm2 start 0 && sleep 5 && curl -s -X POST http://localhost:3000/api/trigger-precompute"
+ssh <server-user>@<server-ip> "pm2 stop 0 && cd ~/forge-server && node sde-import.js && pm2 start 0 && sleep 5 && curl -s -X POST http://localhost:3000/api/trigger-precompute"
 ```
 
 ### CRITICAL deployment notes
 - Vite hashes output filenames on every build (e.g. `index-DgGW3P7F.js`). Always upload `index.html` AND `assets/` together.
-- After deploying server.js with multi-region schema changes, the first `pm2 restart` triggers DB migration (DROP + CREATE `precomputed_profits` if `region_id` column missing), then `runPreCompute` loops all 6 regions. Allow 2–5 min for precompute to complete — non-Jita hubs will be empty until then. Watch logs: `ssh gumpy54@192.168.1.62 "pm2 logs forge --lines 60"`
+- After deploying server.js with multi-region schema changes, the first `pm2 restart` triggers DB migration (DROP + CREATE `precomputed_profits` if `region_id` column missing), then `runPreCompute` loops all 6 regions. Allow 2–5 min for precompute to complete — non-Jita hubs will be empty until then. Watch logs: `ssh <server-user>@<server-ip> "pm2 logs forge --lines 60"`
 
 ### Local paths
 | Item | Path |
 |---|---|
-| Repo root | `C:\Users\AndyMcD\Desktop\forge-manufacturing` |
-| Frontend source | `C:\Users\AndyMcD\Desktop\forge-manufacturing\forge-v1\src\` |
-| Frontend dist | `C:\Users\AndyMcD\Desktop\forge-manufacturing\forge-v1\dist\` |
-| Backend | `C:\Users\AndyMcD\Desktop\forge-manufacturing\server\` |
+| Repo root | `<local repo root>` |
+| Frontend source | `forge-v1\src\` |
+| Frontend dist | `forge-v1\dist\` |
+| Backend | `server\` |
 
 ### Build
 ```bash
@@ -173,7 +173,7 @@ forge-manufacturing/
 ## 5. Database Schema
 
 **DB file:** `forge.db` (SQLite)  
-**DB path on server:** `/home/gumpy54/forge-db/forge.db`  
+**DB path on server:** `/home/<server-user>/forge-db/forge.db`  
 **In server.js:** `path.join(__dirname, '../forge-db/forge.db')`
 
 ### Tables
@@ -806,13 +806,11 @@ wallet, blueprints, assets, active jobs, trained skills.
 
 ### v1.7.0 — Haulage Phase 2 ✓ BUILT + PUSHED (commit `a2f5dc5`)
 
-**Design brief source:** `C:\Users\AndyMcD\Desktop\New Text Document (3).txt`
-
 **Deployed via:**
 ```bash
-scp C:\Users\AndyMcD\Desktop\forge-manufacturing\server\server.js gumpy54@192.168.1.62:/home/gumpy54/forge-server/server.js
-scp -r C:\Users\AndyMcD\Desktop\forge-manufacturing\forge-v1\dist\* gumpy54@192.168.1.62:/home/gumpy54/forge-server/public/
-ssh gumpy54@192.168.1.62 "pm2 restart 0"
+scp server/server.js <server-user>@<server-ip>:/home/<server-user>/forge-server/server.js
+scp -r forge-v1/dist/* <server-user>@<server-ip>:/home/<server-user>/forge-server/public/
+ssh <server-user>@<server-ip> "pm2 restart 0"
 ```
 > No sde-import.js redeploy needed — packaged_volume already populated in Phase 1.
 > DB migrations run automatically on pm2 restart (16 new ALTER TABLE columns).
@@ -1131,9 +1129,9 @@ FORGE_CORP_KEY=...          # v1.4.0: any strong random string; used to derive A
 **Adding FORGE_CORP_KEY on server:**
 ```bash
 # Generate a strong random key (run once, save the output)
-ssh gumpy54@192.168.1.62 "node -e \"console.log(require('crypto').randomBytes(48).toString('hex'))\""
+ssh <server-user>@<server-ip> "node -e \"console.log(require('crypto').randomBytes(48).toString('hex'))\""
 # Add to .env on server then restart
-ssh gumpy54@192.168.1.62 "echo 'FORGE_CORP_KEY=<generated-key>' >> /home/gumpy54/forge-server/.env && pm2 restart forge"
+ssh <server-user>@<server-ip> "echo 'FORGE_CORP_KEY=<generated-key>' >> ~/forge-server/.env && pm2 restart 0"
 ```
 
 ---
@@ -1249,7 +1247,7 @@ Manual trigger: POST `/api/corp/refresh` (requires EVE token + PIN/admin access)
 ## 19. Quick Reference
 
 ### Rebuild & deploy (full)
-Run all scp/ssh commands from `C:\Users\AndyMcD\Desktop\forge-manufacturing\` on the Windows PC.
+Run all scp/ssh commands from the repo root on the Windows PC.
 Claude cannot run these — SSH permission denied from Claude's terminal.
 
 ```bash
@@ -1257,16 +1255,16 @@ Claude cannot run these — SSH permission denied from Claude's terminal.
 cd forge-v1 && npm run build && cd ..
 
 # 2. Deploy backend
-scp server/server.js gumpy54@192.168.1.62:/home/gumpy54/forge-server/server.js
+scp server/server.js <server-user>@<server-ip>:/home/<server-user>/forge-server/server.js
 
 # 3. Deploy security middleware (whenever forge-security.js changes)
-scp server/forge-security.js gumpy54@192.168.1.62:/home/gumpy54/forge-server/forge-security.js
+scp server/forge-security.js <server-user>@<server-ip>:/home/<server-user>/forge-server/forge-security.js
 
 # 4. Deploy frontend (single command — copies all of dist/ including hashed assets)
-scp -r forge-v1/dist/* gumpy54@192.168.1.62:/home/gumpy54/forge-server/public/
+scp -r forge-v1/dist/* <server-user>@<server-ip>:/home/<server-user>/forge-server/public/
 
 # 5. Restart (PM2 process id=0)
-ssh gumpy54@192.168.1.62 "pm2 restart 0"
+ssh <server-user>@<server-ip> "pm2 restart 0"
 
 # 6. Commit & push
 git add server/server.js server/forge-security.js forge-v1/src/... forge-v1/dist/...
@@ -1276,12 +1274,12 @@ git push origin main
 
 ### Check server logs
 ```bash
-ssh gumpy54@192.168.1.62 "pm2 logs 0 --lines 50"
+ssh <server-user>@<server-ip> "pm2 logs 0 --lines 50"
 ```
 
 ### Trigger precompute manually (all 6 regions)
 ```bash
-ssh gumpy54@192.168.1.62 "curl -s -X POST http://localhost:3000/api/trigger-precompute"
+ssh <server-user>@<server-ip> "curl -s -X POST http://localhost:3000/api/trigger-precompute"
 ```
 
 ### Health check

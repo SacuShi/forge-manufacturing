@@ -421,7 +421,7 @@ async function runMigrations() {
 
 // ── Error sanitisation ────────────────────────────────────────────────────────
 // Strips filesystem paths from error messages before sending to clients.
-// SQLite errors include the full DB path (e.g. /home/gumpy54/forge-db/forge.db)
+// SQLite errors include the full DB path — strip it before sending to clients
 // which reveals server internals. Internal logging keeps the full message.
 function clientErrMsg(err) {
   return (err.message || 'Internal server error')
