@@ -746,8 +746,9 @@ const RightSidebar: FC<RightSidebarProps> = ({
                             <span>{formatISK(trueCostData.total_material_cost)}</span>
                           </div>
                           <div className="cost-tooltip-setup">
-                            Quantities in the list below are unmodified
-                            (ME 0). True Profit applies ME reduction to cost.
+                            Material quantities in the list below assume an
+                            unresearched original. Your blueprint's ME research
+                            reduces actual consumption when you build.
                           </div>
                         </>
                       );
@@ -920,9 +921,20 @@ const RightSidebar: FC<RightSidebarProps> = ({
                         {trueCostData.true_margin.toFixed(2)}%
                       </span>
                     </div>
+                    <div className="cost-tooltip-setup" style={{ marginTop: 8, borderTop: '0.5px solid var(--color-border-light)', paddingTop: 6 }}>
+                      The opportunity list shows an estimated spread assuming
+                      an unresearched blueprint and no taxes — useful for
+                      comparing items at a glance. This figure is what actually
+                      lands in your wallet: your blueprint's ME research trims
+                      material consumption, CONCORD collects its mandatory SCC
+                      levy, your structure charges its facility fee, and the
+                      broker's cut and transaction tax are applied based on your
+                      skills and standings.
+                    </div>
                     {!trueCostData.setup_configured && (
                       <div className="cost-tooltip-setup">
-                        Mfg Fees excluded — configure manufacturing setup for full accuracy.
+                        Manufacturing fees excluded — configure your structure
+                        and system for a complete picture.
                       </div>
                     )}
                   </div>

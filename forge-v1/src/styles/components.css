@@ -1611,18 +1611,26 @@ tbody td.align-center { text-align: center; }
   display: none;
   position: absolute;
   bottom: calc(100% + 6px);
-  left: 50%;
-  transform: translateX(-50%);
+  /* Default: left-anchor for boxes 1–2 so they don't clip the left edge */
+  left: 0;
+  transform: none;
   background: var(--color-bg-secondary);
   border: 0.5px solid var(--color-border-medium);
   border-radius: var(--radius-sm);
   padding: 8px 10px;
-  width: 240px;
-  z-index: 200;
+  width: 260px;
+  z-index: 300;
   font-size: 11px;
   text-align: left;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.55);
   pointer-events: none;
+}
+
+/* Right-anchor for boxes 3 & 4 so they don't overflow the sidebar edge */
+.cost-breakdown-row > .cost-box:nth-child(3) .cost-tooltip,
+.cost-breakdown-row > .cost-box:nth-child(4) .cost-tooltip {
+  left: auto;
+  right: 0;
 }
 
 .cost-tooltip-row {
