@@ -465,28 +465,6 @@ function decryptToken(ciphertext, ivHex, tagHex) {
   return decrypted.toString('utf8');
 }
 
-/**
- * Hash a 6-digit PIN with scrypt.
- * Returns { hash (base64), salt (hex) }.
- */
-function hashPin(pin) {
-  const salt = crypto.randomBytes(32);
-  const hash = crypto.scryptSync(String(pin), salt, 32, { N: 16384, r: 8, p: 1 });
-  return { hash: hash.toString('base64'), salt: salt.toString('hex') };
-}
-
-/**
- * Verify a PIN against a stored hash+salt.
- * Returns true if the PIN matches.
- */
-function verifyPin(pin, hashBase64, saltHex) {
-  const salt = Buffer.from(saltHex, 'hex');
-  const stored = Buffer.from(hashBase64, 'base64');
-  const derived = crypto.scryptSync(String(pin), salt, 32, { N: 16384, r: 8, p: 1 });
-  // timingSafeEqual prevents timing attacks even against a short PIN
-  return crypto.timingSafeEqual(derived, stored);
-}
-
 // ── CORP ESI HELPERS (v1.4.0) ────────────────────────────────────────────────
 
 /**
@@ -717,40 +695,118 @@ async function refreshCorpData(corpId) {
 
 /**
  * Middleware: verify that the authed character has corp data access.
- * Priority:
- *   1. corp_admin_access entry (whitelist) → immediate access
- *   2. Valid corp_pin_sessions entry (not expired) → access
- *   3. Else → 403 with CORP_PIN_REQUIRED code
+ * Access model (v1.5.2 — PIN removed):
+ *   1. corp_admin_access entry (admin/dev whitelist) → immediate access
+ *   2. Character has Director role in ESI for the configured corp → access
+ *   3. Else → 403 NOT_DIRECTOR
+ *
+ * The ESI check calls /characters/{id}/roles/ with the character's own Bearer
+ * token. Results are cached 5 minutes per character to avoid hammering ESI.
+ * Falls back to director_char_id match when esi-characters.read_roles.v1 scope
+ * has not yet been granted (users who haven't re-authed since the scope was added).
  *
  * Must be used AFTER security.verifyEveToken (which sets req.characterId).
  */
-async function requireCorpAccess(req, res, next) {
+
+// 5-minute ESI director-role result cache
+const directorRoleCache = new Map();
+const DIRECTOR_CACHE_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * Resolve whether a character is a Director in the configured corp.
+ * Uses and populates directorRoleCache.
+ */
+async function checkIsDirector(characterId, bearerToken, configCorpId, directorCharId) {
+  // Check cache
+  const cached = directorRoleCache.get(characterId);
+  if (cached && cached.expires > Date.now()) {
+    return cached.isDirector && cached.corpId === configCorpId;
+  }
+
+  const headers = { Authorization: `Bearer ${bearerToken}` };
+  let isDirector = false;
+  let charCorpId = null;
+  let cacheTtl   = DIRECTOR_CACHE_TTL_MS;
+
+  try {
+    const [rolesRes, charRes] = await Promise.all([
+      fetch(
+        `https://esi.evetech.net/latest/characters/${characterId}/roles/?datasource=tranquility`,
+        { headers }
+      ),
+      fetch(
+        `https://esi.evetech.net/latest/characters/${characterId}/?datasource=tranquility`,
+        { headers }
+      ),
+    ]);
+
+    if (rolesRes.ok) {
+      const rolesData = await rolesRes.json();
+      isDirector = Array.isArray(rolesData.roles) && rolesData.roles.includes('Director');
+    } else if (rolesRes.status === 403) {
+      // esi-characters.read_roles.v1 not yet granted — fall back to setup director
+      isDirector = characterId === directorCharId;
+      // Short cache TTL so the user gets access quickly after re-authing
+      cacheTtl = 60 * 1000;
+    }
+
+    if (charRes.ok) {
+      const charData = await charRes.json();
+      charCorpId = charData.corporation_id;
+    }
+  } catch (esiErr) {
+    console.warn(`ESI director check failed for ${characterId}:`, esiErr.message);
+    // On ESI connectivity error: allow the setup director only (fail safe)
+    isDirector = characterId === directorCharId;
+    charCorpId = configCorpId;
+    cacheTtl   = 60 * 1000;
+  }
+
+  directorRoleCache.set(characterId, {
+    isDirector,
+    corpId:  charCorpId,
+    expires: Date.now() + cacheTtl,
+  });
+
+  return isDirector && (charCorpId === null || charCorpId === configCorpId);
+}
+
+async function requireDirectorRole(req, res, next) {
   const characterId = req.characterId;
   if (!characterId) return res.status(401).json({ error: 'Not authenticated' });
 
   try {
-    // 1. Admin/dev whitelist — bypasses PIN entirely
+    // 1. Admin/dev whitelist
     const adminRow = await dbGet(
       'SELECT 1 FROM corp_admin_access WHERE character_id = ?',
       [characterId]
     );
     if (adminRow) return next();
 
-    // 2. Active PIN session
-    const session = await dbGet(
-      `SELECT * FROM corp_pin_sessions
-       WHERE character_id = ? AND expires_at > datetime('now')`,
-      [characterId]
+    // 2. Corp must be configured
+    const config = await dbGet(
+      'SELECT corp_id, director_char_id FROM corp_config LIMIT 1'
     );
-    if (session) return next();
+    if (!config) {
+      return res.status(404).json({ error: 'Corp not configured' });
+    }
 
-    // 3. Not verified
+    // 3. Verify Director role via ESI
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+    if (!token) return res.status(401).json({ error: 'Authorization required' });
+
+    const allowed = await checkIsDirector(
+      characterId, token, config.corp_id, config.director_char_id
+    );
+    if (allowed) return next();
+
     return res.status(403).json({
-      error: 'Corp data access requires PIN verification.',
-      code:  'CORP_PIN_REQUIRED',
+      error: 'Corp data access requires the Director role in the configured corporation.',
+      code:  'NOT_DIRECTOR',
     });
   } catch (err) {
-    console.error('requireCorpAccess error:', err.message);
+    console.error('requireDirectorRole error:', err.message);
     return res.status(500).json({ error: 'Access check failed' });
   }
 }
@@ -5003,14 +5059,17 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
 });
 
 // ════════════════════════════════════════════════════════════════════════════
-// CORP API ENDPOINTS (v1.4.0)
+// CORP API ENDPOINTS (v1.5.2 — Director-role access)
+//
+// Access model: characters with the EVE Director role in the configured corp
+// may access all corp data. No PIN required. The requireDirectorRole middleware
+// checks ESI /characters/{id}/roles/ and caches results for 5 minutes.
 //
 // Rate-limiting strategy:
-//   - PIN verify:   tight auth limiter (5 req/15min per IP) — brute-force protection
 //   - Data reads:   standard apiLimiter
 //   - Admin ops:    admin key header replaces rate limit (no EVE token required)
 //
-// All data endpoints use: security.apiLimiter → security.verifyEveToken → requireCorpAccess
+// All data endpoints use: security.apiLimiter → security.verifyEveToken → requireDirectorRole
 // ════════════════════════════════════════════════════════════════════════════
 
 // ── Admin helper ────────────────────────────────────────────────────────────
@@ -5047,13 +5106,13 @@ app.get('/api/corp/status', security.apiLimiter, async (req, res) => {
 
 // ── POST /api/corp/setup ─────────────────────────────────────────────────────
 // Admin-only (X-Admin-Key required).
-// Body: { code, redirect_uri, pin }
+// Body: { code, redirect_uri }
 //
 // Flow:
 //  1. Validate admin key + inputs
 //  2. Exchange EVE OAuth code for tokens (must have corp scopes)
 //  3. Verify JWT to get character_id; look up corp_id from ESI
-//  4. Encrypt refresh_token; hash PIN
+//  4. Encrypt refresh_token
 //  5. Upsert corp_config
 //  6. Trigger initial ESI data refresh in background
 app.post('/api/corp/setup', async (req, res) => {
@@ -5061,13 +5120,10 @@ app.post('/api/corp/setup', async (req, res) => {
     return res.status(403).json({ error: 'Admin key required' });
   }
 
-  const { code, redirect_uri, pin } = req.body;
+  const { code, redirect_uri } = req.body;
 
   if (!code || !redirect_uri) {
     return res.status(400).json({ error: 'Missing code or redirect_uri' });
-  }
-  if (!pin || !/^\d{6}$/.test(String(pin))) {
-    return res.status(400).json({ error: 'PIN must be exactly 6 digits' });
   }
   if (!CORP_ENCRYPTION_KEY) {
     return res.status(500).json({ error: 'FORGE_CORP_KEY not configured on server' });
@@ -5145,17 +5201,16 @@ app.post('/api/corp/setup', async (req, res) => {
     const corpData = await corpRes.json();
     const corpName = corpData.name || `Corp ${corpId}`;
 
-    // 6. Encrypt refresh token + hash PIN
+    // 6. Encrypt refresh token
     const enc = encryptToken(refresh_token);
-    const { hash: pinHash, salt: pinSalt } = hashPin(pin);
 
-    // 7. Upsert corp_config
+    // 7. Upsert corp_config (pin_hash/pin_salt kept as empty strings — no longer used)
     await dbRun(
       `INSERT INTO corp_config
          (corp_id, corp_name, director_char_id, director_char_name,
           enc_refresh_token, token_iv, token_tag,
           pin_hash, pin_salt, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+       VALUES (?, ?, ?, ?, ?, ?, ?, '', '', datetime('now'), datetime('now'))
        ON CONFLICT(corp_id) DO UPDATE SET
          corp_name           = excluded.corp_name,
          director_char_id    = excluded.director_char_id,
@@ -5163,13 +5218,10 @@ app.post('/api/corp/setup', async (req, res) => {
          enc_refresh_token   = excluded.enc_refresh_token,
          token_iv            = excluded.token_iv,
          token_tag           = excluded.token_tag,
-         pin_hash            = excluded.pin_hash,
-         pin_salt            = excluded.pin_salt,
          updated_at          = datetime('now')`,
       [
         corpId, corpName, characterId, characterName,
         enc.ciphertext, enc.iv, enc.tag,
-        pinHash, pinSalt,
       ]
     );
 
@@ -5194,81 +5246,34 @@ app.post('/api/corp/setup', async (req, res) => {
   }
 });
 
-// ── POST /api/corp/verify-pin ────────────────────────────────────────────────
-// Rate-limited (authLimiter — 5 req/15min per IP).
-// Requires EVE token (character must be logged in).
-// Body: { pin }
-// Grants a 24-hour corp data session on success.
-app.post('/api/corp/verify-pin',
-  security.authLimiter,       // tight rate limit — brute-force protection
-  security.verifyEveToken,
-  async (req, res) => {
-    const { pin } = req.body;
-    if (!pin || !/^\d{6}$/.test(String(pin))) {
-      return res.status(400).json({ error: 'PIN must be exactly 6 digits' });
-    }
-
-    try {
-      const config = await dbGet('SELECT * FROM corp_config LIMIT 1');
-      if (!config) {
-        return res.status(404).json({ error: 'Corp not configured — contact your director.' });
-      }
-
-      const isValid = verifyPin(String(pin), config.pin_hash, config.pin_salt);
-      if (!isValid) {
-        // Log failed attempts for monitoring (not stored in DB to avoid PII creep)
-        console.warn(`⚠ Corp PIN verification failed for character ${req.characterId} (IP: ${req.ip})`);
-        return res.status(401).json({ error: 'Incorrect PIN.' });
-      }
-
-      // Create/update 24-hour session
-      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().replace('T', ' ').split('.')[0];
-      await dbRun(
-        `INSERT INTO corp_pin_sessions (character_id, corp_id, verified_at, expires_at)
-         VALUES (?, ?, datetime('now'), ?)
-         ON CONFLICT(character_id) DO UPDATE SET
-           corp_id     = excluded.corp_id,
-           verified_at = datetime('now'),
-           expires_at  = excluded.expires_at`,
-        [req.characterId, config.corp_id, expiresAt]
-      );
-
-      console.log(`✓ Corp PIN verified for character ${req.characterId} — session expires ${expiresAt}`);
-      res.json({ ok: true, corp_id: config.corp_id, expires_at: expiresAt });
-
-    } catch (err) {
-      console.error('Corp PIN verify error:', err.message);
-      res.status(500).json({ error: clientErrMsg(err) });
-    }
-  }
-);
-
 // ── GET /api/corp/access-status ──────────────────────────────────────────────
-// Returns whether the current character has active corp access (admin or PIN session).
-// Used by frontend to decide whether to show PIN modal vs data directly.
+// Returns whether the current character has Director access to corp data.
+// Used by frontend to decide whether to show corp data or the "not a director" message.
 app.get('/api/corp/access-status', security.apiLimiter, security.verifyEveToken, async (req, res) => {
   try {
     const characterId = req.characterId;
 
-    // Admin whitelist check
+    // Admin whitelist
     const adminRow = await dbGet(
       'SELECT 1 FROM corp_admin_access WHERE character_id = ?', [characterId]
     );
-    if (adminRow) {
-      return res.json({ hasAccess: true, method: 'admin' });
-    }
+    if (adminRow) return res.json({ hasAccess: true, method: 'admin' });
 
-    // Active PIN session check
-    const session = await dbGet(
-      `SELECT expires_at FROM corp_pin_sessions
-       WHERE character_id = ? AND expires_at > datetime('now')`,
-      [characterId]
+    // Corp must be configured
+    const config = await dbGet(
+      'SELECT corp_id, director_char_id FROM corp_config LIMIT 1'
     );
-    if (session) {
-      return res.json({ hasAccess: true, method: 'pin', expires_at: session.expires_at });
-    }
+    if (!config) return res.json({ hasAccess: false });
 
-    res.json({ hasAccess: false });
+    // Check Director role via ESI (uses same cache as requireDirectorRole)
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+    if (!token) return res.json({ hasAccess: false });
+
+    const isDirector = await checkIsDirector(
+      characterId, token, config.corp_id, config.director_char_id
+    );
+    res.json({ hasAccess: isDirector, method: isDirector ? 'director' : undefined });
   } catch (err) {
     res.status(500).json({ error: clientErrMsg(err) });
   }
@@ -5280,7 +5285,7 @@ app.get('/api/corp/access-status', security.apiLimiter, security.verifyEveToken,
 app.get('/api/corp/blueprints',
   security.apiLimiter,
   security.verifyEveToken,
-  requireCorpAccess,
+  requireDirectorRole,
   async (req, res) => {
     try {
       const config = await dbGet('SELECT corp_id, last_refresh_at FROM corp_config LIMIT 1');
@@ -5349,7 +5354,7 @@ app.get('/api/corp/blueprints',
 app.get('/api/corp/assets',
   security.apiLimiter,
   security.verifyEveToken,
-  requireCorpAccess,
+  requireDirectorRole,
   async (req, res) => {
     try {
       const config = await dbGet('SELECT corp_id, last_refresh_at FROM corp_config LIMIT 1');
@@ -5412,7 +5417,7 @@ app.get('/api/corp/assets',
 app.get('/api/corp/jobs',
   security.apiLimiter,
   security.verifyEveToken,
-  requireCorpAccess,
+  requireDirectorRole,
   async (req, res) => {
     try {
       const config = await dbGet('SELECT corp_id, last_refresh_at FROM corp_config LIMIT 1');
@@ -5455,7 +5460,7 @@ app.get('/api/corp/jobs',
 app.post('/api/corp/refresh',
   security.apiLimiter,
   security.verifyEveToken,
-  requireCorpAccess,
+  requireDirectorRole,
   async (req, res) => {
     try {
       const config = await dbGet('SELECT corp_id FROM corp_config LIMIT 1');

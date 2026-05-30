@@ -44,8 +44,6 @@ interface MainContentProps {
   token:        string | null;
   corpStatus:   CorpStatus | null;
   accessStatus: CorpAccessStatus | null;
-  /** Signal parent to show the PIN entry modal */
-  onNeedCorpPin: () => void;
   /** v1.5 — item_id → character name; populated when alts are loaded; empty = no badges */
   blueprintOwnerMap?: Map<number, string>;
 }
@@ -86,7 +84,6 @@ const MainContent: FC<MainContentProps> = ({
   token,
   corpStatus,
   accessStatus,
-  onNeedCorpPin,
   blueprintOwnerMap = EMPTY_BP_OWNER_MAP,
 }) => {
   const [sortField, setSortField] = useState<SortField>('rank');
@@ -630,7 +627,6 @@ const MainContent: FC<MainContentProps> = ({
           token={token}
           corpStatus={corpStatus}
           accessStatus={accessStatus}
-          onNeedPin={onNeedCorpPin}
         />
       )}
 

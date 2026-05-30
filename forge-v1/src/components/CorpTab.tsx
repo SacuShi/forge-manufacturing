@@ -32,8 +32,6 @@ interface CorpTabProps {
   token:        string | null;
   corpStatus:   CorpStatus | null;
   accessStatus: CorpAccessStatus | null;
-  /** Forward to parent so it can show the PIN modal */
-  onNeedPin:    () => void;
 }
 
 // ── Activity label map ───────────────────────────────────────────────────────
@@ -472,7 +470,7 @@ const CorpJobsView: FC<CorpJobsProps> = ({ token }) => {
 
 // ── Main CorpTab component ────────────────────────────────────────────────────
 
-const CorpTab: FC<CorpTabProps> = ({ token, corpStatus, accessStatus, onNeedPin }) => {
+const CorpTab: FC<CorpTabProps> = ({ token, corpStatus, accessStatus }) => {
   const [activeSubTab, setActiveSubTab] = useState<CorpSubTab>('blueprints');
 
   // Corp not configured
@@ -489,22 +487,17 @@ const CorpTab: FC<CorpTabProps> = ({ token, corpStatus, accessStatus, onNeedPin 
     );
   }
 
-  // Corp configured, but no access → trigger PIN modal from parent
+  // Corp configured, but character is not a Director
   if (!accessStatus?.hasAccess) {
     return (
-      <div className="corp-needs-pin">
+      <div className="corp-not-configured">
         <span className="corp-nc-icon" aria-hidden="true">🔒</span>
         <h3 className="corp-nc-title">{corpStatus.corp_name}</h3>
         <p className="corp-nc-desc">
-          Enter the corp PIN to access blueprints, assets, and jobs.
+          Corp data is only accessible to characters with the Director role.
+          If you are a Director and see this message, try logging out and back
+          in to grant the updated EVE permissions.
         </p>
-        <button
-          type="button"
-          className="btn btn-primary"
-          onClick={onNeedPin}
-        >
-          Enter Corp PIN
-        </button>
       </div>
     );
   }

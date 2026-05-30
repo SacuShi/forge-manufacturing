@@ -30,7 +30,6 @@ import ChatPanel             from './components/ChatPanel';
 import LoginScreen           from './components/LoginScreen';
 import LoadingScreen         from './components/LoadingScreen';
 import IndustrySettingsModal from './components/IndustrySettings';
-import CorpPinModal          from './components/CorpPinModal';
 import { useCorpData }       from './hooks/useCorpData';
 
 /**
@@ -281,15 +280,10 @@ const App: FC = () => {
     return auth.altCharacters.find((a) => a.characterId === feeCharacterId)?.name ?? 'Primary';
   }, [feeCharacterId, auth.character, auth.altCharacters]);
 
-  // v1.4.0 — Corp feature: PIN modal visibility + corp data hook
-  const [corpPinOpen, setCorpPinOpen] = useState(false);
+  // v1.4.0 — Corp feature: director-role access (no PIN)
   const {
     corpStatus,
-    accessStatus:  corpAccessStatus,
-    verifying:     corpVerifying,
-    pinError:      corpPinError,
-    verifyPin:     verifyCorpPin,
-    refreshAccess: refreshCorpAccess,
+    accessStatus: corpAccessStatus,
   } = useCorpData(
     auth.token,
     activeTab === 'corp' && auth.status === 'authed',
@@ -827,7 +821,6 @@ const App: FC = () => {
           token={auth.token}
           corpStatus={corpStatus}
           accessStatus={corpAccessStatus}
-          onNeedCorpPin={() => setCorpPinOpen(true)}
           blueprintOwnerMap={blueprintOwnerMap}
         />
 
@@ -886,23 +879,6 @@ const App: FC = () => {
         }}
       />
 
-      {/* v1.4.0 — Corp PIN entry modal */}
-      {corpPinOpen && corpStatus?.configured && (
-        <CorpPinModal
-          corpStatus={corpStatus}
-          verifying={corpVerifying}
-          error={corpPinError}
-          onVerify={async (pin) => {
-            const ok = await verifyCorpPin(pin);
-            if (ok) {
-              setCorpPinOpen(false);
-              // If the Corp tab isn't already active, switch to it after PIN success
-              if (activeTab !== 'corp') setActiveTab('corp');
-              await refreshCorpAccess();
-            }
-          }}
-        />
-      )}
     </div>
   );
 };

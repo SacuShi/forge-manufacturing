@@ -345,8 +345,7 @@ export interface CorpStatus {
 /** Response from GET /api/corp/access-status */
 export interface CorpAccessStatus {
   hasAccess: boolean;
-  method?:   'admin' | 'pin';
-  expires_at?: string;
+  method?:   'admin' | 'director';
 }
 
 /** One corp blueprint row from GET /api/corp/blueprints */
