@@ -4220,18 +4220,20 @@ app.get('/api/search-profitable', security.apiLimiter, async (req, res) => {
     }
 
     const includeRisky = req.query.includeRisky === 'true';
+    const rawRegion    = parseInt(req.query.regionId || '10000002', 10);
+    const regionId     = VALID_REGIONS.includes(rawRegion) ? rawRegion : 10000002;
 
     // Sanitise: only allow alphanumeric, spaces, hyphens, apostrophes
     const sanitised = query.replace(/[^a-zA-Z0-9 '\-]/g, '').substring(0, 50);
 
     // Build WHERE clause
-    let whereConditions = ['product_name LIKE ?'];
-    const params = [`%${sanitised}%`];
+    let whereConditions = ['region_id = ?', 'product_name LIKE ?'];
+    const params = [regionId, `%${sanitised}%`];
 
     // Exclude CRITICAL risks only (not low_volume)
     if (!includeRisky) {
       whereConditions.push(`(
-        liquidity_risk IS NULL 
+        liquidity_risk IS NULL
         OR liquidity_risk = ""
         OR liquidity_risk = "low_volume"
       )`);
@@ -4243,14 +4245,14 @@ app.get('/api/search-profitable', security.apiLimiter, async (req, res) => {
       SELECT blueprint_id, product_id, product_name, material_cost,
              sell_price, buy_price, profit, profit_margin, isk_per_hour,
              build_time, material_count, computed_at,
-             avg_daily_volume, market_group_id, liquidity_risk
+             avg_daily_volume, market_group_id, liquidity_risk, price_source
       FROM precomputed_profits
       WHERE ${whereClause}
       ORDER BY profit DESC
-      LIMIT 20
+      LIMIT 30
     `, params);
 
-    res.json({ results, query: sanitised, includeRisky });
+    res.json({ results, query: sanitised, regionId, includeRisky });
 
   } catch (err) {
     console.error('Search profitable error:', err.message);

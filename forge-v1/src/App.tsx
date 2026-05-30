@@ -158,6 +158,10 @@ const App: FC = () => {
   const [rawResults,        setRawResults]        = useState<TopProfitableResponse['results']>([]);
   const [marketLoading,     setMarketLoading]     = useState(false);
   const [marketLoadingMore, setMarketLoadingMore] = useState(false);
+  const [marketSearchQuery, setMarketSearchQuery] = useState('');
+  const [marketSearchResults, setMarketSearchResults] = useState<TopProfitableResponse['results'] | null>(null);
+  const [marketSearching,   setMarketSearching]   = useState(false);
+  const marketSearchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Ref: debounce timer for the combined session re-POST (prevents burst during initial load)
   const sessionRePostTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Ref-based guard prevents duplicate concurrent "load more" fetches.
@@ -289,14 +293,44 @@ const App: FC = () => {
     activeTab === 'corp' && auth.status === 'authed',
   );
 
-  // Derive marketItems from rawResults.
+  // Derive marketItems from rawResults (paginated list) or marketSearchResults (search).
   // When feeRates are loaded, profit/margin/ISK-hr are recalculated with the same
   // formula as True Profit so both panels show consistent figures.
   // Uses allBlueprints so owned status reflects all in-scope characters.
   const marketItems = useMemo<MarketItem[]>(() => {
-    if (!rawResults.length) return [];
-    return mapToMarketItems(rawResults, allBlueprints, feeRates);
-  }, [rawResults, allBlueprints, feeRates]);
+    const source = marketSearchResults ?? rawResults;
+    if (!source.length) return [];
+    return mapToMarketItems(source, allBlueprints, feeRates);
+  }, [rawResults, marketSearchResults, allBlueprints, feeRates]);
+
+  // Server-side name search — called when user types in the market search box.
+  const handleMarketSearch = useCallback((query: string) => {
+    setMarketSearchQuery(query);
+    if (marketSearchTimerRef.current) clearTimeout(marketSearchTimerRef.current);
+
+    if (query.trim().length < 2) {
+      setMarketSearchResults(null); // revert to paginated list
+      setMarketSearching(false);
+      return;
+    }
+
+    setMarketSearching(true);
+    marketSearchTimerRef.current = setTimeout(async () => {
+      if (!auth.token) return;
+      try {
+        const encoded = encodeURIComponent(query.trim());
+        const data = await apiGet<{ results: TopProfitableResponse['results'] }>(
+          `/api/search-profitable?q=${encoded}&regionId=${selectedMarket.id}`,
+          auth.token
+        );
+        setMarketSearchResults(data.results);
+      } catch {
+        setMarketSearchResults([]); // show "no results" on error
+      } finally {
+        setMarketSearching(false);
+      }
+    }, 300);
+  }, [auth.token, selectedMarket.id]);
 
   const {
     detail: apiDetail,
@@ -572,6 +606,8 @@ const App: FC = () => {
   const handleMarketChange = useCallback(async (market: Market) => {
     setSelectedMarket(market);
     setRawResults([]);
+    setMarketSearchResults(null);
+    setMarketSearchQuery('');
     setMarketHasMore(true);
     setMarketError(null);
     setMarketLoading(true);
@@ -808,6 +844,9 @@ const App: FC = () => {
           marketItems={marketItems}
           marketLoading={marketLoading}
           marketError={marketError}
+          marketSearchQuery={marketSearchQuery}
+          marketSearching={marketSearching}
+          onMarketSearch={handleMarketSearch}
           blueprints={allBlueprints}
           assets={combinedAssets}
           activeJobs={allActiveJobs}

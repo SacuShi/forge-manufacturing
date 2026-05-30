@@ -30,6 +30,10 @@ interface MainContentProps {
   onLoadMoreMarket?: () => void;
   marketLoadingMore?: boolean;
   marketHasMore?: boolean;
+  /** Controlled search query — parent handles the server-side search */
+  marketSearchQuery: string;
+  marketSearching: boolean;
+  onMarketSearch: (query: string) => void;
 
   // Blueprints/Assets/Jobs tabs
   blueprints: EsiBlueprint[];
@@ -81,6 +85,9 @@ const MainContent: FC<MainContentProps> = ({
   activeJobs,
   itemNames,
   onSelectItem,
+  marketSearchQuery,
+  marketSearching,
+  onMarketSearch,
   token,
   corpStatus,
   accessStatus,
@@ -89,7 +96,6 @@ const MainContent: FC<MainContentProps> = ({
   const [sortField, setSortField] = useState<SortField>('rank');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
   const [filterOwned, setFilterOwned] = useState<string>('all');
-  const [marketSearch, setMarketSearch] = useState('');
   const [bpSearch, setBpSearch] = useState('');
   const [bpFilter, setBpFilter] = useState<'all' | 'bpo' | 'bpc'>('all');
   const [bpMetadata, setBpMetadata] = useState<Record<number, number>>({});
@@ -153,13 +159,7 @@ const MainContent: FC<MainContentProps> = ({
   const displayItems = useMemo<MarketItem[]>(() => {
     let list = [...marketItems];
 
-    // Name search
-    if (marketSearch.trim()) {
-      const q = marketSearch.trim().toLowerCase();
-      list = list.filter((i) => i.name.toLowerCase().includes(q));
-    }
-
-    // Ownership pill filter
+    // Ownership pill filter (still applied on top of search results)
     if (filterOwned === 'can-build') {
       list = list.filter((i) => i.canBuild);
     } else if (filterOwned === 'BPO' || filterOwned === 'BPC') {
@@ -172,7 +172,7 @@ const MainContent: FC<MainContentProps> = ({
       return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
     });
     return list;
-  }, [marketItems, marketSearch, filterOwned, sortField, sortDirection]);
+  }, [marketItems, filterOwned, sortField, sortDirection]);
 
   // BPO = runs===-1, BPC = runs>=0
   const groupedBps = useMemo(() => {
@@ -246,21 +246,39 @@ const MainContent: FC<MainContentProps> = ({
           <div className="content-header" style={{ padding: '12px 20px 0' }}>
             <h1 className="content-title">Market Opportunities</h1>
             <span className="content-meta" aria-live="polite">
-              {displayItems.length} item{displayItems.length !== 1 ? 's' : ''} · Jita 4-4
+              {marketSearching
+                ? 'Searching…'
+                : marketSearchQuery.trim().length >= 2
+                  ? `${displayItems.length} result${displayItems.length !== 1 ? 's' : ''} for "${marketSearchQuery.trim()}"`
+                  : `${displayItems.length} item${displayItems.length !== 1 ? 's' : ''}`}
             </span>
           </div>
 
           <div className="filter-row" style={{ padding: '8px 20px', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-            {/* Name search */}
-            <input
-              type="text"
-              value={marketSearch}
-              onChange={(e) => setMarketSearch(e.target.value)}
-              placeholder="Search items…"
-              className="filter-input"
-              style={{ width: 160 }}
-              aria-label="Search market items"
-            />
+            {/* Name search — server-side, searches full DB */}
+            <div style={{ position: 'relative' }}>
+              <input
+                type="text"
+                value={marketSearchQuery}
+                onChange={(e) => onMarketSearch(e.target.value)}
+                placeholder="Search all items…"
+                className="filter-input"
+                style={{ width: 170, paddingRight: marketSearchQuery ? 22 : undefined }}
+                aria-label="Search all market items"
+              />
+              {marketSearchQuery && (
+                <button
+                  type="button"
+                  onClick={() => onMarketSearch('')}
+                  aria-label="Clear search"
+                  style={{
+                    position: 'absolute', right: 5, top: '50%', transform: 'translateY(-50%)',
+                    background: 'none', border: 'none', cursor: 'pointer',
+                    color: 'var(--color-text-tertiary)', fontSize: 13, lineHeight: 1, padding: 0,
+                  }}
+                >×</button>
+              )}
+            </div>
 
             {/* Ownership pill filters */}
             <div style={{ display: 'flex', gap: 4 }}>
@@ -326,7 +344,7 @@ const MainContent: FC<MainContentProps> = ({
                 onSort={handleSort}
                 onSelect={onMarketSelect}
               />
-              {(marketHasMore || marketLoadingMore) && (
+              {!marketSearchQuery && (marketHasMore || marketLoadingMore) && (
                 <div style={{
                   flexShrink: 0,
                   padding: '10px 20px',
