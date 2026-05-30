@@ -1,5 +1,5 @@
 /**
- * FORGE Security Middleware — v1.5.3
+ * FORGE Security Middleware — v1.5.4
  *
  * Rate limits, token verification (with JWKS), and input validation.
  *
@@ -13,7 +13,6 @@
 'use strict';
 
 const rateLimit = require('express-rate-limit');
-const crypto    = require('crypto');
 
 // ── Rate limiters ─────────────────────────────────────────────────────────────
 
@@ -59,41 +58,38 @@ const aiLimiter = rateLimit({
 // JWKS before trusting any claim in the token.  The JWKS is cached for 1 hour and
 // auto-refreshed if a key is not found (handles key rotation).
 
-const EVE_JWKS_URI   = 'https://login.eveonline.com/oauth/jwks';
-const JWKS_TTL_MS    = 60 * 60 * 1000;     // 1 hour
+const EVE_JWKS_URI = 'https://login.eveonline.com/oauth/jwks';
+const JWKS_TTL_MS  = 60 * 60 * 1000; // 1 hour
 
-let _jwksCache    = null;
-let _jwksCacheAt  = 0;
-
-// In-flight JWKS promise — deduplicated so concurrent cold-start requests share one fetch
-let _jwksFetchInFlight = null;
+// All JWKS state in one object — prevents the three vars from drifting out of sync
+const _jwks = { data: null, fetchedAt: 0, inFlight: null };
 
 async function fetchJwks(force = false) {
-  if (!force && _jwksCache && (Date.now() - _jwksCacheAt) < JWKS_TTL_MS) {
-    return _jwksCache;
+  if (!force && _jwks.data && (Date.now() - _jwks.fetchedAt) < JWKS_TTL_MS) {
+    return _jwks.data;
   }
-  // Deduplicate concurrent fetches (thundering-herd guard)
-  if (!force && _jwksFetchInFlight) return _jwksFetchInFlight;
+  // Deduplicate concurrent fetches — thundering-herd guard on cold start
+  if (!force && _jwks.inFlight) return _jwks.inFlight;
 
-  _jwksFetchInFlight = (async () => {
+  _jwks.inFlight = (async () => {
     const controller = new AbortController();
-    const timeout    = setTimeout(() => controller.abort(), 5000); // 5s hard timeout
+    const timeout    = setTimeout(() => controller.abort(), 5000); // 5s hard deadline
     try {
       const res = await fetch(EVE_JWKS_URI, {
         signal:  controller.signal,
         headers: { 'User-Agent': 'FORGE Manufacturing Intelligence / forge-ukc.com' },
       });
       if (!res.ok) throw new Error(`JWKS fetch failed: ${res.status}`);
-      _jwksCache   = await res.json();
-      _jwksCacheAt = Date.now();
-      return _jwksCache;
+      _jwks.data      = await res.json();
+      _jwks.fetchedAt = Date.now();
+      return _jwks.data;
     } finally {
       clearTimeout(timeout);
-      _jwksFetchInFlight = null;
+      _jwks.inFlight = null;
     }
   })();
 
-  return _jwksFetchInFlight;
+  return _jwks.inFlight;
 }
 
 /**
@@ -112,20 +108,18 @@ async function verifyEveJwt(token) {
     throw new Error('Invalid JWT encoding');
   }
 
-  // Check expiry first (fast rejection before network call)
+  // Check expiry first — fast rejection before any network call
   const now = Math.floor(Date.now() / 1000);
-  if (payload.exp && payload.exp < now) {
-    throw new Error('Token expired');
-  }
+  if (payload.exp && payload.exp < now) throw new Error('Token expired');
 
-  // Find matching JWK (retry once on key-not-found to handle rotation)
-  let jwks = await fetchJwks();
-  let jwk  = jwks.keys.find(k => !header.kid || k.kid === header.kid);
-  if (!jwk) {
-    jwks = await fetchJwks(true);   // force refresh
-    jwk  = jwks.keys.find(k => !header.kid || k.kid === header.kid);
+  // Find matching JWK; retry once with a forced refresh to handle key rotation
+  let jwk;
+  for (const force of [false, true]) {
+    const jwks = await fetchJwks(force);
+    jwk = jwks.keys.find(k => !header.kid || k.kid === header.kid);
+    if (jwk) break;
   }
-  if (!jwk) throw new Error('No matching JWK for kid: ' + header.kid);
+  if (!jwk) throw new Error(`No matching JWK for kid: ${header.kid}`);
 
   // Verify RS256 signature using Node 18+ Web Crypto API
   const subtle = globalThis.crypto?.subtle;
@@ -139,8 +133,7 @@ async function verifyEveJwt(token) {
 
   const signingInput = Buffer.from(`${parts[0]}.${parts[1]}`);
   const signature    = Buffer.from(parts[2], 'base64url');
-
-  const valid = await subtle.verify('RSASSA-PKCS1-v1_5', publicKey, signature, signingInput);
+  const valid        = await subtle.verify('RSASSA-PKCS1-v1_5', publicKey, signature, signingInput);
   if (!valid) throw new Error('JWT signature verification failed');
 
   return payload;
@@ -148,7 +141,7 @@ async function verifyEveJwt(token) {
 
 /**
  * Decode JWT payload without signature verification.
- * Used ONLY as a fallback if JWKS is temporarily unreachable.
+ * Used ONLY as a fallback when JWKS is temporarily unreachable.
  */
 function _decodeJwtUnsafe(token) {
   try {
@@ -160,104 +153,102 @@ function _decodeJwtUnsafe(token) {
   }
 }
 
+// ── Shared token extraction ───────────────────────────────────────────────────
+
+/**
+ * Extract and verify the EVE character from an Authorization header.
+ * Pure function — does not touch req/res, so it can be called from any middleware.
+ * Returns { characterId, characterName, payload } or throws with a `.status` property.
+ *
+ * Falls back to unsigned decode if JWKS is temporarily unreachable (logs a warning).
+ * Hard-rejects on any other failure (bad signature, expired, wrong Node version).
+ */
+async function extractCharacterFromToken(authHeader) {
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    throw Object.assign(new Error('Missing or invalid Authorization header'), { status: 401 });
+  }
+
+  const token = authHeader.slice(7);
+  let payload;
+
+  try {
+    payload = await verifyEveJwt(token);
+  } catch (verifyErr) {
+    // Only transient JWKS network failures use the decode-only fallback;
+    // local errors (bad sig, expired, wrong Node) are hard rejects.
+    if (verifyErr.message.startsWith('JWKS fetch failed')) {
+      console.warn('⚠ JWKS unavailable — using decode-only fallback:', verifyErr.message);
+      payload = _decodeJwtUnsafe(token);
+    } else {
+      throw Object.assign(new Error('Invalid or expired token'), { status: 401 });
+    }
+  }
+
+  if (!payload?.sub) {
+    throw Object.assign(new Error('Invalid token payload'), { status: 401 });
+  }
+
+  // EVE JWT sub: "CHARACTER:EVE:<characterId>"
+  const subParts    = String(payload.sub).split(':');
+  const characterId = subParts.length === 3 ? parseInt(subParts[2], 10) : null;
+  if (!characterId || isNaN(characterId)) {
+    throw Object.assign(new Error('Cannot extract character ID from token'), { status: 401 });
+  }
+
+  return { characterId, characterName: payload.name || '', payload };
+}
+
 // ── EVE SSO token verification ────────────────────────────────────────────────
 
 /**
- * Express middleware that verifies the Bearer token from EVE SSO.
+ * Express middleware: verifies the Bearer token from EVE SSO.
  *
  * On success sets:
- *   req.characterId      — numeric EVE character ID   (flat property for route handlers)
- *   req.eveCharacter     — { characterId, characterName }
- *
- * SECURITY: verifies JWT signature against EVE's JWKS before trusting any claim.
- * Falls back to decode-only if JWKS is temporarily unreachable (logs a warning).
+ *   req.characterId    — numeric EVE character ID (flat for route handler compat)
+ *   req.eveCharacter   — { characterId, characterName }
+ *   req._evePayload    — full JWT payload (cached so verifyCharacterOwnership
+ *                        can skip re-verification on the same request)
  */
 async function verifyEveToken(req, res, next) {
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Missing or invalid Authorization header' });
-    }
+    const { characterId, characterName, payload } =
+      await extractCharacterFromToken(req.headers.authorization);
 
-    const token = authHeader.slice(7);
-    let payload;
-
-    try {
-      payload = await verifyEveJwt(token);
-    } catch (verifyErr) {
-      // If JWKS cannot be reached (network outage), fall back with a warning.
-      // Any other verification failure (bad signature, expired) is a hard reject.
-      // Only transient network failures trigger the fallback — NOT local config errors
-      // (Web Crypto unavailable = wrong Node version; that must be a hard failure)
-      const isNetworkError = verifyErr.message.startsWith('JWKS fetch failed');
-      if (isNetworkError) {
-        console.warn('⚠ JWKS unavailable — using decode-only fallback:', verifyErr.message);
-        payload = _decodeJwtUnsafe(token);
-      } else {
-        return res.status(401).json({ error: 'Invalid or expired token' });
-      }
-    }
-
-    if (!payload || !payload.sub) {
-      return res.status(401).json({ error: 'Invalid token payload' });
-    }
-
-    // EVE JWT sub: "CHARACTER:EVE:<characterId>"
-    const subParts    = String(payload.sub).split(':');
-    const characterId = subParts.length === 3 ? parseInt(subParts[2], 10) : null;
-
-    if (!characterId || isNaN(characterId)) {
-      return res.status(401).json({ error: 'Cannot extract character ID from token' });
-    }
-
-    // Set BOTH the flat property (backward compat) and the structured one
     req.characterId  = characterId;
-    req.eveCharacter = { characterId, characterName: payload.name || '' };
+    req.eveCharacter = { characterId, characterName };
+    req._evePayload  = payload; // short-circuit verifyCharacterOwnership on same request
     next();
   } catch (err) {
-    return res.status(401).json({ error: 'Token verification failed' });
+    res.status(err.status || 401).json({ error: err.message });
   }
 }
 
 /**
  * Express middleware: verifies EVE token AND checks that the characterId in the
  * route param (:characterId) matches the token's character.
+ *
+ * Short-circuits RS256 verification when verifyEveToken already ran (req._evePayload set),
+ * avoiding a second importKey + verify per request on ownership-checked routes.
  */
 async function verifyCharacterOwnership(req, res, next) {
-  // Run verifyEveToken inline (avoids double-response risk of calling it as middleware)
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Missing or invalid Authorization header' });
-  }
-  const token = authHeader.slice(7);
-  let payload;
   try {
-    payload = await verifyEveJwt(token).catch(async (err) => {
-      if (err.message.startsWith('JWKS fetch failed')) {
-        console.warn('⚠ JWKS unavailable — using decode-only fallback:', err.message);
-        return _decodeJwtUnsafe(token);
-      }
-      throw err;
-    });
-  } catch {
-    return res.status(401).json({ error: 'Invalid or expired token' });
-  }
-  if (!payload?.sub) return res.status(401).json({ error: 'Invalid token payload' });
+    // Reuse the already-verified identity from verifyEveToken if present
+    if (!req.characterId) {
+      const { characterId, characterName, payload } =
+        await extractCharacterFromToken(req.headers.authorization);
+      req.characterId  = characterId;
+      req.eveCharacter = { characterId, characterName };
+      req._evePayload  = payload;
+    }
 
-  const subParts    = String(payload.sub).split(':');
-  const characterId = subParts.length === 3 ? parseInt(subParts[2], 10) : null;
-  if (!characterId || isNaN(characterId)) {
-    return res.status(401).json({ error: 'Cannot extract character ID from token' });
+    const routeCharId = parseInt(req.params.characterId, 10);
+    if (req.characterId !== routeCharId) {
+      return res.status(403).json({ error: 'Token does not match requested character' });
+    }
+    next();
+  } catch (err) {
+    res.status(err.status || 401).json({ error: err.message });
   }
-
-  const routeCharId = parseInt(req.params.characterId, 10);
-  if (characterId !== routeCharId) {
-    return res.status(403).json({ error: 'Token does not match requested character' });
-  }
-
-  req.characterId  = characterId;
-  req.eveCharacter = { characterId, characterName: payload.name || '' };
-  next();
 }
 
 // ── Input validation middleware ───────────────────────────────────────────────

@@ -509,7 +509,7 @@ async function refreshCorpAccessToken(corpId) {
   const clientSecret = process.env.EVE_CLIENT_SECRET;
   const authHeader   = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
 
-  const res = await fetch('https://login.eveonline.com/v2/oauth/token', {
+  const res = await esiFetch('https://login.eveonline.com/v2/oauth/token', {
     method: 'POST',
     headers: {
       'Authorization': `Basic ${authHeader}`,
@@ -731,24 +731,19 @@ async function refreshCorpData(corpId) {
  * Must be used AFTER security.verifyEveToken (which sets req.characterId).
  */
 
-// 5-minute ESI director-role result cache (swept every 15 min)
-const directorRoleCache = new Map();
-setInterval(() => {
-  const now = Date.now();
-  for (const [k, v] of directorRoleCache) { if (v.expires < now) directorRoleCache.delete(k); }
-}, 15 * 60 * 1000).unref();
-const DIRECTOR_CACHE_TTL_MS = 5 * 60 * 1000;
+// Director role TTLs — stored in the general `cache` under "director:<characterId>"
+const DIRECTOR_CACHE_TTL_MS      = 5 * 60 * 1000; // normal: 5 min
+const DIRECTOR_CACHE_TTL_SHORT   = 60 * 1000;      // fallback/error: 1 min (re-check sooner)
 
 /**
  * Resolve whether a character is a Director in the configured corp.
- * Uses and populates directorRoleCache.
+ * Results are stored in the general cache (key: "director:<characterId>") so no
+ * separate Map or sweep timer is needed.
  */
 async function checkIsDirector(characterId, bearerToken, configCorpId, directorCharId) {
-  // Check cache
-  const cached = directorRoleCache.get(characterId);
-  if (cached && cached.expires > Date.now()) {
-    return cached.isDirector && cached.corpId === configCorpId;
-  }
+  const cacheKey = `director:${characterId}`;
+  const cached   = getCached(cacheKey);
+  if (cached) return cached.isDirector && cached.corpId === configCorpId;
 
   const headers = { Authorization: `Bearer ${bearerToken}` };
   let isDirector = false;
@@ -757,11 +752,11 @@ async function checkIsDirector(characterId, bearerToken, configCorpId, directorC
 
   try {
     const [rolesRes, charRes] = await Promise.all([
-      fetch(
+      esiFetch(
         `https://esi.evetech.net/latest/characters/${characterId}/roles/?datasource=tranquility`,
         { headers }
       ),
-      fetch(
+      esiFetch(
         `https://esi.evetech.net/latest/characters/${characterId}/?datasource=tranquility`,
         { headers }
       ),
@@ -771,10 +766,9 @@ async function checkIsDirector(characterId, bearerToken, configCorpId, directorC
       const rolesData = await rolesRes.json();
       isDirector = Array.isArray(rolesData.roles) && rolesData.roles.includes('Director');
     } else if (rolesRes.status === 403) {
-      // esi-characters.read_roles.v1 not yet granted — fall back to setup director
+      // esi-characters.read_corporation_roles.v1 not yet granted — fall back to setup director
       isDirector = characterId === directorCharId;
-      // Short cache TTL so the user gets access quickly after re-authing
-      cacheTtl = 60 * 1000;
+      cacheTtl   = DIRECTOR_CACHE_TTL_SHORT; // re-check sooner after re-auth
     }
 
     if (charRes.ok) {
@@ -783,18 +777,13 @@ async function checkIsDirector(characterId, bearerToken, configCorpId, directorC
     }
   } catch (esiErr) {
     console.warn(`ESI director check failed for ${characterId}:`, esiErr.message);
-    // On ESI connectivity error: allow the setup director only (fail safe)
+    // On connectivity error: allow only the setup director (fail safe)
     isDirector = characterId === directorCharId;
     charCorpId = configCorpId;
-    cacheTtl   = 60 * 1000;
+    cacheTtl   = DIRECTOR_CACHE_TTL_SHORT;
   }
 
-  directorRoleCache.set(characterId, {
-    isDirector,
-    corpId:  charCorpId,
-    expires: Date.now() + cacheTtl,
-  });
-
+  setCached(cacheKey, { isDirector, corpId: charCorpId }, cacheTtl);
   return isDirector && (charCorpId === null || charCorpId === configCorpId);
 }
 
@@ -850,7 +839,7 @@ async function fetchRegionPrices(regionId) {
   // Fetch all pages of sell orders
   for (let page = 1; page <= 200; page++) {
     try {
-      const res = await fetch(
+      const res = await esiFetch(
         `https://esi.evetech.net/latest/markets/${regionId}/orders/` +
         `?datasource=tranquility&order_type=sell&page=${page}`
       );
@@ -873,7 +862,7 @@ async function fetchRegionPrices(regionId) {
   // Fetch all pages of buy orders
   for (let page = 1; page <= 200; page++) {
     try {
-      const res = await fetch(
+      const res = await esiFetch(
         `https://esi.evetech.net/latest/markets/${regionId}/orders/` +
         `?datasource=tranquility&order_type=buy&page=${page}`
       );
@@ -1149,7 +1138,7 @@ async function fetchAdjustedPrices() {
   const ctrl = new AbortController();
   const t    = setTimeout(() => ctrl.abort(), 30000);
   try {
-    const res = await fetch(
+    const res = await esiFetch(
       'https://esi.evetech.net/latest/markets/prices/?datasource=tranquility',
       { headers: { Accept: 'application/json' }, signal: ctrl.signal }
     );
@@ -1188,7 +1177,7 @@ async function fetchCostIndices() {
   const t    = setTimeout(() => ctrl.abort(), 30000);
   let systems;
   try {
-    const res = await fetch(
+    const res = await esiFetch(
       'https://esi.evetech.net/latest/industry/systems/?datasource=tranquility',
       { headers: { Accept: 'application/json' }, signal: ctrl.signal }
     );
@@ -1860,7 +1849,7 @@ app.post('/api/item-details', security.apiLimiter, async (req, res) => {
 
     // Get market history from ESI (not cached per-item to save memory)
     const JITA_REGION = 10000002;
-    const historyRes = await fetch(
+    const historyRes = await esiFetch(
       `https://esi.evetech.net/latest/markets/${JITA_REGION}/history/?datasource=tranquility&type_id=${typeId}`
     );
 
@@ -3605,7 +3594,7 @@ async function runVolumeEnrichment() {
     for (const item of itemsToEnrich) {
       try {
         // Fetch market history for volume data AND 30-day average price
-        const historyRes = await fetch(
+        const historyRes = await esiFetch(
           `https://esi.evetech.net/latest/markets/${JITA_REGION}/history/?datasource=tranquility&type_id=${item.product_id}`
         );
 
@@ -3648,7 +3637,7 @@ async function runVolumeEnrichment() {
         }
 
         // Fetch market_group_id to detect non-marketable items
-        const typeRes = await fetch(
+        const typeRes = await esiFetch(
           `https://esi.evetech.net/latest/universe/types/${item.product_id}/?datasource=tranquility`
         );
 
@@ -3730,7 +3719,7 @@ async function runVolumeEnrichment() {
       console.log(`⟳ Fetching history for ${zeroSellItems.length} zero-sell-price items...`);
       for (const item of zeroSellItems) {
         try {
-          const histRes = await fetch(
+          const histRes = await esiFetch(
             `https://esi.evetech.net/latest/markets/${JITA_REGION}/history/?datasource=tranquility&type_id=${item.product_id}`
           );
           if (histRes.ok) {
@@ -5219,7 +5208,7 @@ app.post('/api/corp/setup', security.adminLimiter, async (req, res) => {
     }
 
     // 4. Fetch character's corporation from ESI
-    const charRes = await fetch(
+    const charRes = await esiFetch(
       `https://esi.evetech.net/latest/characters/${characterId}/?datasource=tranquility`,
       { headers: { 'Authorization': `Bearer ${access_token}` } }
     );
@@ -5231,7 +5220,7 @@ app.post('/api/corp/setup', security.adminLimiter, async (req, res) => {
     }
 
     // 5. Fetch corp name
-    const corpRes  = await fetch(
+    const corpRes  = await esiFetch(
       `https://esi.evetech.net/latest/corporations/${corpId}/?datasource=tranquility`
     );
     const corpData = await corpRes.json();
