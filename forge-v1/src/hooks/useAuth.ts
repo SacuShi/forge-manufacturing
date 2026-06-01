@@ -302,13 +302,17 @@ export function useAuth(): AuthState & {
       // ── 7. Character skills ────────────────────────────────────────────────
       setLoadStep('Scanning skills…');
       let skillData: Array<{ skill_id: number; active_skill_level: number }> = [];
+      let totalSp = 0;
       try {
         const skillsResponse = await esiGet<{
-          skills: Array<{ skill_id: number; active_skill_level: number }>;
+          skills:      Array<{ skill_id: number; active_skill_level: number }>;
+          total_sp:    number;
+          unallocated_sp?: number;
         }>(`/characters/${cid}/skills/`, acc);
         skillData = skillsResponse.skills ?? [];
+        totalSp   = skillsResponse.total_sp ?? 0;
         setSkills(skillData);
-        addLog('Skills', 'ok', `${skillData.length} trained`);
+        addLog('Skills', 'ok', `${skillData.length} trained · ${(totalSp / 1_000_000).toFixed(1)}M SP`);
       } catch (e) {
         addLog('Skills', 'err', (e as Error).message);
       }
@@ -367,6 +371,7 @@ export function useAuth(): AuthState & {
           wallet,
           jobs:      activeJobs,
           skills:    skillData,
+          total_sp:  totalSp,
           standings: standingsScopeGranted ? standingsData : null,
         }, acc);
         addLog('Session', 'ok', 'Cached on server (2hr expiry)');

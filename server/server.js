@@ -2619,7 +2619,7 @@ app.post('/api/ai-chat',
 
     console.log(`✓ Session data loaded: ${sessionData.assets?.length || 0} assets, ${sessionData.blueprints?.length || 0} blueprints`);
 
-    const { assets, blueprints, prices, wallet, jobs, skills } = sessionData;
+    const { assets, blueprints, prices, wallet, jobs, skills, total_sp } = sessionData;
 
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
@@ -2656,16 +2656,43 @@ app.post('/api/ai-chat',
       return `${j.product_name || j.blueprint_type_id} ×${j.runs} [${activity}]`;
     }).join('; ');
 
-    // Note: skills are now available and passed to the server.
-    // Future use: for filtering blueprints by skill requirements in Market Opportunities
     const skillCount = (skills && skills.length) || 0;
+
+    // ── Player experience tier (based on total skill points) ──────────────
+    // Used to calibrate response complexity — see system prompt for tier rules.
+    const playerSp = total_sp || 0;
+    let experienceTier, experienceNote;
+    if (playerSp === 0) {
+      experienceTier = 'Unknown';
+      experienceNote = 'SP unknown — use balanced Intermediate tone.';
+    } else if (playerSp < 5_000_000) {
+      experienceTier = 'New Player';
+      experienceNote = 'New player — plain language, define terms, step-by-step guidance, link to EVE University.';
+    } else if (playerSp < 20_000_000) {
+      experienceTier = 'Beginner';
+      experienceNote = 'Beginner — explain key terms, avoid assuming deep knowledge, suggest further reading.';
+    } else if (playerSp < 50_000_000) {
+      experienceTier = 'Intermediate';
+      experienceNote = 'Intermediate — standard EVE terminology, explain nuances without repeating basics.';
+    } else if (playerSp < 100_000_000) {
+      experienceTier = 'Experienced';
+      experienceNote = 'Experienced — technical detail welcome, skip basics, focus on optimisation.';
+    } else if (playerSp < 150_000_000) {
+      experienceTier = 'Veteran';
+      experienceNote = 'Veteran — highly concise, assume mastery of all standard EVE mechanics.';
+    } else {
+      experienceTier = 'Expert';
+      experienceNote = 'Expert — maximum technical density, peer-level, no hand-holding.';
+    }
 
     const builtContext = [
       `Wallet: ${(wallet / 1e9).toFixed(2)}B ISK`,
       `Blueprints: ${blueprints.length} total (${bpoCount} BPOs, ${bpcCount} BPCs)`,
       `Assets: ${assets.length} stacks — top holdings: ${assetSummary}`,
       `Active jobs (${jobs.length}): ${jobSummary}`,
-      `Skills trained: ${skillCount}`,
+      `Skills trained: ${skillCount} (distinct skills)`,
+      `Total skill points: ${playerSp > 0 ? playerSp.toLocaleString() + ` SP (${experienceTier})` : 'Unknown'}`,
+      `Response tone: ${experienceNote}`,
     ].join('\n');
 
     // Tool definitions for AI
@@ -3380,7 +3407,7 @@ app.post('/api/session-data',
   async (req, res) => {
     try {
       const characterId = req.characterId;
-      const { assets, blueprints, prices, wallet, jobs, skills, standings } = req.body;
+      const { assets, blueprints, prices, wallet, jobs, skills, total_sp, standings } = req.body;
 
       // Validate data exists
       if (!assets || !blueprints) {
@@ -3389,9 +3416,9 @@ app.post('/api/session-data',
 
       // Store in cache with 2-hour expiry
       const sessionKey = `session:${characterId}`;
-      
+
       console.log(`💾 Caching session data - Character: ${characterId}, Key: ${sessionKey}`);
-      console.log(`   Assets: ${assets.length}, Blueprints: ${blueprints.length}, Prices: ${Object.keys(prices || {}).length}`);
+      console.log(`   Assets: ${assets.length}, Blueprints: ${blueprints.length}, Prices: ${Object.keys(prices || {}).length}, SP: ${(total_sp || 0).toLocaleString()}`);
 
       // v0.9.4: Discover player-owned structures from asset locations
       // Structure IDs are int64 (> 2^31-1), NPC stations are int32
@@ -3419,11 +3446,12 @@ app.post('/api/session-data',
       setCached(sessionKey, {
         assets,
         blueprints,
-        prices: prices || {},
-        wallet: wallet || 0,
-        jobs: jobs || [],
-        skills: skills || [],
-        standings: standings || { factions: {}, corps: {} },
+        prices:     prices || {},
+        wallet:     wallet || 0,
+        jobs:       jobs || [],
+        skills:     skills || [],
+        total_sp:   total_sp || 0,
+        standings:  standings || { factions: {}, corps: {} },
         accessibleStructures: Array.from(structureIds),
         cachedAt: new Date().toISOString()
       }, 7200000); // 2 hours
@@ -4918,6 +4946,56 @@ If asked about a ship NOT in this table — say "I'd recommend verifying at
   wiki.eveuniversity.org/Invention as these relationships are fixed in the game SDE."
 Do NOT guess invention parents for ships not listed above.
 Always clarify: you cannot invent FROM a BPO; the T1 BPC run is always consumed.
+
+══ PLAYER EXPERIENCE — ADAPT YOUR TONE ══
+
+The player context block includes "Total skill points" and a "Response tone" line.
+Use these to calibrate every response. Adjust vocabulary, depth, and structure as
+follows — do NOT announce the tier to the player, just apply it silently:
+
+• New Player (< 5 M SP)
+  - Plain English throughout. Define every EVE-specific term the first time you use it.
+  - Break guidance into numbered steps wherever possible.
+  - After answering, suggest one relevant EVE University article or official resource
+    for further reading (link: wiki.eveuniversity.org/<topic>).
+  - Never assume knowledge of industry, market, or corp mechanics.
+  - Example tone: "Manufacturing fees are costs CCP charges you to run a build job.
+    Think of them like a factory rental fee — they vary by system and structure."
+
+• Beginner (5 M – 20 M SP)
+  - Explain key terms inline (parenthetically is fine).
+  - Avoid assuming they have used all game systems.
+  - Offer a "want to know more?" pointer to guides for complex topics.
+  - Example tone: "Your SCI (System Cost Index) is 3.2%, which is fairly high —
+    consider building in a lower-cost system to cut your job fees."
+
+• Intermediate (20 M – 50 M SP)
+  - Standard EVE terminology, no hand-holding on basics.
+  - Explain nuances and trade-offs, but be concise.
+  - Offer links to deep-dives only for genuinely advanced topics.
+  - Example tone: "At ME10 you're already near the breakpoint — a Raitaru
+    cuts another 1% but the SCI saving may not justify the move."
+
+• Experienced (50 M – 100 M SP)
+  - Full technical detail. Skip all introductory context.
+  - Lead with the key number or recommendation, then the rationale.
+  - Focus on marginal optimisation, edge cases, and multi-step chains.
+  - Example tone: "EIV on 10 runs is ~4.8B. At 3.1% SCI + 2% SCC + 0% tax,
+    job cost is ~248M. That leaves 62M headroom over Jita sell."
+
+• Veteran (100 M – 150 M SP)
+  - Maximum conciseness. Assume mastery of all standard EVE mechanics.
+  - Skip all explanatory scaffolding. Numbers and conclusions only.
+  - Example tone: "SCI 3.1% kills margin — move to Tama (1.2%) or absorb it."
+
+• Expert (150 M + SP)
+  - Peer-level conversation. Dense, exact figures, no preamble.
+  - Treat the player as a domain expert; engage with their reasoning directly.
+  - Example tone: "Jita sell spread is 1.8% today. With Accounting 5 + BR L5
+    you're at 4.7% total tax drag. Margin holds above 12% if mat cost stays < 4.6B."
+
+• Unknown SP (0 or absent)
+  - Default to Intermediate tone.
 
 ══ ITEM NAME RULES ══
 Always use FULL item names — they are used as clickable links in the UI.
