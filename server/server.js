@@ -2713,7 +2713,13 @@ app.post('/api/ai-chat',
       + (skillLevelMap[3444]  || 0) * 8   // Retail
       + (skillLevelMap[16596] || 0) * 16  // Wholesale
       + (skillLevelMap[18580] || 0) * 32; // Tycoon
-    const txTaxRate = (7.5 * (1 - 0.11 * (skillLevelMap[16622] || 0))).toFixed(2);
+    const txTaxRate          = (7.5 * (1 - 0.11 * (skillLevelMap[16622] || 0))).toFixed(2);
+    // Reprocessing base yield: 30% × (1 + 0.03×Reprocessing) × (1 + 0.02×ReprEfficiency)
+    // (structure/implant bonuses not included — this is the skill-only component)
+    const reprYield = (skillLevelMap[3385] || skillLevelMap[3389])
+      ? (30 * (1 + 0.03 * (skillLevelMap[3385] || 0)) * (1 + 0.02 * (skillLevelMap[3389] || 0))).toFixed(1)
+      : null;
+    const piPlanets  = 1 + (skillLevelMap[2495] || 0); // Interplanetary Consolidation
 
     const derivedLines = [
       `Concurrent mfg jobs: ${concurrentMfgJobs}`,
@@ -2721,6 +2727,8 @@ app.post('/api/ai-chat',
       `research slots: ${concurrentResSlots}`,
       maxMarketOrders !== 5 ? `max market orders: ${maxMarketOrders}` : null,
       `transaction tax rate: ${txTaxRate}%`,
+      reprYield ? `reprocessing yield (skills only): ${reprYield}%` : null,
+      (skillLevelMap[2495] || 0) > 0 ? `PI planets: ${piPlanets}` : null,
     ].filter(Boolean).join(', ');
 
     const keySkillsBlock = skillGroupLines.length > 0
@@ -4743,11 +4751,13 @@ const KEY_SKILL_IDS = {
   3388:  'Advanced Industry',
   3387:  'Mass Production',
   45748: 'Mass Reactions',
+  24268: 'Supply Chain Management',   // remote job starting
   // ── Research / lab ────────────────────────────────────────────────────────
   3402:  'Science',
   3403:  'Research',
   3406:  'Laboratory Operation',
   24624: 'Advanced Laboratory Operation',
+  24270: 'Scientific Networking',     // remote research/invention starting
   // ── Racial T2 ship manufacturing (starship engineering) ───────────────────
   // NOTE: 11444=Amarr, 11454=Caldari — commonly swapped in third-party docs
   11454: 'Caldari Starship Engineering',
@@ -4757,6 +4767,9 @@ const KEY_SKILL_IDS = {
   // ── T2 component manufacturing ────────────────────────────────────────────
   11452: 'Mechanical Engineering',
   11453: 'Electronic Engineering',
+  // ── Capital ship manufacturing ────────────────────────────────────────────
+  22242: 'Capital Ship Construction',
+  77725: 'Advanced Capital Ship Construction',
   // ── Invention — encryption methods ────────────────────────────────────────
   21790: 'Caldari Encryption Methods',
   21791: 'Minmatar Encryption Methods',
@@ -4773,6 +4786,10 @@ const KEY_SKILL_IDS = {
   11451: 'Nuclear Physics',
   11455: 'Quantum Physics',
   11529: 'Molecular Engineering',
+  // ── Reprocessing / refining ───────────────────────────────────────────────
+  3385:  'Reprocessing',
+  3389:  'Reprocessing Efficiency',
+  12196: 'Scrapmetal Processing',
   // ── Trading / market ──────────────────────────────────────────────────────
   3443:  'Trade',
   3444:  'Retail',
@@ -4786,21 +4803,34 @@ const KEY_SKILL_IDS = {
   16598: 'Marketing',
   3447:  'Visibility',
   25235: 'Contracting',
+  // ── Social / standings ────────────────────────────────────────────────────
+  3359:  'Connections',    // improves effective NPC corp standing → lower broker fee
+  3357:  'Diplomacy',      // improves negative standings
   // ── Haulage / navigation ──────────────────────────────────────────────────
+  3449:  'Navigation',
+  3453:  'Evasive Maneuvering',
   3455:  'Warp Drive Operation',
   3456:  'Jump Drive Operation',
+  21610: 'Jump Fuel Conservation',
   21611: 'Jump Drive Calibration',
+  // ── Planetary Industry ────────────────────────────────────────────────────
+  2505:  'Command Center Upgrades',
+  2495:  'Interplanetary Consolidation',
 };
 
 // Skill groups — controls section labels and order in AI context output.
 // Only groups with at least one trained skill are shown.
 const SKILL_GROUPS = [
-  { label: 'Industry',   ids: [3380, 3388, 3387, 45748] },
-  { label: 'Research',   ids: [3402, 3403, 3406, 24624] },
-  { label: 'T2 mfg',     ids: [11454, 11444, 11445, 11450, 11452, 11453] },
-  { label: 'Invention',  ids: [21790, 21791, 23087, 23121, 11433, 11441, 11443, 11446, 11447, 11448, 11449, 11451, 11455, 11529] },
-  { label: 'Trade',      ids: [3443, 3444, 16596, 18580, 3446, 16597, 16622, 16595, 16594, 16598, 3447, 25235] },
-  { label: 'Haulage',    ids: [3455, 3456, 21611] },
+  { label: 'Industry',     ids: [3380, 3388, 3387, 45748, 24268] },
+  { label: 'Research',     ids: [3402, 3403, 3406, 24624, 24270] },
+  { label: 'T2 mfg',       ids: [11454, 11444, 11445, 11450, 11452, 11453] },
+  { label: 'Capital mfg',  ids: [22242, 77725] },
+  { label: 'Invention',    ids: [21790, 21791, 23087, 23121, 11433, 11441, 11443, 11446, 11447, 11448, 11449, 11451, 11455, 11529] },
+  { label: 'Reprocessing', ids: [3385, 3389, 12196] },
+  { label: 'Trade',        ids: [3443, 3444, 16596, 18580, 3446, 16597, 16622, 16595, 16594, 16598, 3447, 25235] },
+  { label: 'Social',       ids: [3359, 3357] },
+  { label: 'Haulage',      ids: [3449, 3453, 3455, 3456, 21610, 21611] },
+  { label: 'PI',           ids: [2505, 2495] },
 ];
 
 // FORGE AI SYSTEM PROMPT (static — cached server-side)
