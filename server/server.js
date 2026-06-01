@@ -2686,35 +2686,46 @@ app.post('/api/ai-chat',
     }
 
     // ── Key skill levels ──────────────────────────────────────────────────
-    // Build a level map from the session skills array, then format the ~20
-    // manufacturing-relevant skills for the AI context.
+    // Build a level map from the session skills array, then format grouped
+    // skill lines for the AI context. Untrained skills are omitted.
     const skillLevelMap = {};
     if (Array.isArray(skills)) {
       skills.forEach(s => { skillLevelMap[s.skill_id] = s.active_skill_level; });
     }
 
-    // Format: "Skill Name L{n}" — omit skills the player hasn't started (level 0)
-    const keySkillLines = Object.entries(KEY_SKILL_IDS)
-      .map(([id, name]) => {
-        const level = skillLevelMap[parseInt(id)] || 0;
-        return level > 0 ? `${name} L${level}` : null;
+    // Group output — only sections with at least one trained skill are shown
+    const skillGroupLines = SKILL_GROUPS
+      .map(({ label, ids }) => {
+        const trained = ids
+          .filter(id => (skillLevelMap[id] || 0) > 0)
+          .map(id => `${KEY_SKILL_IDS[id]} L${skillLevelMap[id]}`);
+        return trained.length > 0 ? `  ${label}: ${trained.join(', ')}` : null;
       })
       .filter(Boolean);
 
-    // Derived values the AI can use directly
-    const concurrentMfgJobs   = 1 + (skillLevelMap[3387] || 0);  // Mass Production
-    const concurrentRxnJobs   = 1 + (skillLevelMap[45748] || 0); // Mass Reactions
-    const concurrentResSlots  = 1 + (skillLevelMap[3406] || 0)   // Lab Op
-                                  + (skillLevelMap[24624] || 0);  // Adv Lab Op
-    const derivedStats = [
+    // Derived values — pre-calculated so the AI doesn't have to
+    const concurrentMfgJobs  = 1 + (skillLevelMap[3387]  || 0); // Mass Production
+    const concurrentRxnJobs  = 1 + (skillLevelMap[45748] || 0); // Mass Reactions
+    const concurrentResSlots = 1 + (skillLevelMap[3406]  || 0)  // Lab Op
+                                 + (skillLevelMap[24624] || 0); // Adv Lab Op
+    const maxMarketOrders    = 5
+      + (skillLevelMap[3443]  || 0) * 4   // Trade
+      + (skillLevelMap[3444]  || 0) * 8   // Retail
+      + (skillLevelMap[16596] || 0) * 16  // Wholesale
+      + (skillLevelMap[18580] || 0) * 32; // Tycoon
+    const txTaxRate = (7.5 * (1 - 0.11 * (skillLevelMap[16622] || 0))).toFixed(2);
+
+    const derivedLines = [
       `Concurrent mfg jobs: ${concurrentMfgJobs}`,
-      concurrentRxnJobs > 1 ? `Concurrent reaction jobs: ${concurrentRxnJobs}` : null,
-      `Concurrent research slots: ${concurrentResSlots}`,
+      concurrentRxnJobs > 1 ? `concurrent reaction jobs: ${concurrentRxnJobs}` : null,
+      `research slots: ${concurrentResSlots}`,
+      maxMarketOrders !== 5 ? `max market orders: ${maxMarketOrders}` : null,
+      `transaction tax rate: ${txTaxRate}%`,
     ].filter(Boolean).join(', ');
 
-    const keySkillsBlock = keySkillLines.length > 0
-      ? `Key skill levels: ${keySkillLines.join(', ')}\nDerived: ${derivedStats}`
-      : `Key skill levels: none of the tracked manufacturing skills trained yet`;
+    const keySkillsBlock = skillGroupLines.length > 0
+      ? `Key skill levels:\n${skillGroupLines.join('\n')}\nDerived: ${derivedLines}`
+      : `Key skill levels: none of the tracked skills trained yet`;
 
     const builtContext = [
       `Wallet: ${(wallet / 1e9).toFixed(2)}B ISK`,
@@ -4724,34 +4735,73 @@ const AI_PRICING = {
 // ── Key manufacturing skill IDs → display names ──────────────────────────────
 // Only the ~20 skills that directly affect manufacturing advice.
 // Injected into AI context so the advisor can give skill-specific guidance.
+// All type IDs verified against ESI /universe/types/{id}/ and fuzzwork.co.uk/api/typeid.php
+// WARNING: Many IDs found in third-party guides are incorrect — use only these verified values.
 const KEY_SKILL_IDS = {
-  // Core industry
+  // ── Core industry ─────────────────────────────────────────────────────────
   3380:  'Industry',
   3388:  'Advanced Industry',
   3387:  'Mass Production',
   45748: 'Mass Reactions',
-  // Research
+  // ── Research / lab ────────────────────────────────────────────────────────
   3402:  'Science',
   3403:  'Research',
   3406:  'Laboratory Operation',
   24624: 'Advanced Laboratory Operation',
-  // Trade fees
-  3446:  'Broker Relations',
-  16622: 'Accounting',
-  // Racial T2 manufacturing
-  11444: 'Caldari Starship Engineering',
+  // ── Racial T2 ship manufacturing (starship engineering) ───────────────────
+  // NOTE: 11444=Amarr, 11454=Caldari — commonly swapped in third-party docs
+  11454: 'Caldari Starship Engineering',
+  11444: 'Amarr Starship Engineering',
   11445: 'Minmatar Starship Engineering',
-  11446: 'Amarr Starship Engineering',
-  11447: 'Gallente Starship Engineering',
-  // Invention (encryption methods)
+  11450: 'Gallente Starship Engineering',
+  // ── T2 component manufacturing ────────────────────────────────────────────
+  11452: 'Mechanical Engineering',
+  11453: 'Electronic Engineering',
+  // ── Invention — encryption methods ────────────────────────────────────────
   21790: 'Caldari Encryption Methods',
   21791: 'Minmatar Encryption Methods',
-  21793: 'Amarr Encryption Methods',
-  21792: 'Gallente Encryption Methods',
-  // T2 component manufacturing
-  3392:  'Mechanical Engineering',
-  3395:  'Electronic Engineering',
+  23087: 'Amarr Encryption Methods',
+  23121: 'Gallente Encryption Methods',
+  // ── Invention — physics / science skills ──────────────────────────────────
+  11433: 'High Energy Physics',
+  11441: 'Plasma Physics',
+  11443: 'Hydromagnetic Physics',
+  11446: 'Graviton Physics',
+  11447: 'Laser Physics',
+  11448: 'Electromagnetic Physics',
+  11449: 'Rocket Science',
+  11451: 'Nuclear Physics',
+  11455: 'Quantum Physics',
+  11529: 'Molecular Engineering',
+  // ── Trading / market ──────────────────────────────────────────────────────
+  3443:  'Trade',
+  3444:  'Retail',
+  16596: 'Wholesale',
+  18580: 'Tycoon',
+  3446:  'Broker Relations',
+  16597: 'Advanced Broker Relations',
+  16622: 'Accounting',
+  16595: 'Daytrading',
+  16594: 'Procurement',
+  16598: 'Marketing',
+  3447:  'Visibility',
+  25235: 'Contracting',
+  // ── Haulage / navigation ──────────────────────────────────────────────────
+  3455:  'Warp Drive Operation',
+  3456:  'Jump Drive Operation',
+  21611: 'Jump Drive Calibration',
 };
+
+// Skill groups — controls section labels and order in AI context output.
+// Only groups with at least one trained skill are shown.
+const SKILL_GROUPS = [
+  { label: 'Industry',   ids: [3380, 3388, 3387, 45748] },
+  { label: 'Research',   ids: [3402, 3403, 3406, 24624] },
+  { label: 'T2 mfg',     ids: [11454, 11444, 11445, 11450, 11452, 11453] },
+  { label: 'Invention',  ids: [21790, 21791, 23087, 23121, 11433, 11441, 11443, 11446, 11447, 11448, 11449, 11451, 11455, 11529] },
+  { label: 'Trade',      ids: [3443, 3444, 16596, 18580, 3446, 16597, 16622, 16595, 16594, 16598, 3447, 25235] },
+  { label: 'Haulage',    ids: [3455, 3456, 21611] },
+];
 
 // FORGE AI SYSTEM PROMPT (static — cached server-side)
 // Moving this here enables Anthropic prompt caching (90% token discount
