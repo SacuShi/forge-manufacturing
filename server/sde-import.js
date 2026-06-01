@@ -426,10 +426,87 @@ async function importAllTypes(typesData) {
   console.log(`  ✓ Inserted ${inserted} new items, updated ${updated} existing`);
 }
 
-// ── Step 7: Verify ────────────────────────────────────────────────────────────
+// ── Step 7: Tag PI tiers on items ─────────────────────────────────────────────
+// PI commodity names in EVE are stable (unchanged since ~2014).
+// We match by exact English name. False negatives (missed items) are harmless;
+// false positives would be misleading — so only include items we are certain about.
+//
+// If CCP renames a PI item in future, re-run this step to refresh the tags.
+
+const PI_TIER_NAMES = {
+  // P1 — Basic Commodities (15 items)
+  'Bacteria': 1, 'Biofuels': 1, 'Biomass': 1, 'Chiral Structures': 1,
+  'Electrolytes': 1, 'Industrial Fibers': 1, 'Oxidizing Compound': 1,
+  'Oxygen': 1, 'Plasmoids': 1, 'Precious Metals': 1, 'Proteins': 1,
+  'Reactive Metals': 1, 'Silicon': 1, 'Toxic Metals': 1, 'Water': 1,
+  // P2 — Refined Commodities (24 items)
+  'Biocells': 2, 'Construction Blocks': 2, 'Consumer Electronics': 2,
+  'Coolant': 2, 'Enriched Uranium': 2, 'Fertilizer': 2,
+  'Genetically Enhanced Livestock': 2, 'Livestock': 2, 'Mechanical Parts': 2,
+  'Microfiber Shielding': 2, 'Miniature Electronics': 2, 'Nanites': 2,
+  'Oxides': 2, 'Polyaramids': 2, 'Polytextiles': 2, 'Rocket Fuel': 2,
+  'Silicon Diborite': 2, 'Silicate Glass': 2, 'Supertensile Plastics': 2,
+  'Synthetic Oil': 2, 'Test Cultures': 2, 'Transcranial Microcontrollers': 2,
+  'Transmitter': 2, 'Viral Agent': 2, 'Water-Cooled CPU': 2,
+  // P3 — Specialized Commodities (19 items)
+  'Biotech Research Reports': 3, 'Camera Drones': 3, 'Cryoprotectant Solution': 3,
+  'Data Chips': 3, 'Gel-Matrix Biopaste': 3, 'Guidance Systems': 3,
+  'Hazmat Detection Systems': 3, 'Hermetic Membranes': 3, 'High-Tech Transmitters': 3,
+  'Industrial Explosives': 3, 'Neocoms': 3, 'Nuclear Reactors': 3,
+  'Planetary Vehicles': 3, 'Robotics': 3, 'Smart Fabric': 3,
+  'Sterile Conduits': 3, 'Synthetic Synapses': 3, 'Ukomi Superconductors': 3,
+  'Vaccines': 3,
+  // P4 — Advanced Commodities (7 items — all verified, required for capital/structure manufacturing)
+  'Broadcast Node': 4, 'Integrity Response Drones': 4, 'Nano-Factory': 4,
+  'Organic Mortar Applicators': 4, 'Recursive Computing Module': 4,
+  'Self-Harmonizing Power Core': 4, 'Wetware Mainframe': 4,
+};
+
+async function tagPiTiers(typesData) {
+  console.log('\n═══ Step 7: PI tier tagging on items ═══');
+
+  try {
+    await dbRun('ALTER TABLE items ADD COLUMN pi_tier INTEGER DEFAULT NULL');
+    console.log('  ✓ pi_tier column added');
+  } catch (e) {
+    if (e.message.includes('duplicate') || e.message.includes('already exists')) {
+      console.log('  ✓ pi_tier column already exists');
+    } else throw e;
+  }
+
+  // Reset all PI tags — clean slate on each import so renamed/removed items are cleared
+  await dbRun('UPDATE items SET pi_tier = NULL');
+
+  // Build (tier, typeId) pairs by matching names from types data
+  const updates = [];
+  for (const type of Object.values(typesData)) {
+    const name = typeof type.name === 'string' ? type.name : (type.name?.en ?? null);
+    if (!name) continue;
+    const tier = PI_TIER_NAMES[name];
+    if (tier !== undefined) updates.push([tier, type.type_id]);
+  }
+
+  console.log(`  ${updates.length} PI items identified from types.json`);
+
+  await dbRun('BEGIN TRANSACTION');
+  for (const [tier, typeId] of updates) {
+    await dbRun('UPDATE items SET pi_tier = ? WHERE type_id = ?', [tier, typeId]);
+  }
+  await dbRun('COMMIT');
+
+  // Summary by tier
+  const counts = { 1: 0, 2: 0, 3: 0, 4: 0 };
+  for (const [tier] of updates) counts[tier] = (counts[tier] || 0) + 1;
+  for (const t of [1, 2, 3, 4]) {
+    console.log(`  P${t}: ${counts[t]} items tagged`);
+  }
+  console.log('  ✓ PI tagging complete');
+}
+
+// ── Step 8: Verify ────────────────────────────────────────────────────────────
 
 async function verify() {
-  console.log('\n═══ Step 7: Verification ═══');
+  console.log('\n═══ Step 8: Verification ═══');
 
   const t2       = await dbGet(`SELECT COUNT(*) as c FROM items WHERE meta_level = 1`);
   const sk       = await dbGet(`SELECT COUNT(*) as c FROM blueprint_skills`);
@@ -451,9 +528,11 @@ async function verify() {
   `);
 
   const totalItems = await dbGet('SELECT COUNT(*) as c FROM items');
+  const piTagged   = await dbGet(`SELECT COUNT(*) as c FROM items WHERE pi_tier IS NOT NULL`);
 
   console.log(`  total items in DB:              ${totalItems.c}`);
   console.log(`  items with meta_level=1 (T2):  ${t2.c}`);
+  console.log(`  PI items tagged (P1–P4):        ${piTagged.c}`);
   console.log(`  blueprint_skills rows:          ${sk.c}`);
   console.log(`  blueprints — manufacturing:     ${mfgCount.c}`);
   console.log(`  blueprints — reactions:         ${rxCount.c}`);
@@ -504,6 +583,7 @@ async function main() {
     await ensureReactionItems(bpData, typesData);
     await ensureAllBlueprintItems(typesData);
     await importAllTypes(typesData);
+    await tagPiTiers(typesData);
     await verify();
 
     console.log('\n✅ Done. Next steps:');

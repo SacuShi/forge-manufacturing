@@ -518,7 +518,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
                           {ok ? '✓' : '✗'}
                         </span>
 
-                        {/* Name + chain badge */}
+                        {/* Name + chain badge + PI tier badge */}
                         <span className="mat-name" style={{ flex: 1 }}>
                           {mat.name}
                           {isChain && (
@@ -538,6 +538,21 @@ const RightSidebar: FC<RightSidebarProps> = ({
                               cursor: 'pointer',
                             }}>
                               ⛓ {isOwned ? 'owned' : 'chain'}
+                            </span>
+                          )}
+                          {mat.piTier && (
+                            <span style={{
+                              marginLeft: 4,
+                              fontSize: 9,
+                              background: 'rgba(251, 191, 36, 0.12)',
+                              color: '#fbbf24',
+                              border: '0.5px solid rgba(251, 191, 36, 0.3)',
+                              borderRadius: 2,
+                              padding: '1px 4px',
+                              verticalAlign: 'middle',
+                              flexShrink: 0,
+                            }}>
+                              PI·P{mat.piTier}
                             </span>
                           )}
                         </span>

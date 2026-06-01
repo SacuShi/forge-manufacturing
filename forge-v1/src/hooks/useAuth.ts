@@ -57,6 +57,7 @@ const SCOPES =
   'esi-assets.read_assets.v1 esi-characters.read_blueprints.v1 ' +
   'esi-wallet.read_character_wallet.v1 esi-industry.read_character_jobs.v1 ' +
   'esi-skills.read_skills.v1 ' +
+  'esi-planets.manage_planets.v1 ' +
   'esi-characters.read_standings.v1 ' +
   'esi-characters.read_corporation_roles.v1 ' +
   'esi-corporations.read_corporation_membership.v1';
@@ -316,7 +317,28 @@ export function useAuth(): AuthState & {
         addLog('Skills', 'err', (e as Error).message);
       }
 
-      // ── 8. Character standings (for broker fee accuracy) ──────────────────
+      // ── 8. PI colonies ────────────────────────────────────────────────────────
+      // Fetches the player's active planet colonies: planet type, CCU upgrade level,
+      // and number of pins (structures). Used by the AI to reason about PI capacity.
+      // Gracefully degrades — a missing scope or ESI error just leaves planetData empty.
+      setLoadStep('Loading PI colonies…');
+      let planetData: Array<{
+        planet_id:      number;
+        planet_type:    string;
+        upgrade_level:  number;
+        num_pins:       number;
+        solar_system_id: number;
+        last_update:    string;
+      }> = [];
+      try {
+        planetData = await esiGet<typeof planetData>(`/characters/${cid}/planets/`, acc);
+        addLog('PI Colonies', 'ok', `${planetData.length} planet${planetData.length !== 1 ? 's' : ''}`);
+      } catch (e) {
+        // 403 = scope not yet granted (old session); other errors = ESI issue
+        addLog('PI Colonies', 'warn', `Not loaded — ${(e as Error).message}`);
+      }
+
+      // ── 9. Character standings (for broker fee accuracy) ──────────────────
       setLoadStep('Loading standings…');
       let standingsData: StandingsData = { factions: {}, corps: {} };
       let standingsScopeGranted        = false;
@@ -372,6 +394,7 @@ export function useAuth(): AuthState & {
           skills:    skillData,
           total_sp:  totalSp,
           standings: standingsScopeGranted ? standingsData : null,
+          planets:   planetData,
         }, acc);
         addLog('Session', 'ok', 'Cached on server (2hr expiry)');
       } catch (e) {

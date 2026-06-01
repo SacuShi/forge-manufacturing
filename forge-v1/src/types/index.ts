@@ -232,6 +232,8 @@ export interface ItemDetailMaterial {
   shortfallCost?: number;
   /** True if a blueprint exists in the game DB for this material (chain drill-down available) */
   canManufacture?: boolean;
+  /** PI tier if this is a planetary commodity: 1=P1 2=P2 3=P3 4=P4. Null/absent if not PI. */
+  piTier?: number | null;
 }
 
 /** Full response from POST /api/item-details */

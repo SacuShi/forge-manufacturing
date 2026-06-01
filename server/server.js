@@ -276,6 +276,9 @@ async function runMigrations() {
   try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN leg2_haul_rate REAL DEFAULT 0`);     } catch (_) {}
   try { await dbRun(`ALTER TABLE items ADD COLUMN packaged_volume REAL DEFAULT NULL`);                        } catch (_) {}
 
+  // v1.7.2 migration: PI tier on items (P1–P4; populated by sde-import.js tagPiTiers step)
+  try { await dbRun(`ALTER TABLE items ADD COLUMN pi_tier INTEGER DEFAULT NULL`); } catch (_) {}
+
   // v1.7.0 migration: haulage Phase 2 — method selectors, collateral, per-jump, flat total, self-haul
   try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN leg1_method       TEXT    DEFAULT 'user_defined'`); } catch (_) {}
   try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN leg2_method       TEXT    DEFAULT 'user_defined'`); } catch (_) {}
@@ -2210,15 +2213,19 @@ app.post('/api/item-details', security.apiLimiter, async (req, res) => {
           manufRows.forEach(r => manufSet.add(r.product_id));
         }
 
-        // Single bulk query: material names
-        const nameMap = {};
+        // Single bulk query: material names + PI tier
+        const nameMap   = {};
+        const piTierMap = {};
         if (matIds.length > 0) {
           const ph = matIds.map(() => '?').join(',');
           const nameRows = await dbAll(
-            `SELECT type_id, name FROM items WHERE type_id IN (${ph})`,
+            `SELECT type_id, name, pi_tier FROM items WHERE type_id IN (${ph})`,
             matIds
           );
-          nameRows.forEach(r => { nameMap[r.type_id] = r.name; });
+          nameRows.forEach(r => {
+            nameMap[r.type_id] = r.name;
+            if (r.pi_tier != null) piTierMap[r.type_id] = r.pi_tier;
+          });
         }
 
         for (const mat of materials) {
@@ -2263,6 +2270,7 @@ app.post('/api/item-details', security.apiLimiter, async (req, res) => {
             totalCost:      itemCost,
             shortfallCost:  unitCost * shortage,
             canManufacture: manufSet.has(mat.material_id),
+            piTier:         piTierMap[mat.material_id] ?? null,
           });
 
           if (shortage > 0) canBuild = false;
@@ -2619,7 +2627,7 @@ app.post('/api/ai-chat',
 
     console.log(`✓ Session data loaded: ${sessionData.assets?.length || 0} assets, ${sessionData.blueprints?.length || 0} blueprints`);
 
-    const { assets, blueprints, prices, wallet, jobs, skills, total_sp } = sessionData;
+    const { assets, blueprints, prices, wallet, jobs, skills, total_sp, planets } = sessionData;
 
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
@@ -2735,6 +2743,21 @@ app.post('/api/ai-chat',
       ? `Key skill levels:\n${skillGroupLines.join('\n')}\nDerived: ${derivedLines}`
       : `Key skill levels: none of the tracked skills trained yet`;
 
+    // ── PI colony context ──────────────────────────────────────────────────────
+    // Formats the player's planet list into a summary for the AI:
+    // planet type, CCU upgrade level, and pin count per colony.
+    // Solar system names not resolved here (adds ESI latency) — system IDs shown.
+    let piColoniesLine = null;
+    if (Array.isArray(planets) && planets.length > 0) {
+      const colonyDesc = planets.map(p => {
+        const type = p.planet_type
+          ? p.planet_type.charAt(0).toUpperCase() + p.planet_type.slice(1)
+          : 'Unknown';
+        return `${type} CCU${p.upgrade_level ?? '?'} (${p.num_pins ?? 0} pins)`;
+      }).join(', ');
+      piColoniesLine = `PI colonies (${planets.length} active): ${colonyDesc}`;
+    }
+
     const builtContext = [
       `Wallet: ${(wallet / 1e9).toFixed(2)}B ISK`,
       `Blueprints: ${blueprints.length} total (${bpoCount} BPOs, ${bpcCount} BPCs)`,
@@ -2743,8 +2766,9 @@ app.post('/api/ai-chat',
       `Skills trained: ${skillCount} distinct skills`,
       `Total skill points: ${playerSp > 0 ? playerSp.toLocaleString() + ` SP (${experienceTier})` : 'Unknown'}`,
       keySkillsBlock,
+      piColoniesLine,
       `Response tone: ${experienceNote}`,
-    ].join('\n');
+    ].filter(Boolean).join('\n');
 
     // Tool definitions for AI
     const tools = [
@@ -3458,7 +3482,7 @@ app.post('/api/session-data',
   async (req, res) => {
     try {
       const characterId = req.characterId;
-      const { assets, blueprints, prices, wallet, jobs, skills, total_sp, standings } = req.body;
+      const { assets, blueprints, prices, wallet, jobs, skills, total_sp, standings, planets } = req.body;
 
       // Validate data exists
       if (!assets || !blueprints) {
@@ -3503,6 +3527,7 @@ app.post('/api/session-data',
         skills:     skills || [],
         total_sp:   total_sp || 0,
         standings:  standings || { factions: {}, corps: {} },
+        planets:    planets || [],
         accessibleStructures: Array.from(structureIds),
         cachedAt: new Date().toISOString()
       }, 7200000); // 2 hours
@@ -5147,6 +5172,75 @@ Do NOT announce the experience tier to the player — apply it silently.
 
 • Unknown SP (0 or absent)
   - Default to Intermediate tone.
+
+══ PLANETARY INDUSTRY (PI) ══
+Source: EVE Online SDE / established game data (PI system stable since ~2014)
+
+TIERS:
+  P0 — Raw resources extracted from planet surface (never appear in manufacturing blueprints)
+  P1 — Basic Commodities (one processing step from P0):
+       Bacteria, Biofuels, Biomass, Chiral Structures, Electrolytes, Industrial Fibers,
+       Oxidizing Compound, Oxygen, Plasmoids, Precious Metals, Proteins, Reactive Metals,
+       Silicon, Toxic Metals, Water
+  P2 — Refined Commodities (two P1 inputs combined):
+       Biocells, Construction Blocks, Consumer Electronics, Coolant, Enriched Uranium,
+       Fertilizer, Genetically Enhanced Livestock, Mechanical Parts, Microfiber Shielding,
+       Miniature Electronics, Nanites, Oxides, Polyaramids, Polytextiles, Rocket Fuel,
+       Silicon Diborite, Silicate Glass, Supertensile Plastics, Synthetic Oil, Test Cultures,
+       Transcranial Microcontrollers, Transmitter, Viral Agent, Water-Cooled CPU
+  P3 — Specialized Commodities (P1+P2 or P2+P2 combinations):
+       Biotech Research Reports, Camera Drones, Cryoprotectant Solution, Data Chips,
+       Gel-Matrix Biopaste, Guidance Systems, Hazmat Detection Systems, Hermetic Membranes,
+       High-Tech Transmitters, Industrial Explosives, Neocoms, Nuclear Reactors,
+       Planetary Vehicles, Robotics, Smart Fabric, Sterile Conduits, Synthetic Synapses,
+       Ukomi Superconductors, Vaccines
+  P4 — Advanced Commodities (multiple P3 inputs; require multiple planet types):
+       Broadcast Node, Integrity Response Drones, Nano-Factory, Organic Mortar Applicators,
+       Recursive Computing Module, Self-Harmonizing Power Core, Wetware Mainframe
+
+PLANET TYPES AND PRIMARY P1 OUTPUTS:
+  Barren    → Reactive Metals, Chiral Structures
+  Gas       → Electrolytes, Plasmoids, Oxidizing Compound
+  Ice       → Oxygen, Proteins
+  Lava      → Silicon, Toxic Metals
+  Oceanic   → Biomass, Proteins, Bacteria
+  Plasma    → Precious Metals, Chiral Structures, Toxic Metals
+  Storm     → Oxygen, Electrolytes, Reactive Metals
+  Temperate → Biofuels, Industrial Fibers, Biomass, Proteins
+
+MANUFACTURING DEPENDENCIES:
+  T2 ships and modules: P2 inputs required in component blueprints. Most common:
+    Mechanical Parts, Consumer Electronics, Construction Blocks, Microfiber Shielding,
+    Coolant, Rocket Fuel, Transmitter, Nanites, Silicate Glass, Enriched Uranium.
+  T2 advanced components: may also need P3 (Guidance Systems, Robotics).
+  Capital ships (carriers, dreads, FAX, supercarriers, titans): require P4 in capital
+    component blueprints. Scale by class:
+    Carrier/Dreadnought: ~4,000–10,000 P4 units total across all components
+    Supercarrier/Titan: ~10,000–50,000+ P4 units total
+  Upwell structures: very large P4 volumes:
+    Fortizar: ~50,000–100,000 P4 units; Keepstar: ~250,000+ P4 units
+  Fuel Blocks: Coolant (P2) + Oxygen (P1) + racial Isotopes + Heavy Water
+
+SKILLS AND COLONY CAPACITY:
+  Interplanetary Consolidation L1–5: 2–6 planets
+  Command Center Upgrades L1–5: max upgrade level (higher = more structures per planet)
+  Null/WH planets: 3–5× richer than hisec
+  Rough null CCU5 monthly estimates per dedicated planet:
+    P1 chain: 80,000–150,000 units
+    P2 factory (imported P1): 15,000–30,000 units
+    P3 factory (imported P2): 3,000–6,000 units
+  P4: requires 4–6 planet types coordinated. Solo 6-planet null = ~200–500 P4/month total.
+
+COST PHILOSOPHY — CRITICAL:
+  PI cost = market price (opportunity cost). Self-produced PI is NOT free.
+  The ISK value of PI you use is what you could have sold it for. FORGE prices PI at
+  market by design. Never tell a player their PI is "free" or "zero cost."
+
+WHEN PI COLONY DATA IS IN CONTEXT:
+  Use planet types to estimate which P1/P2 chains are likely running.
+  Compare against the item's actual PI material needs.
+  For capital/structure builds: state explicitly that P4 typically needs corp-level
+  coordination — a solo 6-planet operation covers a fraction of one capital's needs.
 
 ══ ITEM NAME RULES ══
 Always use FULL item names — they are used as clickable links in the UI.
