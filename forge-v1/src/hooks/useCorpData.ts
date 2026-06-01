@@ -45,18 +45,24 @@ export function useCorpData(
     let cancelled = false;
     setLoading(true);
 
-    Promise.all([
+    Promise.allSettled([
       apiGet<CorpStatus>('/api/corp/status'),
       apiGet<CorpAccessStatus>('/api/corp/access-status', token),
     ])
-      .then(([status, access]) => {
+      .then(([statusResult, accessResult]) => {
         if (cancelled) return;
-        setCorpStatus(status);
-        setAccessStatus(access);
-      })
-      .catch((err: Error) => {
-        if (cancelled) return;
-        console.warn('Corp status check failed:', err.message);
+        // Settle each leg independently — an access-status error must not
+        // prevent corpStatus from rendering (would show "Not Configured" forever)
+        if (statusResult.status === 'fulfilled') {
+          setCorpStatus(statusResult.value);
+        } else {
+          console.warn('Corp status check failed:', (statusResult.reason as Error)?.message);
+        }
+        if (accessResult.status === 'fulfilled') {
+          setAccessStatus(accessResult.value);
+        } else {
+          console.warn('Corp access check failed:', (accessResult.reason as Error)?.message);
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

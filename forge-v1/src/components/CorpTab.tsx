@@ -5,15 +5,16 @@
  * Manages its own sub-tab state: Blueprints | Assets | Jobs.
  *
  * Handles three top-level states:
- *   1. Corp not configured → "Not set up" placeholder
- *   2. Corp configured, no access → CorpPinModal
- *   3. Corp configured, access granted → sub-tab data views
+ *   1. Corp data loading → spinner
+ *   2. Corp not configured → "Not set up" placeholder
+ *   3. Corp configured, no Director/CEO access → access-denied placeholder
+ *   4. Corp configured, access granted → sub-tab data views
  *
  * Data fetching is lazy — loads when the sub-tab becomes active,
  * with a manual Refresh button to pull fresh ESI data.
  */
 
-import { useState, useEffect, useCallback, type FC } from 'react';
+import { useState, useEffect, useCallback, useRef, type FC } from 'react';
 import type {
   CorpStatus,
   CorpAccessStatus,
@@ -29,9 +30,11 @@ import { formatBuildTime } from '../utils/format';
 type CorpSubTab = 'blueprints' | 'assets' | 'jobs';
 
 interface CorpTabProps {
-  token:        string | null;
-  corpStatus:   CorpStatus | null;
-  accessStatus: CorpAccessStatus | null;
+  token:            string | null;
+  corpStatus:       CorpStatus | null;
+  accessStatus:     CorpAccessStatus | null;
+  /** True while useCorpData is fetching status + access on first tab activation */
+  corpDataLoading?: boolean;
 }
 
 // ── Activity label map ───────────────────────────────────────────────────────
@@ -55,11 +58,23 @@ const CorpBlueprintsView: FC<CorpBlueprintsProps> = ({ token }) => {
   const [loading,    setLoading]    = useState(false);
   const [error,      setError]      = useState<string | null>(null);
   const [search,     setSearch]     = useState('');
+  // debouncedSearch is what actually drives the API call — updated 300 ms after typing stops
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState<'all' | 'BPO' | 'BPC'>('all');
   const [total,      setTotal]      = useState(0);
   const [lastRefresh, setLastRefresh] = useState<string | null>(null);
   const [sortField,   setSortField]   = useState<'name' | 'me' | 'te' | 'runs'>('name');
   const [sortDir,     setSortDir]     = useState<'asc' | 'desc'>('asc');
+
+  // Debounce: only update debouncedSearch 300 ms after the user stops typing
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleSearchChange = (value: string) => {
+    setSearch(value);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => setDebouncedSearch(value), 300);
+  };
+  // Clean up on unmount
+  useEffect(() => () => { if (debounceRef.current) clearTimeout(debounceRef.current); }, []);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -70,7 +85,7 @@ const CorpBlueprintsView: FC<CorpBlueprintsProps> = ({ token }) => {
         limit:  '200',
         offset: '0',
         type:   typeFilter,
-        ...(search ? { search } : {}),
+        ...(debouncedSearch ? { search: debouncedSearch } : {}),
       });
       const data = await apiGet<{
         blueprints: CorpBlueprint[];
@@ -84,15 +99,16 @@ const CorpBlueprintsView: FC<CorpBlueprintsProps> = ({ token }) => {
     } finally {
       setLoading(false);
     }
-  }, [token, typeFilter, search]);
+  }, [token, typeFilter, debouncedSearch]);
 
   useEffect(() => { load(); }, [load]);
 
   const handleRefresh = async () => {
     if (!token) return;
+    setError(null); // clear any stale error before refresh
     try {
       await apiPost('/api/corp/refresh', {}, token);
-      setTimeout(load, 1500); // brief delay to let server-side refresh complete
+      setTimeout(load, 1500); // brief delay to let server-side ESI refresh complete
     } catch (e) {
       setError((e as Error).message);
     }
@@ -130,7 +146,7 @@ const CorpBlueprintsView: FC<CorpBlueprintsProps> = ({ token }) => {
           className="corp-search"
           placeholder="Search blueprints…"
           value={search}
-          onChange={e => setSearch(e.target.value)}
+          onChange={e => handleSearchChange(e.target.value)}
           aria-label="Search corp blueprints"
         />
         <div className="pill-filter-group">
@@ -245,12 +261,21 @@ const CorpBlueprintsView: FC<CorpBlueprintsProps> = ({ token }) => {
 interface CorpAssetsProps { token: string | null }
 
 const CorpAssetsView: FC<CorpAssetsProps> = ({ token }) => {
-  const [assets,      setAssets]      = useState<CorpAsset[]>([]);
-  const [loading,     setLoading]     = useState(false);
-  const [error,       setError]       = useState<string | null>(null);
-  const [search,      setSearch]      = useState('');
-  const [total,       setTotal]       = useState(0);
-  const [lastRefresh, setLastRefresh] = useState<string | null>(null);
+  const [assets,          setAssets]          = useState<CorpAsset[]>([]);
+  const [loading,         setLoading]         = useState(false);
+  const [error,           setError]           = useState<string | null>(null);
+  const [search,          setSearch]          = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [total,           setTotal]           = useState(0);
+  const [lastRefresh,     setLastRefresh]     = useState<string | null>(null);
+
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleSearchChange = (value: string) => {
+    setSearch(value);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => setDebouncedSearch(value), 300);
+  };
+  useEffect(() => () => { if (debounceRef.current) clearTimeout(debounceRef.current); }, []);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -259,7 +284,7 @@ const CorpAssetsView: FC<CorpAssetsProps> = ({ token }) => {
     try {
       const params = new URLSearchParams({
         limit: '500',
-        ...(search ? { search } : {}),
+        ...(debouncedSearch ? { search: debouncedSearch } : {}),
       });
       const data = await apiGet<{
         assets: CorpAsset[];
@@ -273,12 +298,13 @@ const CorpAssetsView: FC<CorpAssetsProps> = ({ token }) => {
     } finally {
       setLoading(false);
     }
-  }, [token, search]);
+  }, [token, debouncedSearch]);
 
   useEffect(() => { load(); }, [load]);
 
   const handleRefresh = async () => {
     if (!token) return;
+    setError(null); // clear any stale error before refresh
     try {
       await apiPost('/api/corp/refresh', {}, token);
       setTimeout(load, 1500);
@@ -295,7 +321,7 @@ const CorpAssetsView: FC<CorpAssetsProps> = ({ token }) => {
           className="corp-search"
           placeholder="Search assets…"
           value={search}
-          onChange={e => setSearch(e.target.value)}
+          onChange={e => handleSearchChange(e.target.value)}
           aria-label="Search corp assets"
         />
         <button
@@ -383,6 +409,7 @@ const CorpJobsView: FC<CorpJobsProps> = ({ token }) => {
 
   const handleRefresh = async () => {
     if (!token) return;
+    setError(null); // clear any stale error before refresh
     try {
       await apiPost('/api/corp/refresh', {}, token);
       setTimeout(load, 1500);
@@ -470,8 +497,18 @@ const CorpJobsView: FC<CorpJobsProps> = ({ token }) => {
 
 // ── Main CorpTab component ────────────────────────────────────────────────────
 
-const CorpTab: FC<CorpTabProps> = ({ token, corpStatus, accessStatus }) => {
+const CorpTab: FC<CorpTabProps> = ({ token, corpStatus, accessStatus, corpDataLoading }) => {
   const [activeSubTab, setActiveSubTab] = useState<CorpSubTab>('blueprints');
+
+  // Still fetching corp status — show spinner so we don't flash "Not Configured"
+  if (corpDataLoading && corpStatus === null) {
+    return (
+      <div className="corp-not-configured">
+        <span className="corp-nc-icon" aria-hidden="true">⏳</span>
+        <h3 className="corp-nc-title">Loading corp data…</h3>
+      </div>
+    );
+  }
 
   // Corp not configured
   if (!corpStatus?.configured) {
@@ -480,7 +517,7 @@ const CorpTab: FC<CorpTabProps> = ({ token, corpStatus, accessStatus }) => {
         <span className="corp-nc-icon" aria-hidden="true">🏭</span>
         <h3 className="corp-nc-title">Corp Data Not Configured</h3>
         <p className="corp-nc-desc">
-          A corp director needs to connect the corporation via the admin setup process.
+          A corp director or CEO needs to connect the corporation via the admin setup process.
           Once connected, corp blueprints, assets, and jobs will appear here.
         </p>
       </div>
@@ -494,8 +531,8 @@ const CorpTab: FC<CorpTabProps> = ({ token, corpStatus, accessStatus }) => {
         <span className="corp-nc-icon" aria-hidden="true">🔒</span>
         <h3 className="corp-nc-title">{corpStatus.corp_name}</h3>
         <p className="corp-nc-desc">
-          Corp data is only accessible to characters with the Director role.
-          If you are a Director and see this message, try logging out and back
+          Corp data is only accessible to characters with the Director or CEO role.
+          If you are a Director or CEO and see this message, try logging out and back
           in to grant the updated EVE permissions.
         </p>
       </div>

@@ -47,9 +47,10 @@ interface MainContentProps {
   onSelectItem: (typeId: number, name: string) => void;
 
   // v1.4.0 — Corp tab props
-  token:        string | null;
-  corpStatus:   CorpStatus | null;
-  accessStatus: CorpAccessStatus | null;
+  token:            string | null;
+  corpStatus:       CorpStatus | null;
+  accessStatus:     CorpAccessStatus | null;
+  corpDataLoading?: boolean;
   /** v1.5 — item_id → character name; populated when alts are loaded; empty = no badges */
   blueprintOwnerMap?: Map<number, string>;
 }
@@ -94,6 +95,7 @@ const MainContent: FC<MainContentProps> = ({
   token,
   corpStatus,
   accessStatus,
+  corpDataLoading,
   blueprintOwnerMap = EMPTY_BP_OWNER_MAP,
 }) => {
   const [sortField, setSortField] = useState<SortField>('rank');
@@ -671,6 +673,7 @@ const MainContent: FC<MainContentProps> = ({
           token={token}
           corpStatus={corpStatus}
           accessStatus={accessStatus}
+          corpDataLoading={corpDataLoading}
         />
       )}
 

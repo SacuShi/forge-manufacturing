@@ -305,6 +305,7 @@ const App: FC = () => {
   const {
     corpStatus,
     accessStatus: corpAccessStatus,
+    loading:      corpDataLoading,
   } = useCorpData(
     auth.token,
     activeTab === 'corp' && auth.status === 'authed',
@@ -879,6 +880,7 @@ const App: FC = () => {
           token={auth.token}
           corpStatus={corpStatus}
           accessStatus={corpAccessStatus}
+          corpDataLoading={corpDataLoading}
           blueprintOwnerMap={blueprintOwnerMap}
         />
 

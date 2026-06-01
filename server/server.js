@@ -9,7 +9,7 @@ const fetch = require('node-fetch');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const helmet = require('helmet');
-const crypto = require('crypto');  // built-in — AES-256-GCM token encryption + scrypt PIN hashing
+const crypto = require('crypto');  // built-in — AES-256-GCM token encryption
 const security = require('./forge-security');
 require('dotenv').config();
 
@@ -296,15 +296,13 @@ async function runMigrations() {
 
   // ── v1.4.0 Corp Feature migrations ─────────────────────────────────────────
   //
-  // corp_config         — one row per corporation; stores encrypted director refresh token + PIN hash
-  // corp_blueprints     — ESI corp blueprint cache (refreshed via director token)
-  // corp_assets         — ESI corp asset cache
-  // corp_jobs           — ESI corp industry job cache
-  // corp_pin_sessions   — tracks which characters have successfully verified the PIN (24hr expiry)
-  // corp_admin_access   — admin-whitelist: characters that bypass PIN entirely (dev/testing)
+  // corp_config       — one row per corporation; stores encrypted director refresh token
+  // corp_blueprints   — ESI corp blueprint cache (refreshed via director token)
+  // corp_assets       — ESI corp asset cache
+  // corp_jobs         — ESI corp industry job cache
+  // corp_admin_access — admin-whitelist: characters that bypass ESI role check (dev/testing)
   //
-  // Token encryption:  AES-256-GCM via Node built-in crypto (no extra dependencies)
-  // PIN hashing:       crypto.scrypt (Node built-in; memory-hard; no extra dependencies)
+  // Token encryption: AES-256-GCM via Node built-in crypto (no extra dependencies)
 
   await dbRun(`
     CREATE TABLE IF NOT EXISTS corp_config (
@@ -315,8 +313,6 @@ async function runMigrations() {
       enc_refresh_token    TEXT    NOT NULL,  -- AES-256-GCM ciphertext, base64
       token_iv             TEXT    NOT NULL,  -- 12-byte IV, hex
       token_tag            TEXT    NOT NULL,  -- 16-byte auth tag, hex
-      pin_hash             TEXT    NOT NULL,  -- scrypt hash of 6-digit PIN, base64
-      pin_salt             TEXT    NOT NULL,  -- 32-byte salt, hex
       last_refresh_at      TEXT    DEFAULT NULL,
       last_refresh_status  TEXT    DEFAULT NULL,
       created_at           TEXT    NOT NULL DEFAULT (datetime('now')),
@@ -383,17 +379,8 @@ async function runMigrations() {
   await dbRun(`CREATE INDEX IF NOT EXISTS idx_corp_jobs_corp ON corp_jobs (corp_id)`);
 
   await dbRun(`
-    CREATE TABLE IF NOT EXISTS corp_pin_sessions (
-      character_id INTEGER PRIMARY KEY,  -- character who verified the PIN
-      corp_id      INTEGER NOT NULL,
-      verified_at  TEXT    NOT NULL DEFAULT (datetime('now')),
-      expires_at   TEXT    NOT NULL       -- 24hr from verified_at
-    )
-  `);
-
-  await dbRun(`
     CREATE TABLE IF NOT EXISTS corp_admin_access (
-      character_id INTEGER PRIMARY KEY,  -- character bypasses PIN check entirely
+      character_id INTEGER PRIMARY KEY,  -- character bypasses ESI role check (admin/dev)
       corp_id      INTEGER,              -- NULL = access all corps
       note         TEXT,                 -- admin note (e.g. "developer testing")
       added_at     TEXT NOT NULL DEFAULT (datetime('now'))
@@ -460,10 +447,6 @@ const setCached = (key, data, ttl = CACHE_TTL_MS) => {
 // Token encryption: AES-256-GCM with a 32-byte key derived from FORGE_CORP_KEY
 // (which must be at least 32 hex chars / 16 bytes raw; padded/hashed here).
 // The 32-byte key is derived once at startup and reused — never sent over the wire.
-//
-// PIN hashing: crypto.scrypt — memory-hard, no extra npm packages needed.
-//   N=16384, r=8, p=1, keylen=32 — appropriate for a 6-digit PIN with server-side
-//   rate limiting as the primary anti-brute-force defence.
 
 const CORP_ENCRYPTION_KEY = (() => {
   // Derive a fixed 32-byte key from FORGE_CORP_KEY (env var) via SHA-256.
@@ -760,54 +743,103 @@ const DIRECTOR_CACHE_TTL_MS      = 5 * 60 * 1000; // normal: 5 min
 const DIRECTOR_CACHE_TTL_SHORT   = 60 * 1000;      // fallback/error: 1 min (re-check sooner)
 
 /**
- * Resolve whether a character is a Director in the configured corp.
- * Results are stored in the general cache (key: "director:<characterId>") so no
- * separate Map or sweep timer is needed.
+ * Resolve whether a character is a Director or CEO in the configured corp.
+ *
+ * Check order (first success wins):
+ *   1. GET /corporations/{corp_id}/roles/ with user token
+ *        scope: esi-corporations.read_corporation_membership.v1 (in default SCOPES)
+ *        Returns all members if the caller is a Director, or just the caller's own
+ *        entry otherwise — either way we find our characterId and inspect its roles.
+ *        This is the most reliable path; does NOT depend on the legacy per-character
+ *        scope that caused the original Director access failures.
+ *   2. GET /characters/{id}/roles/ with user token  (fallback for old sessions)
+ *        scope: esi-characters.read_corporation_roles.v1
+ *   3. Public GET /corporations/{corp_id}/ ceo_id check — no scope needed.
+ *   4. Setup director_char_id match — last resort when all ESI calls fail.
+ *
+ * Cache note: null corpId means the character-info call failed; we skip the
+ * cached value in that case and re-check on the next request.
  */
 async function checkIsDirector(characterId, bearerToken, configCorpId, directorCharId) {
   const cacheKey = `director:${characterId}`;
   const cached   = getCached(cacheKey);
-  if (cached) return cached.isDirector && cached.corpId === configCorpId;
+  // Only trust the cache when we have a confirmed corpId — a null corpId stored
+  // previously means the char-info call failed and we should retry.
+  if (cached && cached.corpId !== null) {
+    return cached.isDirector && cached.corpId === configCorpId;
+  }
 
-  const headers = { Authorization: `Bearer ${bearerToken}` };
+  const headers  = { Authorization: `Bearer ${bearerToken}` };
   let isDirector = false;
   let charCorpId = null;
   let cacheTtl   = DIRECTOR_CACHE_TTL_MS;
 
   try {
-    const [rolesRes, charRes] = await Promise.all([
-      esiFetch(
-        `https://esi.evetech.net/latest/characters/${characterId}/roles/?datasource=tranquility`,
-        { headers }
-      ),
+    // Fetch character info, corp roles list, and public corp info all in parallel.
+    const [charRes, corpRolesRes, corpPublicRes] = await Promise.all([
       esiFetch(
         `https://esi.evetech.net/latest/characters/${characterId}/?datasource=tranquility`,
         { headers }
       ),
+      // PRIMARY role check — esi-corporations.read_corporation_membership.v1
+      // Works for Directors (sees all) and non-Directors (sees own entry only).
+      esiFetch(
+        `https://esi.evetech.net/latest/corporations/${configCorpId}/roles/?datasource=tranquility`,
+        { headers }
+      ),
+      // CEO check — public endpoint, no auth needed
+      esiFetch(
+        `https://esi.evetech.net/latest/corporations/${configCorpId}/?datasource=tranquility`,
+        {}
+      ),
     ]);
 
-    if (rolesRes.ok) {
-      const rolesData = await rolesRes.json();
-      isDirector = Array.isArray(rolesData.roles) && rolesData.roles.includes('Director');
-    } else if (rolesRes.status === 403) {
-      // esi-characters.read_corporation_roles.v1 not yet granted — fall back to setup director
-      isDirector = characterId === directorCharId;
-      cacheTtl   = DIRECTOR_CACHE_TTL_SHORT; // re-check sooner after re-auth
+    // Resolve character's corporation
+    if (charRes.ok) {
+      charCorpId = (await charRes.json()).corporation_id;
     }
 
-    if (charRes.ok) {
-      const charData = await charRes.json();
-      charCorpId = charData.corporation_id;
+    // If the character is confirmed to be in a different corp, deny immediately
+    if (charCorpId !== null && charCorpId !== configCorpId) {
+      isDirector = false;
+    } else {
+      // ── Primary: corp-level roles list ────────────────────────────────────
+      if (corpRolesRes.ok) {
+        const list = await corpRolesRes.json();
+        const mine = Array.isArray(list) ? list.find(e => e.character_id === characterId) : null;
+        if (mine?.roles?.includes('Director')) isDirector = true;
+      } else if (corpRolesRes.status === 403 || corpRolesRes.status === 401) {
+        // Scope not present or token issue — try character-level endpoint (fallback)
+        const charRolesRes = await esiFetch(
+          `https://esi.evetech.net/latest/characters/${characterId}/roles/?datasource=tranquility`,
+          { headers }
+        );
+        if (charRolesRes.ok) {
+          const data = await charRolesRes.json();
+          isDirector = Array.isArray(data.roles) && data.roles.includes('Director');
+        } else if (charRolesRes.status === 403) {
+          // Neither scope available — allow only the setup director; re-check sooner
+          isDirector = characterId === directorCharId;
+          cacheTtl   = DIRECTOR_CACHE_TTL_SHORT;
+        }
+      }
+
+      // ── CEO check (public, no scope required) ─────────────────────────────
+      if (!isDirector && corpPublicRes.ok) {
+        const corpData = await corpPublicRes.json();
+        if (corpData.ceo_id === characterId) isDirector = true;
+      }
     }
   } catch (esiErr) {
-    console.warn(`ESI director check failed for ${characterId}:`, esiErr.message);
+    console.warn(`ESI director/CEO check failed for ${characterId}:`, esiErr.message);
     // On connectivity error: allow only the setup director (fail safe)
     isDirector = characterId === directorCharId;
-    charCorpId = configCorpId;
+    charCorpId = charCorpId ?? configCorpId; // preserve any partial result
     cacheTtl   = DIRECTOR_CACHE_TTL_SHORT;
   }
 
   setCached(cacheKey, { isDirector, corpId: charCorpId }, cacheTtl);
+  // corpId check is embedded in logic above; null means char-info failed (treated as same corp)
   return isDirector && (charCorpId === null || charCorpId === configCorpId);
 }
 
@@ -831,7 +863,9 @@ async function requireDirectorRole(req, res, next) {
       return res.status(404).json({ error: 'Corp not configured' });
     }
 
-    // 3. Verify Director role via ESI
+    // 3. Verify Director/CEO role via ESI
+    //    checkIsDirector uses /corporations/{id}/roles/ as primary (no per-character scope needed)
+    //    then falls back to /characters/{id}/roles/, then CEO check, then setup-director match.
     const authHeader = req.headers.authorization || '';
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
     if (!token) return res.status(401).json({ error: 'Authorization required' });
@@ -842,7 +876,7 @@ async function requireDirectorRole(req, res, next) {
     if (allowed) return next();
 
     return res.status(403).json({
-      error: 'Corp data access requires the Director role in the configured corporation.',
+      error: 'Corp data access requires the Director or CEO role in the configured corporation.',
       code:  'NOT_DIRECTOR',
     });
   } catch (err) {
@@ -2472,7 +2506,7 @@ app.post('/api/analyze-blueprints', security.apiLimiter, async (req, res) => {
 });
 
 // DIAGNOSE T2 BLUEPRINTS — checks session BPCs against the database
-app.get('/api/diagnose-t2/:characterId', security.apiLimiter, security.verifyEveToken, async (req, res) => {
+app.get('/api/diagnose-t2/:characterId', security.apiLimiter, security.verifyEveToken, security.verifyCharacterOwnership, async (req, res) => {
   try {
     const { characterId } = req.params;
     const sessionKey = `session:${characterId}`;
@@ -3443,10 +3477,12 @@ app.get('/api/session-data/:characterId',
 // CHAT HISTORY (Authenticated)
 
 // Save chat message (authenticated)
+// Note: verifyCharacterOwnership is intentionally omitted here — there is no :characterId
+// route param, so it would always resolve NaN and return 403.  verifyEveToken is sufficient:
+// the handler reads req.characterId from the token, not from the request body.
 app.post('/api/save-message',
   security.apiLimiter,
   security.verifyEveToken,
-  security.verifyCharacterOwnership,
   security.validateChatMessage,
   async (req, res) => {
     try {
@@ -4759,6 +4795,130 @@ Examples to AVOID:
   ✗ profit:47.2M,margin:28.3%  (no spaces, unreadable)
   ✗ Long paragraphs listing all metrics (use bullets for scanning)
 
+══ INVENTION MECHANICS — VERIFIED FACTS, DO NOT DEVIATE ══
+Source: wiki.eveuniversity.org/Invention (verified 2025)
+
+The FORGE database does NOT contain T1→T2 invention relationships.
+get_blueprint() returns manufacturing data only — it cannot show invention chains.
+Use the tables below for invention questions. For anything not listed, cite:
+  https://wiki.eveuniversity.org/Invention  or  https://www.fuzzwork.co.uk/blueprint/
+
+── Process ──
+STEP 1  Copy your T1 BPO → T1 BPC (original is NOT consumed; copy runs are limited)
+STEP 2  Invent: T1 BPC (1 run consumed, win or lose) + 2× Datacores + optional Decryptor → T2 BPC
+STEP 3  Build: use T2 BPC to manufacture the T2 item
+
+CRITICAL RULES — never contradict these:
+  • You CANNOT invent from a BPO — you MUST make a copy first
+  • Invention NEVER produces a T2 BPO — only T2 BPCs
+  • T2 BPCs cannot be researched (ME/TE are fixed at creation) and cannot be copied
+  • The T1 BPC run is consumed on EVERY attempt, success or failure
+  • Datacores are consumed on EVERY attempt, success or failure
+
+── Success Chance Formula ──
+Chance = Base × (1 + Science1 + Science2) / 30 + Encryption / 40) × (1 + Decryptor% / 100)
+where Science1/2 = required science skill levels; Encryption = racial encryption skill level
+
+Base rates by category:
+  Modules / rigs / ammo / drones       34%
+  Frigates / destroyers                 30%
+  Cruisers / BCs / mining barges / haulers  26%
+  Battleships                           22%
+  Freighters                            18%
+
+At max skills (5/5/5) the skill multiplier is approx ×1.5 over base.
+Example: Caldari frigate, skills 4/4/4, no decryptor ≈ 30% × 1.28 ≈ 38%
+
+── Datacores (Ships) ──
+ALL racial ships use exactly these two datacore types:
+  Caldari ships    →  Datacore - Caldari Starship Engineering  +  Datacore - Mechanical Engineering
+  Amarr ships      →  Datacore - Amarrian Starship Engineering +  Datacore - Mechanical Engineering
+  Minmatar ships   →  Datacore - Minmatar Starship Engineering +  Datacore - Mechanical Engineering
+  Gallente ships   →  Datacore - Gallentean Starship Engineering + Datacore - Mechanical Engineering
+Quantity scales with ship size (frigates ≈ 2 of each; battleships ≈ 32 of each).
+Acquired primarily from Factional Warfare LP stores or R&D agents.
+
+── Decryptors (current generic names, post-2016) ──
+Name                  | Prob% | Runs | ME  | TE
+Accelerant            |  +20  |  +1  |  +2 | +10
+Attainment            |  +80  |  +4  |  -1 |  +4
+Augmentation          |  -40  |  +9  |  -2 |  +2
+Optimized Attainment  |  +90  |  +2  |  +1 |  -2
+Optimized Augmentation|  -10  |  +7  |  +2 |   0
+Parity                |  +50  |  +3  |  +1 |  -2
+Process               |  +10  |   0  |  +3 |  +6
+Symmetry              |    0  |  +2  |  +1 |  +8
+
+T2 BPC base output without decryptor: ships/rigs = 1 run; modules/ammo/drones = 10 runs.
+Best for run count:  Augmentation (+9 runs on ships → 10 total)
+Best for ME savings: Process (+3 ME → fewer materials per build)
+Best for success:    Optimized Attainment (+90% probability modifier)
+
+── T1 Frigate → T2 Ship Invention Table (VERIFIED) ──
+One T1 BPC is required to invent the T2 variant. Some T1s can produce 2 T2 ships
+(player chooses which at job submission — NOT random).
+
+CALDARI
+  Condor   → Crow (Interceptor)  OR  Raptor (Interceptor)
+  Merlin   → Hawk (Assault Frigate)  OR  Harpy (Assault Frigate)
+  Griffin  → Kitsune (Electronic Attack Ship)
+  Heron    → Buzzard (Covert Ops)
+  Kestrel  → Manticore (Stealth Bomber)
+  Bantam   → Kirin (Logistics Frigate)
+
+AMARR
+  Executioner → Malediction (Interceptor)  OR  Crusader (Interceptor)
+  Punisher    → Vengeance (Assault Frigate)  OR  Retribution (Assault Frigate)
+  Crucifier   → Sentinel (Electronic Attack Ship)
+  Magnate     → Anathema (Covert Ops)
+  Inquisitor  → Purifier (Stealth Bomber)  OR  Deacon (Logistics Frigate)  ← UNUSUAL: two different T2 classes
+  Tormentor   → *** NO T2 VARIANT *** — cannot be used for invention
+
+MINMATAR
+  Slasher  → Claw (Interceptor)  OR  Stiletto (Interceptor)
+  Rifter   → Wolf (Assault Frigate)  OR  Jaguar (Assault Frigate)
+  Vigil    → Hyena (Electronic Attack Ship)
+  Probe    → Cheetah (Covert Ops)
+  Breacher → Hound (Stealth Bomber)
+  Burst    → Scalpel (Logistics Frigate)
+
+GALLENTE
+  Atron    → Taranis (Interceptor)  OR  Ares (Interceptor)
+  Incursus → Enyo (Assault Frigate)  OR  Ishkur (Assault Frigate)
+  Maulus   → Keres (Electronic Attack Ship)
+  Imicus   → Helios (Covert Ops)
+  Tristan  → Nemesis (Stealth Bomber)
+  Navitas  → Thalia (Logistics Frigate)
+
+MINING BARGES → EXHUMERS (all confirmed)
+  Procurer → Skiff  |  Retriever → Mackinaw  |  Covetor → Hulk
+  Venture  → Prospect (Expedition Frigate)  OR  Endurance (Expedition Frigate)
+
+── What CANNOT Be Invented — NEVER state these come from invention ──
+CAPITALS (Dreadnoughts, Carriers, Force Auxiliaries, Supercarriers, Titans)
+  — Built from BPOs using capital components. NO T2 capital exists via invention.
+T3 STRATEGIC CRUISERS (Tengu, Legion, Proteus, Loki)
+  — REVERSE ENGINEERED from Ancient Relics (wormhole Sleeper sites). NOT invented.
+T3 TACTICAL DESTROYERS (Svipul, Confessor, Hecate, Jackdaw)
+  — Also reverse engineered from Triglavian/Sleeper components. NOT invented.
+NAVY / FLEET ISSUE SHIPS (Raven Navy Issue, Stabber Fleet Issue, etc.)
+  — Obtained from Factional Warfare LP stores. NOT invented from T1.
+PIRATE FACTION SHIPS (Machariel, Rattlesnake, Nightmare, etc.)
+  — LP stores or rare BPC drops. NOT invented.
+ORCA / RORQUAL — Industrial Command Ships built from BPOs. NOT T2. NOT invented.
+BOWHEAD / FREIGHTERS — BPO ships. NOT invented (Jump Freighters use freighter hull + components).
+
+── Destroyer → T2 Destroyer Invention ──
+Interdictors and Command Destroyers are invented from T1 Destroyer BPCs.
+Use wiki.eveuniversity.org/Interdictors for full mapping table.
+
+── What Happens When Users Ask About Invention ──
+If asked "what T1 do I need to invent [T2 ship]" — check the table above first.
+If asked about a ship NOT in this table — say "I'd recommend verifying at
+  wiki.eveuniversity.org/Invention as these relationships are fixed in the game SDE."
+Do NOT guess invention parents for ships not listed above.
+Always clarify: you cannot invent FROM a BPO; the T1 BPC run is always consumed.
+
 ══ ITEM NAME RULES ══
 Always use FULL item names — they are used as clickable links in the UI.
   ✗ Trit → ✓ Tritanium
@@ -5714,13 +5874,13 @@ app.post('/api/corp/setup', security.adminLimiter, async (req, res) => {
     // 6. Encrypt refresh token
     const enc = encryptToken(refresh_token);
 
-    // 7. Upsert corp_config (pin_hash/pin_salt kept as empty strings — no longer used)
+    // 7. Upsert corp_config
     await dbRun(
       `INSERT INTO corp_config
          (corp_id, corp_name, director_char_id, director_char_name,
           enc_refresh_token, token_iv, token_tag,
-          pin_hash, pin_salt, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, '', '', datetime('now'), datetime('now'))
+          created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
        ON CONFLICT(corp_id) DO UPDATE SET
          corp_name           = excluded.corp_name,
          director_char_id    = excluded.director_char_id,
@@ -6050,7 +6210,6 @@ app.delete('/api/corp/admin/config', security.adminLimiter, async (req, res) => 
     await dbRun('DELETE FROM corp_blueprints');
     await dbRun('DELETE FROM corp_assets');
     await dbRun('DELETE FROM corp_jobs');
-    await dbRun('DELETE FROM corp_pin_sessions');
     console.log('✓ Corp config and all cached corp data deleted');
     res.json({ ok: true, message: 'Corp config deleted. Re-run corp setup to reconfigure.' });
   } catch (err) {
