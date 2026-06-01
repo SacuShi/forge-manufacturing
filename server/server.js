@@ -2685,13 +2685,45 @@ app.post('/api/ai-chat',
       experienceNote = 'Expert — maximum technical density, peer-level, no hand-holding.';
     }
 
+    // ── Key skill levels ──────────────────────────────────────────────────
+    // Build a level map from the session skills array, then format the ~20
+    // manufacturing-relevant skills for the AI context.
+    const skillLevelMap = {};
+    if (Array.isArray(skills)) {
+      skills.forEach(s => { skillLevelMap[s.skill_id] = s.active_skill_level; });
+    }
+
+    // Format: "Skill Name L{n}" — omit skills the player hasn't started (level 0)
+    const keySkillLines = Object.entries(KEY_SKILL_IDS)
+      .map(([id, name]) => {
+        const level = skillLevelMap[parseInt(id)] || 0;
+        return level > 0 ? `${name} L${level}` : null;
+      })
+      .filter(Boolean);
+
+    // Derived values the AI can use directly
+    const concurrentMfgJobs   = 1 + (skillLevelMap[3387] || 0);  // Mass Production
+    const concurrentRxnJobs   = 1 + (skillLevelMap[45748] || 0); // Mass Reactions
+    const concurrentResSlots  = 1 + (skillLevelMap[3406] || 0)   // Lab Op
+                                  + (skillLevelMap[24624] || 0);  // Adv Lab Op
+    const derivedStats = [
+      `Concurrent mfg jobs: ${concurrentMfgJobs}`,
+      concurrentRxnJobs > 1 ? `Concurrent reaction jobs: ${concurrentRxnJobs}` : null,
+      `Concurrent research slots: ${concurrentResSlots}`,
+    ].filter(Boolean).join(', ');
+
+    const keySkillsBlock = keySkillLines.length > 0
+      ? `Key skill levels: ${keySkillLines.join(', ')}\nDerived: ${derivedStats}`
+      : `Key skill levels: none of the tracked manufacturing skills trained yet`;
+
     const builtContext = [
       `Wallet: ${(wallet / 1e9).toFixed(2)}B ISK`,
       `Blueprints: ${blueprints.length} total (${bpoCount} BPOs, ${bpcCount} BPCs)`,
       `Assets: ${assets.length} stacks — top holdings: ${assetSummary}`,
       `Active jobs (${jobs.length}): ${jobSummary}`,
-      `Skills trained: ${skillCount} (distinct skills)`,
+      `Skills trained: ${skillCount} distinct skills`,
       `Total skill points: ${playerSp > 0 ? playerSp.toLocaleString() + ` SP (${experienceTier})` : 'Unknown'}`,
+      keySkillsBlock,
       `Response tone: ${experienceNote}`,
     ].join('\n');
 
@@ -4689,6 +4721,38 @@ const AI_PRICING = {
   'claude-sonnet-4-20250514': { input: 3.00, output: 15.00 }
 };
 
+// ── Key manufacturing skill IDs → display names ──────────────────────────────
+// Only the ~20 skills that directly affect manufacturing advice.
+// Injected into AI context so the advisor can give skill-specific guidance.
+const KEY_SKILL_IDS = {
+  // Core industry
+  3380:  'Industry',
+  3388:  'Advanced Industry',
+  3387:  'Mass Production',
+  45748: 'Mass Reactions',
+  // Research
+  3402:  'Science',
+  3403:  'Research',
+  3406:  'Laboratory Operation',
+  24624: 'Advanced Laboratory Operation',
+  // Trade fees
+  3446:  'Broker Relations',
+  16622: 'Accounting',
+  // Racial T2 manufacturing
+  11444: 'Caldari Starship Engineering',
+  11445: 'Minmatar Starship Engineering',
+  11446: 'Amarr Starship Engineering',
+  11447: 'Gallente Starship Engineering',
+  // Invention (encryption methods)
+  21790: 'Caldari Encryption Methods',
+  21791: 'Minmatar Encryption Methods',
+  21793: 'Amarr Encryption Methods',
+  21792: 'Gallente Encryption Methods',
+  // T2 component manufacturing
+  3392:  'Mechanical Engineering',
+  3395:  'Electronic Engineering',
+};
+
 // FORGE AI SYSTEM PROMPT (static — cached server-side)
 // Moving this here enables Anthropic prompt caching (90% token discount
 // on repeat calls within 5 minutes)
@@ -4949,9 +5013,16 @@ Always clarify: you cannot invent FROM a BPO; the T1 BPC run is always consumed.
 
 ══ PLAYER EXPERIENCE — ADAPT YOUR TONE ══
 
-The player context block includes "Total skill points" and a "Response tone" line.
-Use these to calibrate every response. Adjust vocabulary, depth, and structure as
-follows — do NOT announce the tier to the player, just apply it silently:
+The player context block includes "Total skill points", "Key skill levels", a
+"Derived" line, and a "Response tone" line.
+
+Use the skill levels to make advice specific and actionable — e.g. point out a
+skill bottleneck, note how many more job slots a level-up would give, or flag that
+a skill needed for T2 manufacturing is untrained. Use the "Derived" line (concurrent
+job counts, research slots) directly without recalculating.
+
+Use "Response tone" to calibrate vocabulary and depth for every response.
+Do NOT announce the experience tier to the player — apply it silently.
 
 • New Player (< 5 M SP)
   - Plain English throughout. Define every EVE-specific term the first time you use it.
