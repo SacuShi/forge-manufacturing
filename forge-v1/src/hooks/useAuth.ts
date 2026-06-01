@@ -57,7 +57,6 @@ const SCOPES =
   'esi-assets.read_assets.v1 esi-characters.read_blueprints.v1 ' +
   'esi-wallet.read_character_wallet.v1 esi-industry.read_character_jobs.v1 ' +
   'esi-skills.read_skills.v1 ' +
-  'esi-markets.structure_markets.v1 ' +
   'esi-characters.read_standings.v1 ' +
   'esi-characters.read_corporation_roles.v1 ' +
   'esi-corporations.read_corporation_membership.v1';
