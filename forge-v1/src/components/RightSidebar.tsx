@@ -171,6 +171,12 @@ const RightSidebar: FC<RightSidebarProps> = ({
   const isBlueprintClick = blueprint !== undefined;
   const isBpo            = blueprint?.quantity === -1;
 
+  // ME-adjusted material factor — mirrors exactly what /api/true-cost uses.
+  // When the user owns this blueprint: use its actual ME level.
+  // When they don't own it (blueprint === undefined): ME = 0 → full raw quantities.
+  const blueprintME = blueprint?.material_efficiency ?? 0;
+  const meFactor    = Math.max(0, 1 - blueprintME / 100);
+
   // ── Build runs free-input ────────────────────────────────────────────────
   // Local string state for immediate display feedback; parent (App.tsx) is
   // notified via onBuildRunsChange, debounced 600ms so True Profit only
@@ -203,8 +209,14 @@ const RightSidebar: FC<RightSidebarProps> = ({
   const copyShortfall = useCallback(() => {
     if (!apiDetail?.buildInfo?.materials) return;
     const runs = Math.max(1, parseInt(runsInputVal, 10) || 1);
+    // Apply same ME factor as True Profit — owned blueprint uses its ME, unowned = ME 0
+    const me   = blueprintME;
+    const mf   = Math.max(0, 1 - me / 100);
     const lines = apiDetail.buildInfo.materials
-      .map(m => ({ m, short: Math.max(0, m.needed * runs - m.have) }))
+      .map(m => ({
+        m,
+        short: Math.max(0, Math.max(1, Math.ceil(m.needed * mf)) * runs - m.have),
+      }))
       .filter(({ short }) => short > 0)
       .map(({ m, short }) => `${m.name} ${short}`);
     if (lines.length === 0) return;
@@ -223,7 +235,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
         apply();
       } catch (_) { /* silent — clipboard unavailable */ }
     });
-  }, [apiDetail, runsInputVal]);
+  }, [apiDetail, runsInputVal, blueprintME]);
 
   // Since MainContent now passes product type_id, selectedTypeId IS the product typeId.
   // We only need a fallback strip for edge cases where blueprint type_id was passed.
@@ -530,8 +542,10 @@ const RightSidebar: FC<RightSidebarProps> = ({
                 {/* Materials list — every row is clickable → drills into that item */}
                 <div className="mat-list">
                   {apiDetail.buildInfo.materials.map((mat) => {
-                    // Runs-adjusted shortage — server sends 1-run values; multiply here
-                    const needForRuns  = mat.needed * displayRuns;
+                    // ME + runs-adjusted needed — mirrors /api/true-cost formula exactly:
+                    //   max(1, ceil(base_qty × meFactor)) × runs
+                    // meFactor = 1 when blueprint not owned (ME 0), actual ME when owned.
+                    const needForRuns  = Math.max(1, Math.ceil(mat.needed * meFactor)) * displayRuns;
                     const shortForRuns = Math.max(0, needForRuns - mat.have);
                     const ok           = shortForRuns <= 0;
                     // canManufacture: set by server from blueprints DB (any game blueprint exists)
@@ -642,11 +656,14 @@ const RightSidebar: FC<RightSidebarProps> = ({
 
                 {/* Shortage summary + Multibuy copy */}
                 {(() => {
-                  // Runs-adjusted: recompute shortfall here (server sends 1-run values)
+                  // ME + runs-adjusted: mirrors /api/true-cost — max(1, ceil(qty × meFactor)) × runs
                   const missing = apiDetail.buildInfo!.materials
                     .map(m => ({
                       ...m,
-                      shortForRuns: Math.max(0, m.needed * displayRuns - m.have),
+                      shortForRuns: Math.max(
+                        0,
+                        Math.max(1, Math.ceil(m.needed * meFactor)) * displayRuns - m.have
+                      ),
                     }))
                     .filter(m => m.shortForRuns > 0);
                   if (missing.length === 0) return null;
