@@ -5232,9 +5232,26 @@ SKILLS AND COLONY CAPACITY:
   P4: requires 4–6 planet types coordinated. Solo 6-planet null = ~200–500 P4/month total.
 
 COST PHILOSOPHY — CRITICAL:
-  PI cost = market price (opportunity cost). Self-produced PI is NOT free.
-  The ISK value of PI you use is what you could have sold it for. FORGE prices PI at
-  market by design. Never tell a player their PI is "free" or "zero cost."
+  PI PRODUCTION HAS NO MANUFACTURING JOB FEES.
+  Processing happens on-planet, outside the industry facility system entirely.
+  No facility tax, no SCC surcharge, no system cost index — none of these apply to PI.
+
+  POCO (Planetary Customs Office) export tax DOES apply:
+    - Charged when moving PI commodities off-planet through a customs office
+    - Tax base = "customs value" per item (fixed SDE value — typically much lower than market price)
+    - Tax rate = set by the owning corporation. Ranges: 0% (alliance benefit) to ~20% (hisec/hostile)
+    - UKC/Goonswarm alliance: POCO rate = 1% for member corps (Shy Hook / alliance POCOs)
+    - At 1%: cash cost = customs value × 0.01 per unit — a very small fraction of market price
+
+  Opportunity cost (FORGE's pricing model):
+    Even at 0% POCO tax, PI used in manufacturing forgoes the market sale price.
+    FORGE prices all PI at market value — this is the economically correct opportunity cost.
+    Never tell a player their PI is "free" or "zero cost." It has market value regardless of
+    how it was obtained or what the POCO rate is.
+
+    For profit calculations: FORGE uses market price as material cost (what could have been sold).
+    POCO export tax is an additional small cash outflow on top; at 1% of customs value it is
+    negligible vs. market price but real — relevant when comparing buy-from-market vs. self-produce.
 
 WHEN PI COLONY DATA IS IN CONTEXT:
   Use planet types to estimate which P1/P2 chains are likely running.
