@@ -21,7 +21,7 @@
  *   - No dangerouslySetInnerHTML.
  */
 
-import { useMemo, type FC } from 'react';
+import { useMemo, useState, useCallback, type FC } from 'react';
 import type { ItemDetail, ItemDetailApiResponse, EsiBlueprint, Market, TrueCostResponse, AltCharacter } from '../types';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -170,6 +170,33 @@ const RightSidebar: FC<RightSidebarProps> = ({
 
   const isBlueprintClick = blueprint !== undefined;
   const isBpo            = blueprint?.quantity === -1;
+
+  // ── Multibuy copy ────────────────────────────────────────────────────────
+  const [copiedShortfall, setCopiedShortfall] = useState(false);
+
+  const copyShortfall = useCallback(() => {
+    if (!apiDetail?.buildInfo?.materials) return;
+    const lines = apiDetail.buildInfo.materials
+      .map(m => ({ m, short: Math.max(0, m.needed * buildRuns - m.have) }))
+      .filter(({ short }) => short > 0)
+      .map(({ m, short }) => `${m.name} ${short}`);
+    if (lines.length === 0) return;
+    const text = lines.join('\n');
+    const apply = () => { setCopiedShortfall(true); setTimeout(() => setCopiedShortfall(false), 2000); };
+    navigator.clipboard.writeText(text).then(apply).catch(() => {
+      // Fallback for contexts without clipboard API permission
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        apply();
+      } catch (_) { /* silent — clipboard unavailable */ }
+    });
+  }, [apiDetail, buildRuns]);
 
   // Since MainContent now passes product type_id, selectedTypeId IS the product typeId.
   // We only need a fallback strip for edge cases where blueprint type_id was passed.
@@ -476,7 +503,10 @@ const RightSidebar: FC<RightSidebarProps> = ({
                 {/* Materials list — every row is clickable → drills into that item */}
                 <div className="mat-list">
                   {apiDetail.buildInfo.materials.map((mat) => {
-                    const ok      = mat.shortage <= 0;
+                    // Runs-adjusted shortage — server sends 1-run values; multiply here
+                    const needForRuns  = mat.needed * buildRuns;
+                    const shortForRuns = Math.max(0, needForRuns - mat.have);
+                    const ok           = shortForRuns <= 0;
                     // canManufacture: set by server from blueprints DB (any game blueprint exists)
                     // isOwned: user personally owns a blueprint for this material
                     const isChain = mat.canManufacture ?? ownedProductTypeIds.has(mat.materialId);
@@ -557,16 +587,16 @@ const RightSidebar: FC<RightSidebarProps> = ({
                           )}
                         </span>
 
-                        {/* Have / needed counts */}
+                        {/* Have / needed counts — runs-adjusted */}
                         <span className="mat-qty">
-                          {fmtN(mat.have)}/{fmtN(mat.needed)}
+                          {fmtN(mat.have)}/{fmtN(needForRuns)}
                         </span>
 
-                        {/* Per-material cost */}
-                        {mat.totalCost != null && mat.totalCost > 0 && (
+                        {/* Per-material cost — runs-adjusted */}
+                        {mat.unitCost != null && mat.unitCost > 0 && (
                           <span style={{ fontSize: 9, color: 'var(--color-text-tertiary)',
                             marginLeft: 4, flexShrink: 0 }}>
-                            {formatISK(mat.totalCost)}
+                            {formatISK(mat.unitCost * needForRuns)}
                           </span>
                         )}
 
@@ -583,17 +613,50 @@ const RightSidebar: FC<RightSidebarProps> = ({
                   })}
                 </div>
 
-                {/* Shortage summary */}
+                {/* Shortage summary + Multibuy copy */}
                 {(() => {
-                  const missing = apiDetail.buildInfo!.materials.filter((m) => m.shortage > 0);
+                  // Runs-adjusted: recompute shortfall here (server sends 1-run values)
+                  const missing = apiDetail.buildInfo!.materials
+                    .map(m => ({
+                      ...m,
+                      shortForRuns: Math.max(0, m.needed * buildRuns - m.have),
+                    }))
+                    .filter(m => m.shortForRuns > 0);
                   if (missing.length === 0) return null;
-                  const shortfallTotal = missing.reduce((s, m) => s + (m.shortfallCost ?? 0), 0);
+                  const shortfallTotal = missing.reduce(
+                    (s, m) => s + m.shortForRuns * (m.unitCost ?? 0), 0
+                  );
                   return (
                     <div style={{ marginTop: 6, padding: '6px 8px', borderRadius: 3,
                       background: 'rgba(244, 67, 54, 0.08)', border: '0.5px solid rgba(244, 67, 54, 0.2)',
-                      fontSize: 10, color: 'var(--color-danger)' }}>
-                      {missing.length} material{missing.length !== 1 ? 's' : ''} short
-                      {shortfallTotal > 0 && <> · {formatISK(shortfallTotal)} to buy</>}
+                      fontSize: 10, color: 'var(--color-danger)',
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                      <span>
+                        {missing.length} material{missing.length !== 1 ? 's' : ''} short
+                        {shortfallTotal > 0 && <> · {formatISK(shortfallTotal)} to buy</>}
+                      </span>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); copyShortfall(); }}
+                        title={`Copy shortfall list to clipboard in EVE Multibuy format.\nPaste directly into the Multibuy window (right-click → Paste).\nQuantities are raw blueprint amounts × runs (before ME adjustment).`}
+                        style={{
+                          background: copiedShortfall
+                            ? 'rgba(76, 175, 80, 0.18)' : 'rgba(244, 67, 54, 0.15)',
+                          color: copiedShortfall
+                            ? 'var(--color-success)' : 'var(--color-danger)',
+                          border: `0.5px solid ${copiedShortfall
+                            ? 'rgba(76, 175, 80, 0.4)' : 'rgba(244, 67, 54, 0.35)'}`,
+                          borderRadius: 3,
+                          padding: '2px 7px',
+                          fontSize: 9,
+                          cursor: 'pointer',
+                          fontFamily: 'inherit',
+                          flexShrink: 0,
+                          transition: 'background 0.15s, color 0.15s, border-color 0.15s',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {copiedShortfall ? '✓ Copied!' : '📋 Multibuy'}
+                      </button>
                     </div>
                   );
                 })()}
