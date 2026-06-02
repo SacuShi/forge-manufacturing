@@ -21,7 +21,7 @@
  *   - No dangerouslySetInnerHTML.
  */
 
-import { useMemo, useState, useCallback, type FC } from 'react';
+import { useMemo, useState, useCallback, useRef, type FC } from 'react';
 import type { ItemDetail, ItemDetailApiResponse, EsiBlueprint, Market, TrueCostResponse, AltCharacter } from '../types';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -171,13 +171,40 @@ const RightSidebar: FC<RightSidebarProps> = ({
   const isBlueprintClick = blueprint !== undefined;
   const isBpo            = blueprint?.quantity === -1;
 
+  // ── Build runs free-input ────────────────────────────────────────────────
+  // Local string state for immediate display feedback; parent (App.tsx) is
+  // notified via onBuildRunsChange, debounced 600ms so True Profit only
+  // recalculates once the user stops typing (not on every keystroke).
+  const [runsInputVal,  setRunsInputVal]  = useState(String(buildRuns));
+  const runsDebounceRef                   = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Derived runs used for material list and shortfall display (live, not debounced)
+  const displayRuns = Math.max(1, parseInt(runsInputVal, 10) || buildRuns);
+
+  const handleRunsChange = useCallback((raw: string) => {
+    setRunsInputVal(raw);
+    if (runsDebounceRef.current) clearTimeout(runsDebounceRef.current);
+    const n = parseInt(raw, 10);
+    if (!isNaN(n) && n >= 1) {
+      runsDebounceRef.current = setTimeout(() => onBuildRunsChange(n), 600);
+    }
+  }, [onBuildRunsChange]);
+
+  const commitRuns = useCallback(() => {
+    if (runsDebounceRef.current) clearTimeout(runsDebounceRef.current);
+    const n = Math.max(1, parseInt(runsInputVal, 10) || 1);
+    setRunsInputVal(String(n));
+    onBuildRunsChange(n);
+  }, [runsInputVal, onBuildRunsChange]);
+
   // ── Multibuy copy ────────────────────────────────────────────────────────
   const [copiedShortfall, setCopiedShortfall] = useState(false);
 
   const copyShortfall = useCallback(() => {
     if (!apiDetail?.buildInfo?.materials) return;
+    const runs = Math.max(1, parseInt(runsInputVal, 10) || 1);
     const lines = apiDetail.buildInfo.materials
-      .map(m => ({ m, short: Math.max(0, m.needed * buildRuns - m.have) }))
+      .map(m => ({ m, short: Math.max(0, m.needed * runs - m.have) }))
       .filter(({ short }) => short > 0)
       .map(({ m, short }) => `${m.name} ${short}`);
     if (lines.length === 0) return;
@@ -196,7 +223,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
         apply();
       } catch (_) { /* silent — clipboard unavailable */ }
     });
-  }, [apiDetail, buildRuns]);
+  }, [apiDetail, runsInputVal]);
 
   // Since MainContent now passes product type_id, selectedTypeId IS the product typeId.
   // We only need a fallback strip for edge cases where blueprint type_id was passed.
@@ -504,7 +531,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
                 <div className="mat-list">
                   {apiDetail.buildInfo.materials.map((mat) => {
                     // Runs-adjusted shortage — server sends 1-run values; multiply here
-                    const needForRuns  = mat.needed * buildRuns;
+                    const needForRuns  = mat.needed * displayRuns;
                     const shortForRuns = Math.max(0, needForRuns - mat.have);
                     const ok           = shortForRuns <= 0;
                     // canManufacture: set by server from blueprints DB (any game blueprint exists)
@@ -619,7 +646,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
                   const missing = apiDetail.buildInfo!.materials
                     .map(m => ({
                       ...m,
-                      shortForRuns: Math.max(0, m.needed * buildRuns - m.have),
+                      shortForRuns: Math.max(0, m.needed * displayRuns - m.have),
                     }))
                     .filter(m => m.shortForRuns > 0);
                   if (missing.length === 0) return null;
@@ -755,23 +782,23 @@ const RightSidebar: FC<RightSidebarProps> = ({
                   ))}
                 </select>
               )}
-              {/* v1.6 — Build runs selector */}
+              {/* v1.9.1 — Free-entry build runs input */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 'auto' }}>
                 <span style={{ fontSize: 10, color: 'var(--color-text-tertiary)' }}>×</span>
-                <select
+                <input
+                  type="number"
                   className="fee-char-select"
-                  value={buildRuns}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    onBuildRunsChange(v === 'custom' ? buildRuns : Number(v));
-                  }}
+                  value={runsInputVal}
+                  min={1}
+                  step={1}
+                  style={{ width: 64, textAlign: 'center', paddingRight: 2 }}
+                  onChange={(e) => handleRunsChange(e.target.value)}
+                  onBlur={commitRuns}
+                  onKeyDown={(e) => e.key === 'Enter' && commitRuns()}
                   aria-label="Number of manufacturing runs"
-                  title="Number of manufacturing runs"
-                >
-                  {[1, 2, 5, 10, 20, 50, 100].map((n) => (
-                    <option key={n} value={n}>{n} run{n !== 1 ? 's' : ''}</option>
-                  ))}
-                </select>
+                  title="Type any number of runs — True Profit updates when you stop typing"
+                />
+                <span style={{ fontSize: 10, color: 'var(--color-text-tertiary)' }}>runs</span>
               </div>
             </div>
 
