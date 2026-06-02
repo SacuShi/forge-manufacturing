@@ -515,5 +515,10 @@ export interface TrueCostResponse {
     rig_ids:           number[];
     facility_tax_pct:  number;
     sci_raw:           number;
+    /** v1.9.3 — Effective ME breakdown */
+    blueprint_me?:       number;
+    structure_me_bonus?: number;
+    rig_me_bonus?:       number;
+    effective_me?:       number;
   };
 }

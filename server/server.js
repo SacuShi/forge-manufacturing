@@ -5173,6 +5173,102 @@ Do NOT announce the experience tier to the player — apply it silently.
 • Unknown SP (0 or absent)
   - Default to Intermediate tone.
 
+══ MANUFACTURING MECHANICS & FORMULAS ══
+
+── Effective ME (Material Efficiency) ──
+The material quantities needed for a job are reduced by the combined effective ME:
+  effectiveME = blueprintME + structureMEbonus + Σ(rigMEbonus)
+  adjQty[mat] = max(1, ceil(baseQty × max(0, 1 − effectiveME/100))) × runs
+
+Structure ME bonuses (Upwell engineering complexes):
+  NPC Station: 0%   Raitaru: +1%   Azbel: +1%   Sotiyo: +1%
+
+Standup M-Set rig ME bonuses (null/WH — full bonus zone):
+  T1 rigs (e.g. Capital Ship Mfg Efficiency I):  +2.0% per rig installed
+  T2 rigs (e.g. Capital Ship Mfg Efficiency II): +2.4% per rig installed
+  Max 3 rigs; no stacking penalty on ME reduction.
+  Each rig applies to its designated category (Capital Ship rigs → capitals only, etc.)
+
+Example — Sotiyo, ME10 blueprint, 3× Capital Ship Mfg Efficiency II rigs:
+  effectiveME = 10 + 1 + 7.2 = 18.2%
+  meFactor = 0.818 (vs 0.9 at bare ME10 in NPC)
+  On a 10B ISK carrier build: ~820M ISK additional saving vs NPC station
+
+── True Profit Formula ──
+  Revenue       = lowestSell[hub] × productQty × runs
+  Material Cost = Σ(adjQty[mat] × sellPrice[mat, sourceHub])
+  EIV           = Σ(adjQty[mat] × adjustedPrice[mat])   ← EVE adjusted prices, NOT market price
+  Job Cost      = EIV × SCI + EIV × 0.02(SCC) + EIV × facilityTax%
+  Broker Fee    = revenue × max(1%, 3% − 0.3%×BrokerRelations − 0.03%×factionStanding − 0.02%×corpStanding)
+  Trans. Tax    = revenue × max(0%, 7.5% × (1 − 0.11×Accounting))
+  True Profit   = Revenue − MaterialCost − JobCost − BrokerFee − TransactionTax − HaulCost
+
+Key point: EIV uses CCP's "adjusted prices" (smoothed ESI values), NOT live market prices.
+The SCI multiplier makes EIV the critical number for comparing job costs across systems.
+
+── System Cost Index (SCI) Quick Reference ──
+SCI is the system-specific multiplier for manufacturing job cost.
+  < 1%   Excellent (rare, low-activity null systems)
+  1–3%   Good (typical productive null)
+  3–6%   Average–High (busy null / lowsec)
+  8–12%  Trade hubs (Jita, Amarr) — avoid for production
+The current SCI for your configured system is shown in the Mfg Fees tooltip in FORGE.
+Moving to a 1% lower SCI on a 10B EIV build saves 100M ISK per job.
+
+── Capital Ship Manufacturing ──
+Capitals (Carriers, Dreadnoughts, Force Auxiliaries, Supercarriers, Titans) are built
+from BPOs only — NO T2 capitals exist through invention. Never state otherwise.
+
+Build chain:
+  1. Build capital components (separate BPs: Capital Armor Plates, Cap Capacitor Battery,
+     Cap Computer System, Cap Construction Parts, Cap Cargo Bay, Cap Microprocessor, etc.)
+  2. Use capital ship BP to assemble the hull from the components + minerals
+
+Key facts:
+  • Build time: Carrier/Dread ~3–6 days; FAX ~4–7 days; Supercarrier ~2–4 weeks; Titan ~4–8 weeks
+  • Require a Sotiyo or Keepstar to build — cannot be built in Raitaru/Azbel or NPC
+  • P4 PI required (see PI section) — 4,000–10,000 P4 for a carrier/dread
+  • Nullsec advantage: cheap local minerals + alliance-owned structure + optimised rigs
+
+── Fuel Block Manufacturing ──
+Fuel blocks power Upwell structures. Highly repeatable, steady demand.
+Recipe per 40-block batch (Caldari Fuel Block):
+  Nitrogen Isotopes 400, Heavy Water 375, Liquid Ozone 75, Strontium Clathrates 5,
+  Coolant 3 (P2), Mechanical Parts 3 (P2), Enriched Uranium 1 (P2), Oxygen 22 (P1)
+Racial variants use their isotope: Hydrogen (Minmatar), Oxygen (Gallente), Helium (Amarr).
+Fuel blocks are profitable when: isotope cost + PI cost < market price of blocks.
+Alliance/corp manufacturing POCOs + local PI = significant cost advantage.
+
+── Reaction Manufacturing (activity_id = 9) ──
+Reactions convert moon goo or gas into T2 component materials. No ME bonus applies.
+Simple reaction: raw moon material → basic product (1 input, 1 output)
+Complex reaction: 2+ inputs → advanced component (Nanotransistors, Sylramic Fibers, etc.)
+Required for: all T2 ships, modules, structures. Very high volume in alliance manufacturing.
+Profitable when moon rental + fuel cost < product market price.
+
+── Production Optimisation ──
+ISK/hour = profit_per_run × runs_per_hour = profit / (build_time_hours × slots_used)
+  • Advanced Industry L5 → 11 concurrent manufacturing slots
+  • Mass Production L5 + AAI → 10 additional slots = 21 total
+  • Each idle slot is lost ISK. Fill gaps with fast-building mid-margin items.
+  • Queue longer items during offline hours; short items when actively playing.
+  • Blueprint ME research: diminishing returns above ME8 for cheap materials;
+    for capitals/structures with billion-ISK material costs, ME10 is always worth it.
+  • TE research matters mainly for time-constrained builders (slot-limited).
+
+── UKC / Goonswarm Nullsec Context ──
+  Build location: Goonswarm sovereignty space (C-J6MT area / 4DS system)
+  Structure: Sotiyo or Azbel class (check FORGE Industry Settings for current config)
+  POCO tax: 1% of customs value for alliance members (Shy Hook / alliance POCOs)
+  Local selling: Keepstar market at C-J6MT (prices track Jita closely)
+  Haul strategy: Jump Freighter Jita→null for materials; null→Jita for finished goods
+  Best null manufacturing candidates:
+    — Capital ships (carrier, dread, FAX) — local minerals + alliance PI = cheapest build
+    — Upwell structures (Fortizars, Ansiblexes) — corp/alliance demand, high margin
+    — Fuel blocks — constant consumption by structures, PI self-supply advantage
+    — T2 ships — if reaction chain is also running
+    — Reaction chains — moon goo → components → sell or use in T2 builds
+
 ══ PLANETARY INDUSTRY (PI) ══
 Source: EVE Online SDE / established game data (PI system stable since ~2014)
 
@@ -5723,8 +5819,39 @@ app.get('/api/system-search', security.apiLimiter, security.verifyEveToken, asyn
 //   • Sell price           → regionPriceCache (populated by precompute job)
 //   • Sales fees           → character skills + standings (session cache)
 //
+// ── Standup M-Set manufacturing efficiency rig ME bonuses ──────────────────
+// Source: EVE SDE materialConsumptionBonus attribute per type_id.
+// Values are % reduction in null/WH space (full bonus zone — where UKC operates).
+// T1 = 2.0% per rig; T2 = 2.4% per rig. Rigs do NOT stack-penalise each other.
+// Note: each rig applies only to its designated manufacturing category in-game.
+// FORGE applies whichever rigs are configured — the user is responsible for
+// selecting rigs appropriate to what they are building.
+const RIG_ME_BONUSES = {
+  37178: 2.0, // Capital Ship Mfg Efficiency I
+  37179: 2.4, // Capital Ship Mfg Efficiency II
+  37180: 2.0, // Large Ship Mfg Efficiency I
+  37181: 2.4, // Large Ship Mfg Efficiency II
+  37182: 2.0, // Medium Ship Mfg Efficiency I
+  37183: 2.4, // Medium Ship Mfg Efficiency II
+  37184: 2.0, // Small Ship Mfg Efficiency I
+  37185: 2.4, // Small Ship Mfg Efficiency II
+  37186: 2.0, // Ammunition Mfg Efficiency I
+  37187: 2.4, // Ammunition Mfg Efficiency II
+  37188: 2.0, // Equipment Mfg Efficiency I
+  37189: 2.4, // Equipment Mfg Efficiency II
+  37190: 2.0, // Drone Mfg Efficiency I
+  37191: 2.4, // Drone Mfg Efficiency II
+  37197: 2.0, // Adv. Component Mfg Efficiency I
+  37198: 2.4, // Adv. Component Mfg Efficiency II
+  37199: 2.0, // Structure Mfg Efficiency I
+  37200: 2.4, // Structure Mfg Efficiency II
+};
+
 // Job cost formula (EVE manufacturing):
-//   EIV             = Σ(adjusted_price[mat] × ME-adjusted qty) × runs
+//   effectiveME     = blueprintME + structureMEbonus(1% for Upwell) + Σ(rigMEbonus)
+//   meFactor        = max(0, 1 − effectiveME/100)
+//   adjQty[mat]     = max(1, ceil(baseQty × meFactor)) × runs
+//   EIV             = Σ(adjusted_price[mat] × adjQty[mat])
 //   System Job Cost = EIV × SCI
 //   SCC Surcharge   = EIV × 2%     (reduced from 4% in the Legion update)
 //   Facility Tax    = EIV × facility_tax_rate
@@ -5761,6 +5888,13 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
     const facilityTaxDecimal = (settings?.facility_tax || 0) / 100;
     const targetSystemId     = settings?.system_id || 30000142; // default: Jita IV
 
+    // ── Effective ME: blueprint + structure bonus + rig bonuses ───────────
+    // All Upwell engineering complexes (Raitaru/Azbel/Sotiyo) give 1% ME.
+    // Rig bonuses are summed from the installed rig type_ids (no stacking penalty).
+    const structureMeBonus = settings?.structure_type_id ? 1 : 0;
+    const rigMeBonus       = rigIds.reduce((sum, id) => sum + (RIG_ME_BONUSES[id] || 0), 0);
+    const effectiveME      = me + structureMeBonus + rigMeBonus;
+
     // ── Blueprint materials from DB ────────────────────────────────────────
     const blueprint = await dbGet(
       'SELECT blueprint_id, product_quantity FROM blueprints WHERE product_id = ?',
@@ -5782,9 +5916,9 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
     ]);
 
     // ── EIV (Estimated Item Value for job-fee calculation) ─────────────────
-    // ME reduces required quantity per material.
+    // effectiveME (blueprint + structure + rigs) reduces required quantity per material.
     // Each material quantity is rounded UP (ceil), min 1.
-    const meFactor = Math.max(0, 1 - me / 100);
+    const meFactor = Math.max(0, 1 - effectiveME / 100);
     let eiv = 0;
     for (const mat of materials) {
       const adjPrice = adjustedPrices[mat.material_id] || 0;
@@ -5988,11 +6122,12 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
       mfg_fees: {
         total:                totalJobCost,
         system_cost_index:    systemJobCost,
-        system_cost_bonuses:  0,
+        system_cost_bonuses:  0,   // placeholder — structure/rig cost bonuses not yet modelled
         facility_tax:         facilityTaxCost,
         scc_surcharge:        sccSurcharge,
-        alpha_clone_tax:      0,
+        alpha_clone_tax:      0,   // Alpha clones pay extra 2% but FORGE only targets Omega
         estimated_item_value: eiv,
+        effective_me_pct:     effectiveME,  // for tooltip display
       },
 
       // Box 3 — sales fees
@@ -6053,6 +6188,11 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
         rig_ids:            rigIds,
         facility_tax_pct:   settings?.facility_tax      || 0,
         sci_raw:            sci,
+        // Effective ME breakdown (v1.9.3)
+        blueprint_me:       me,
+        structure_me_bonus: structureMeBonus,
+        rig_me_bonus:       rigMeBonus,
+        effective_me:       effectiveME,
       },
     });
 

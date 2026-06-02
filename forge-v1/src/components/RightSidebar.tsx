@@ -171,11 +171,12 @@ const RightSidebar: FC<RightSidebarProps> = ({
   const isBlueprintClick = blueprint !== undefined;
   const isBpo            = blueprint?.quantity === -1;
 
-  // ME-adjusted material factor — mirrors exactly what /api/true-cost uses.
-  // When the user owns this blueprint: use its actual ME level.
-  // When they don't own it (blueprint === undefined): ME = 0 → full raw quantities.
+  // Effective ME — mirrors exactly what /api/true-cost uses (blueprint + structure + rigs).
+  // Falls back to blueprint ME only before True Cost data loads, then upgrades.
+  // When blueprint not owned: ME = 0 → raw quantities regardless of structure/rigs.
   const blueprintME = blueprint?.material_efficiency ?? 0;
-  const meFactor    = Math.max(0, 1 - blueprintME / 100);
+  const effectiveME = trueCostData?.manufacturing_setup?.effective_me ?? blueprintME;
+  const meFactor    = Math.max(0, 1 - effectiveME / 100);
 
   // ── Build runs free-input ────────────────────────────────────────────────
   // Local string state for immediate display feedback; parent (App.tsx) is
@@ -209,9 +210,8 @@ const RightSidebar: FC<RightSidebarProps> = ({
   const copyShortfall = useCallback(() => {
     if (!apiDetail?.buildInfo?.materials) return;
     const runs = Math.max(1, parseInt(runsInputVal, 10) || 1);
-    // Apply same ME factor as True Profit — owned blueprint uses its ME, unowned = ME 0
-    const me   = blueprintME;
-    const mf   = Math.max(0, 1 - me / 100);
+    // Use same effective ME as the material list (blueprint + structure + rig bonuses)
+    const mf = meFactor;
     const lines = apiDetail.buildInfo.materials
       .map(m => ({
         m,
@@ -235,7 +235,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
         apply();
       } catch (_) { /* silent — clipboard unavailable */ }
     });
-  }, [apiDetail, runsInputVal, blueprintME]);
+  }, [apiDetail, runsInputVal, meFactor]);
 
   // Since MainContent now passes product type_id, selectedTypeId IS the product typeId.
   // We only need a fallback strip for edge cases where blueprint type_id was passed.
@@ -858,29 +858,55 @@ const RightSidebar: FC<RightSidebarProps> = ({
                   <span className="cost-box-value">
                     {formatISK(trueCostData.total_material_cost)}
                   </span>
-                  {/* Tooltip */}
+                  {/* Tooltip — shows full effective ME breakdown */}
                   <div className="cost-tooltip">
                     {(() => {
-                      const me = blueprint?.material_efficiency ?? 0;
-                      const meFactor = Math.max(0, 1 - me / 100);
-                      const rawCost = me > 0
-                        ? trueCostData.total_material_cost / meFactor
+                      const bpMe   = trueCostData.manufacturing_setup?.blueprint_me   ?? blueprintME;
+                      const strMe  = trueCostData.manufacturing_setup?.structure_me_bonus ?? 0;
+                      const rigMe  = trueCostData.manufacturing_setup?.rig_me_bonus   ?? 0;
+                      const effME  = trueCostData.manufacturing_setup?.effective_me   ?? bpMe;
+                      const effFac = Math.max(0, 1 - effME / 100);
+                      const rawCost = effME > 0
+                        ? trueCostData.total_material_cost / effFac
                         : trueCostData.total_material_cost;
                       const saving = rawCost - trueCostData.total_material_cost;
                       return (
                         <>
                           <div className="cost-tooltip-row">
                             <span>Blueprint ME</span>
-                            <span style={{ color: 'var(--color-success)' }}>{me}%</span>
+                            <span style={{ color: 'var(--color-success)' }}>{bpMe}%</span>
                           </div>
-                          {me > 0 && (
+                          {strMe > 0 && (
+                            <div className="cost-tooltip-row">
+                              <span>Structure ME</span>
+                              <span style={{ color: 'var(--color-success)' }}>+{strMe}%</span>
+                            </div>
+                          )}
+                          {rigMe > 0 && (
+                            <div className="cost-tooltip-row">
+                              <span>Rig ME ({rigMe.toFixed(1)}% total)</span>
+                              <span style={{ color: 'var(--color-success)' }}>+{rigMe.toFixed(1)}%</span>
+                            </div>
+                          )}
+                          {(strMe > 0 || rigMe > 0) && (
+                            <div className="cost-tooltip-row" style={{
+                              borderTop: '0.5px solid rgba(79,195,247,0.15)',
+                              marginTop: 3, paddingTop: 3,
+                            }}>
+                              <span>Effective ME</span>
+                              <span style={{ color: 'var(--color-success)', fontWeight: 600 }}>
+                                {effME.toFixed(1)}%
+                              </span>
+                            </div>
+                          )}
+                          {effME > 0 && (
                             <>
                               <div className="cost-tooltip-row">
                                 <span>Base cost (ME 0)</span>
                                 <span>{formatISK(rawCost)}</span>
                               </div>
                               <div className="cost-tooltip-row">
-                                <span>ME saving ({me}%)</span>
+                                <span>ME saving ({effME.toFixed(1)}%)</span>
                                 <span style={{ color: 'var(--color-success)' }}>
                                   −{formatISK(saving)}
                                 </span>
@@ -891,11 +917,6 @@ const RightSidebar: FC<RightSidebarProps> = ({
                           <div className="cost-tooltip-row total">
                             <span>Adjusted cost</span>
                             <span>{formatISK(trueCostData.total_material_cost)}</span>
-                          </div>
-                          <div className="cost-tooltip-setup">
-                            Material quantities in the list below assume an
-                            unresearched original. Your blueprint's ME research
-                            reduces actual consumption when you build.
                           </div>
                         </>
                       );
