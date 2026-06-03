@@ -193,6 +193,10 @@ async function runMigrations() {
   // activity_id on blueprints (1=manufacturing, 9=reaction — populated by sde-import.js)
   try { await dbRun(`ALTER TABLE blueprints ADD COLUMN activity_id INTEGER DEFAULT 1`); } catch (_) {}
 
+  // research_time on blueprints (base ME-research seconds from SDE — v1.11.0, populated by sde-import.js)
+  // NULL until SDE import runs; ME Research ROI ranker degrades to ISK-only when NULL.
+  try { await dbRun(`ALTER TABLE blueprints ADD COLUMN research_time INTEGER DEFAULT NULL`); } catch (_) {}
+
   // activity_id on precomputed_profits
   try { await dbRun(`ALTER TABLE precomputed_profits ADD COLUMN activity_id INTEGER DEFAULT 1`); } catch (_) {}
 
@@ -405,6 +409,25 @@ async function runMigrations() {
 
   // v1.5.0: store avg_30d_price on precomputed_profits rows (for transparency/display)
   try { await dbRun(`ALTER TABLE precomputed_profits ADD COLUMN avg_30d_price REAL DEFAULT NULL`); } catch (_) {}
+
+  // v1.12.0: contract pricing — derived from public single-item exchange contracts.
+  // Populated weekly by ingestRegionContracts(). Used as a revenue source for
+  // contract-only items (capitals, faction gear) that have no market sell orders.
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS contract_prices (
+      type_id       INTEGER NOT NULL,
+      region_id     INTEGER NOT NULL,
+      low           REAL    DEFAULT 0,   -- lowest qualifying single-item unit price
+      high          REAL    DEFAULT 0,   -- highest
+      median        REAL    DEFAULT 0,   -- median of outlier-filtered samples
+      suggested     REAL    DEFAULT 0,   -- recommended sell (median, nudged by spread)
+      sample_count  INTEGER DEFAULT 0,   -- number of qualifying contracts
+      source        TEXT    DEFAULT 'single',
+      computed_at   TEXT    NOT NULL DEFAULT '',
+      PRIMARY KEY (type_id, region_id)
+    )
+  `);
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_contract_prices_type ON contract_prices (type_id)`);
 
   console.log('✓ Database migrations complete');
 }
@@ -1907,6 +1930,272 @@ async function buildMaterialChain(material, prices, ownedBpIds) {
   }
 }
 
+// ── MATERIAL BREAKDOWN (lazy, single-level chain drill-down) ──────────────────
+// Powers the inline reaction/manufacturing chain tree in RightSidebar.
+// Returns ONE level of the blueprint that produces `typeId`, with a per-unit
+// build-vs-buy verdict for each sub-material. Sell-sourced prices keep this
+// consistent with /api/item-details and /api/true-cost (sell → buy → avg30d → 0).
+//
+// Scope (v1): sub-levels are costed at ME 0 (reactions have no ME anyway, and
+// manufactured intermediates are costed conservatively). The top-level item's
+// effective ME is applied by the caller (RightSidebar) — not here.
+
+// Cheapest per-UNIT market cost for a type (the price a manufacturer pays to buy now).
+function unitMarketCost(typeId, prices) {
+  const p = prices[typeId];
+  if (p) return p.sell || p.buy || p.avg30d || historyPriceMap.get(typeId) || 0;
+  return historyPriceMap.get(typeId) || 0;
+}
+
+// Recursively compute the cheapest per-UNIT cost to OBTAIN one unit of `typeId`:
+// min(buy from market, build from sub-materials). Depth-capped to avoid cycles.
+async function cheapestUnitCost(typeId, prices, depth = 0) {
+  const buy = unitMarketCost(typeId, prices);
+  if (depth >= 6) return buy;
+  const bp = await dbGet(
+    'SELECT blueprint_id, product_quantity FROM blueprints WHERE product_id = ?',
+    [typeId]
+  );
+  if (!bp) return buy;
+  const subs = await dbAll(
+    'SELECT material_id, quantity FROM blueprint_materials WHERE blueprint_id = ?',
+    [bp.blueprint_id]
+  );
+  if (!subs.length) return buy;
+  let total = 0;
+  for (const s of subs) {
+    total += (await cheapestUnitCost(s.material_id, prices, depth + 1)) * s.quantity;
+  }
+  const perUnit = total / (bp.product_quantity || 1);
+  // If there is no market price (buy === 0), build cost is the only signal.
+  return buy > 0 ? Math.min(buy, perUnit) : perUnit;
+}
+
+app.post('/api/material-breakdown', security.apiLimiter, async (req, res) => {
+  try {
+    const { typeId, regionId = 10000002, ownedBlueprints } = req.body;
+    if (!typeId) return res.status(400).json({ error: 'Missing typeId' });
+
+    // Sell-sourced prices for the chosen hub (falls back to Jita cache when cold).
+    const prices = regionPriceCache.get(regionId)?.prices || jitaPricesCache || {};
+
+    // Blueprint that produces this type — activity_id tells us mfg (1) vs reaction (9).
+    const bp = await dbGet(
+      `SELECT blueprint_id, product_quantity, build_time, activity_id
+       FROM blueprints WHERE product_id = ?`,
+      [typeId]
+    );
+    if (!bp) {
+      return res.json({ typeId, manufacturable: false, materials: [] });
+    }
+
+    const ownedBpIds = Array.isArray(ownedBlueprints)
+      ? new Set(ownedBlueprints.map(b => b.type_id))
+      : new Set();
+
+    const mats = await dbAll(
+      `SELECT bm.material_id, bm.quantity, i.name, i.pi_tier
+       FROM blueprint_materials bm
+       JOIN items i ON i.type_id = bm.material_id
+       WHERE bm.blueprint_id = ?`,
+      [bp.blueprint_id]
+    );
+
+    // Which sub-materials are themselves producible, via what activity, and by which BP?
+    const subIds = mats.map(m => m.material_id);
+    const subBpMap = {};       // material_id → activity_id (1=mfg, 9=reaction)
+    const subBpIdMap = {};     // material_id → blueprint_id (to check user ownership)
+    if (subIds.length) {
+      const ph = subIds.map(() => '?').join(',');
+      const rows = await dbAll(
+        `SELECT product_id, blueprint_id, activity_id FROM blueprints WHERE product_id IN (${ph})`,
+        subIds
+      );
+      rows.forEach(r => {
+        subBpMap[r.product_id]   = r.activity_id ?? 1;
+        subBpIdMap[r.product_id] = r.blueprint_id;
+      });
+    }
+
+    const materials = [];
+    for (const m of mats) {
+      const buyPerUnit  = unitMarketCost(m.material_id, prices);
+      const canMfg      = Object.prototype.hasOwnProperty.call(subBpMap, m.material_id);
+      // Only recurse for build cost when it's actually producible.
+      const buildPerUnit = canMfg ? await cheapestUnitCost(m.material_id, prices) : null;
+      const recommendation = (canMfg && buildPerUnit != null && buyPerUnit > 0)
+        ? (buildPerUnit < buyPerUnit ? 'build' : 'buy')
+        : (canMfg && buyPerUnit === 0 ? 'build' : 'buy');
+
+      materials.push({
+        materialId:      m.material_id,
+        name:            m.name,
+        quantity:        m.quantity,            // raw qty per blueprint run (ME 0)
+        unitCost:        buyPerUnit,            // buy-from-market unit price
+        buyPricePerUnit: buyPerUnit,
+        mfgCostPerUnit:  buildPerUnit,          // cheapest build cost per unit (null if not producible)
+        canManufacture:  canMfg,
+        activityId:      canMfg ? subBpMap[m.material_id] : null, // 1=mfg, 9=reaction
+        blueprintOwned:  canMfg && ownedBpIds.has(subBpIdMap[m.material_id]), // user owns this BP
+        piTier:          m.pi_tier ?? null,
+        recommendation,
+      });
+    }
+
+    res.json({
+      typeId,
+      manufacturable:  true,
+      activityId:      bp.activity_id ?? 1,    // activity of the node being expanded
+      productQuantity: bp.product_quantity || 1,
+      buildTime:       bp.build_time,
+      materials,
+    });
+  } catch (err) {
+    console.error('Material breakdown error:', err.message);
+    res.status(500).json({ error: clientErrMsg(err) });
+  }
+});
+
+// ── ME RESEARCH ROI RANKER (v1.11.0) ─────────────────────────────────────────
+// For each owned BPO, computes the per-build ISK saving from researching the
+// blueprint from its current ME up to a target ME (default 10), plus a research
+// time estimate. Ranks blueprints so a builder knows which to research first.
+//
+// ISK saving math is exact (material qty delta × market price). Research time is
+// an ESTIMATE: needs blueprints.research_time (SDE) — NULL until SDE import runs,
+// in which case time fields are null and ranking falls back to ISK saving only.
+
+// Per-ME-level base research seconds for a unit-rank blueprint (published CCP table).
+// Time to research level n (from n-1 to n). Total ME0→ME10 ≈ 439k s (~5.1 days) at rank 1.
+const ME_LEVEL_SECONDS = [
+  0,        // index 0 (no level 0 research)
+  105,      // ME1
+  250,      // ME2
+  595,      // ME3
+  1414,     // ME4
+  3360,     // ME5
+  7980,     // ME6
+  18960,    // ME7
+  45050,    // ME8
+  107000,   // ME9
+  256000,   // ME10
+];
+const ME_LEVEL_SECONDS_L1 = ME_LEVEL_SECONDS[1]; // 105 — normaliser for the SDE base time
+
+// Material quantity for ONE run at a given ME (matches /api/true-cost rounding).
+function qtyAtME(baseQty, me) {
+  return Math.max(1, Math.ceil(baseQty * Math.max(0, 1 - me / 100)));
+}
+
+app.post('/api/me-research-roi', security.apiLimiter, async (req, res) => {
+  try {
+    const {
+      blueprints: ownedBps,
+      regionId   = 10000002,
+      targetME   = 10,
+      metallurgy        = 0,   // ME-research skill: −5%/level
+      advancedIndustry  = 0,   // all jobs: −3%/level
+    } = req.body;
+
+    if (!Array.isArray(ownedBps) || ownedBps.length === 0) {
+      return res.json({ items: [], research_time_available: false });
+    }
+
+    const target = Math.min(10, Math.max(1, parseInt(targetME, 10) || 10));
+    const prices = regionPriceCache.get(regionId)?.prices || jitaPricesCache || {};
+
+    // Skill/structure time reduction (multiplicative, EVE-accurate stacking).
+    const timeMult = Math.max(0, 1 - 0.05 * metallurgy) * Math.max(0, 1 - 0.03 * advancedIndustry);
+
+    // Dedupe to owned BPOs (runs === -1), one entry per blueprint type, keep highest ME.
+    const bpoByType = new Map();
+    for (const b of ownedBps) {
+      if (!b || b.runs !== -1) continue;
+      const cur = bpoByType.get(b.type_id);
+      if (!cur || (b.material_efficiency ?? 0) > cur.me) {
+        bpoByType.set(b.type_id, { typeId: b.type_id, me: b.material_efficiency ?? 0 });
+      }
+    }
+    if (bpoByType.size === 0) {
+      return res.json({ items: [], research_time_available: false });
+    }
+
+    let researchTimeAvailable = false;
+    const items = [];
+
+    for (const { typeId, me } of bpoByType.values()) {
+      if (me >= target) continue; // already at/above target — nothing to research
+
+      const bp = await dbGet(
+        `SELECT blueprint_id, product_id, product_quantity, build_time, activity_id, research_time
+         FROM blueprints WHERE blueprint_id = ?`,
+        [typeId]
+      );
+      if (!bp || bp.activity_id === 9) continue; // reactions can't be ME-researched
+
+      const mats = await dbAll(
+        `SELECT bm.material_id, bm.quantity, i.name
+         FROM blueprint_materials bm JOIN items i ON i.type_id = bm.material_id
+         WHERE bm.blueprint_id = ?`,
+        [bp.blueprint_id]
+      );
+      if (!mats.length) continue;
+
+      // Material cost for ONE run at current ME vs target ME (sell-sourced).
+      let costNow = 0, costTarget = 0;
+      for (const m of mats) {
+        const unit = unitMarketCost(m.material_id, prices);
+        costNow    += unit * qtyAtME(m.quantity, me);
+        costTarget += unit * qtyAtME(m.quantity, target);
+      }
+      const savingPerRun = costNow - costTarget;
+      if (savingPerRun <= 0 && costNow === 0) continue; // no price data — skip noise
+
+      const pctSaving = costNow > 0 ? (savingPerRun / costNow) * 100 : 0;
+
+      // Research time estimate (current ME → target ME).
+      let researchTimeSec = null;
+      if (bp.research_time != null && bp.research_time > 0) {
+        researchTimeAvailable = true;
+        let levelsSum = 0;
+        for (let lvl = me + 1; lvl <= target; lvl++) levelsSum += ME_LEVEL_SECONDS[lvl] || 0;
+        // Scale the rank-1 table by this blueprint's base research time, apply skills.
+        researchTimeSec = Math.round((bp.research_time / ME_LEVEL_SECONDS_L1) * levelsSum * timeMult);
+      }
+
+      const productName = mats.length // resolve product name from items table
+        ? (await dbGet('SELECT name FROM items WHERE type_id = ?', [bp.product_id]))?.name
+        : null;
+
+      items.push({
+        blueprintTypeId: typeId,
+        productId:       bp.product_id,
+        productName:     productName || `Item #${bp.product_id}`,
+        currentME:       me,
+        targetME:        target,
+        matCostNow:      costNow,
+        matCostTarget:   costTarget,
+        savingPerRun,
+        pctSaving,
+        productQuantity: bp.product_quantity || 1,
+        researchTimeSec, // null when SDE research_time not yet imported
+      });
+    }
+
+    items.sort((a, b) => b.savingPerRun - a.savingPerRun);
+
+    res.json({
+      items,
+      research_time_available: researchTimeAvailable,
+      target_me: target,
+      region_id: regionId,
+    });
+  } catch (err) {
+    console.error('ME research ROI error:', err.message);
+    res.status(500).json({ error: clientErrMsg(err) });
+  }
+});
+
 // GET JITA PRICE - Single item price lookup from cache
 // Used by AI tool to query prices on-demand
 app.post('/api/get-price', security.apiLimiter, async (req, res) => {
@@ -2303,6 +2592,32 @@ app.post('/api/item-details', security.apiLimiter, async (req, res) => {
         };
       }
     }
+
+    // v1.12.0 — contract pricing for contract-only / thin-market items.
+    // Prefer the requested region; fall back to The Forge (the only ingested
+    // region in v1) so capitals/faction gear still get a price + honest label.
+    try {
+      let cp = await dbGet('SELECT * FROM contract_prices WHERE type_id = ? AND region_id = ?', [typeId, regionId]);
+      let cpRegion = regionId;
+      if (!cp && regionId !== CONTRACT_INGEST_REGION) {
+        cp = await dbGet('SELECT * FROM contract_prices WHERE type_id = ? AND region_id = ?', [typeId, CONTRACT_INGEST_REGION]);
+        cpRegion = CONTRACT_INGEST_REGION;
+      }
+      if (cp && cp.sample_count > 0) {
+        itemDetails.contractPricing = {
+          regionId:    cpRegion,
+          regionName:  REGION_NAMES[cpRegion] || `Region ${cpRegion}`,
+          low:         cp.low,
+          high:        cp.high,
+          median:      cp.median,
+          suggested:   cp.suggested,
+          sampleCount: cp.sample_count,
+          source:      cp.source,
+          computedAt:  cp.computed_at,
+          rationale:   contractRationale(cp),
+        };
+      }
+    } catch (_) { /* contract pricing is best-effort — never block item details */ }
 
     console.log(`✓ Item details fetched — ${itemDetails.name || typeId}${itemDetails.buildInfo ? ' (with build analysis)' : ''}`);
     res.json(itemDetails);
@@ -3697,6 +4012,144 @@ async function ensureJitaPrices() {
   return prices;
 }
 
+// ── CONTRACT PRICE INGEST (v1.12.0) ──────────────────────────────────────────
+// Builds a per-region price index from public single-item exchange contracts, so
+// True Profit / the sidebar can price contract-only items (capitals, faction gear)
+// that have no market sell orders. Runs weekly — contract-only stock is slow-moving.
+//
+// v1 scope: The Forge only (where ~all capital/BPC contracts live); single-item,
+// non-BPC sell contracts only (BPC value depends on runs/ME, so it's excluded to
+// avoid misleading flat medians — residual/bundle pricing is a future enhancement).
+
+const CONTRACT_INGEST_REGION = 10000002; // The Forge (Jita)
+const REGION_NAMES = {
+  10000002: 'The Forge', 10000043: 'Domain',    10000032: 'Sinq Laison',
+  10000042: 'Metropolis', 10000030: 'Heimatar', 10000041: 'Syndicate',
+};
+let contractIngestRunning = false;
+
+function medianAsc(a) {
+  const n = a.length;
+  if (!n) return 0;
+  const m = Math.floor(n / 2);
+  return n % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+}
+function percentileAsc(a, p) {
+  const n = a.length;
+  if (!n) return 0;
+  return a[Math.min(n - 1, Math.max(0, Math.round((n - 1) * p)))];
+}
+// Run async `fn` over `items` with bounded concurrency (keeps ESI load polite).
+async function mapLimit(items, limit, fn) {
+  let i = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (i < items.length) {
+      const idx = i++;
+      try { await fn(items[idx]); } catch (_) { /* tolerate per-item failure */ }
+    }
+  });
+  await Promise.all(workers);
+}
+
+// Human, truthful rationale derived from the sample — no fabricated game events.
+function contractRationale(row) {
+  const { low, high, sample_count: n } = row;
+  const spread = low > 0 ? (high - low) / low : 0;
+  if (n <= 2) return `Only ${n} contract${n === 1 ? '' : 's'} listed in-region — thin market, treat this as indicative.`;
+  if (spread > 1.5) return `${n} contracts with a wide spread — suggested near the low-median to actually move it.`;
+  if (spread < 0.25) return `Tight cluster of ${n} contracts — confident price.`;
+  return `${n} contracts listed — suggested near the median for a sale within roughly a week.`;
+}
+
+async function ingestRegionContracts(regionId = CONTRACT_INGEST_REGION) {
+  if (contractIngestRunning) return { status: 'skipped', reason: 'already_running' };
+  contractIngestRunning = true;
+  const start = Date.now();
+  try {
+    // 1. Page all public contracts; keep item_exchange sells (price > 0).
+    const contracts = [];
+    let page = 1, pages = 1;
+    do {
+      const res = await esiFetch(
+        `https://esi.evetech.net/latest/contracts/public/${regionId}/?datasource=tranquility&page=${page}`
+      );
+      if (!res.ok) break;
+      const data = await res.json();
+      if (!Array.isArray(data) || data.length === 0) break;
+      for (const c of data) {
+        if (c.type === 'item_exchange' && c.price > 0) contracts.push(c);
+      }
+      pages = parseInt(res.headers.get('x-pages') || '1', 10);
+      page++;
+      await new Promise(r => setTimeout(r, 60));
+    } while (page <= pages);
+
+    console.log(`⟳ Contract ingest ${regionId}: ${contracts.length} item_exchange sells across ${pages} pages`);
+
+    // 2. Fetch items per contract (bounded concurrency). Keep single-item, non-BPC,
+    //    no-swap sells; record unit price = contract price / quantity.
+    const samples = new Map(); // type_id → [unitPrice, …]
+    let processed = 0, singles = 0;
+    await mapLimit(contracts, 20, async (c) => {
+      processed++;
+      const res = await esiFetch(
+        `https://esi.evetech.net/latest/contracts/public/items/${c.contract_id}/?datasource=tranquility`
+      );
+      if (!res.ok) return; // 404 = contract expired between calls
+      const items = await res.json();
+      if (!Array.isArray(items) || items.length === 0) return;
+      if (items.some(it => !it.is_included)) return; // a swap (wants items back) — skip
+      const incl = items.filter(it => it.is_included);
+      if (incl.length !== 1) return;                 // bundle — skip in v1
+      const it = incl[0];
+      if (it.is_blueprint_copy) return;              // BPC value depends on runs/ME — skip
+      const qty = it.quantity > 0 ? it.quantity : 1;
+      const unit = c.price / qty;
+      if (!isFinite(unit) || unit <= 0) return;
+      if (!samples.has(it.type_id)) samples.set(it.type_id, []);
+      samples.get(it.type_id).push(unit);
+      singles++;
+    });
+
+    // 3. Aggregate (outlier-filtered) and upsert — clean slate for the region.
+    await dbRun('DELETE FROM contract_prices WHERE region_id = ?', [regionId]);
+    const now = new Date().toISOString();
+    let written = 0;
+    await dbRun('BEGIN TRANSACTION');
+    for (const [typeId, prices] of samples) {
+      const sorted = prices.slice().sort((a, b) => a - b);
+      const med0 = medianAsc(sorted);
+      // Drop obvious scams / mispriced bundles: keep within [0.3×, 4×] of the median.
+      const filtered = sorted.filter(p => p >= med0 * 0.3 && p <= med0 * 4);
+      if (filtered.length === 0) continue;
+      const low  = filtered[0];
+      const high = filtered[filtered.length - 1];
+      const med  = medianAsc(filtered);
+      const n    = filtered.length;
+      const spread = low > 0 ? (high - low) / low : 0;
+      // Wide + well-sampled → lean toward the 35th percentile (price to actually sell).
+      const suggested = (n >= 5 && spread > 1.0) ? percentileAsc(filtered, 0.35) : med;
+      await dbRun(
+        `INSERT OR REPLACE INTO contract_prices
+           (type_id, region_id, low, high, median, suggested, sample_count, source, computed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'single', ?)`,
+        [typeId, regionId, low, high, med, suggested, n, now]
+      );
+      written++;
+    }
+    await dbRun('COMMIT');
+
+    const secs = ((Date.now() - start) / 1000).toFixed(0);
+    console.log(`✓ Contract ingest ${regionId}: ${written} items priced from ${singles} single-item contracts (${processed} fetched) in ${secs}s`);
+    return { status: 'completed', region_id: regionId, items_priced: written, single_contracts: singles, contracts_fetched: processed };
+  } catch (err) {
+    console.error('Contract ingest error:', err.message);
+    return { status: 'error', error: err.message };
+  } finally {
+    contractIngestRunning = false;
+  }
+}
+
 async function runPreCompute() {
   if (preComputeRunning) {
     console.log('⚠ Pre-compute already running, skipping');
@@ -4691,6 +5144,18 @@ app.post('/api/admin/precompute', security.adminLimiter, async (req, res) => {
   }
 });
 
+// Admin: Manually trigger contract price ingest (v1.12.0). Runs in background.
+app.post('/api/admin/contract-ingest', security.adminLimiter, async (req, res) => {
+  const adminKey = process.env.FORGE_ADMIN_KEY;
+  if (!adminKey || req.headers['x-admin-key'] !== adminKey) {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+  const raw = parseInt(req.body?.regionId, 10);
+  const regionId = VALID_REGIONS.includes(raw) ? raw : CONTRACT_INGEST_REGION;
+  ingestRegionContracts(regionId).then(r => console.log('Contract ingest result:', r));
+  res.json({ status: 'started', region_id: regionId });
+});
+
 // Admin: View pre-compute run history
 app.get('/api/admin/precompute-status', security.adminLimiter, async (req, res) => {
   const adminKey = process.env.FORGE_ADMIN_KEY;
@@ -5012,9 +5477,12 @@ CRITICAL RULES — never contradict these:
   • The T1 BPC run is consumed on EVERY attempt, success or failure
   • Datacores are consumed on EVERY attempt, success or failure
 
-── Success Chance Formula ──
-Chance = Base × (1 + Science1 + Science2) / 30 + Encryption / 40) × (1 + Decryptor% / 100)
-where Science1/2 = required science skill levels; Encryption = racial encryption skill level
+── Success Chance Formula (canonical, wiki.eveuniversity.org/Invention) ──
+Chance = BaseChance × (1 + (Sci1 + Sci2)/30 + Encryption/40) × DecryptorModifier
+  • Sci1, Sci2  = the two required science skill levels (0–5 each)
+  • Encryption  = racial encryption methods skill level (0–5)
+  • DecryptorModifier = 1 + (decryptor Prob% / 100); = 1 when no decryptor
+The result is capped at 100%.
 
 Base rates by category:
   Modules / rigs / ammo / drones       34%
@@ -5023,8 +5491,11 @@ Base rates by category:
   Battleships                           22%
   Freighters                            18%
 
-At max skills (5/5/5) the skill multiplier is approx ×1.5 over base.
-Example: Caldari frigate, skills 4/4/4, no decryptor ≈ 30% × 1.28 ≈ 38%
+At max skills (5/5/5) the skill multiplier is exactly ×1.458 over base.
+Example: Caldari frigate, Sci 4/4, Encryption 4, no decryptor
+  = 30% × (1 + 8/30 + 4/40) = 30% × 1.367 ≈ 41%
+Failed jobs still consume the BPC run + datacores (+ decryptor if used) — factor this
+expected-cost-per-success into ROI: cost ÷ success% = true cost per T2 BPC.
 
 ── Datacores (Ships) ──
 ALL racial ships use exactly these two datacore types:
@@ -5206,6 +5677,15 @@ Example — Sotiyo, ME10 blueprint, 3× Capital Ship Mfg Efficiency II rigs:
 Key point: EIV uses CCP's "adjusted prices" (smoothed ESI values), NOT live market prices.
 The SCI multiplier makes EIV the critical number for comparing job costs across systems.
 
+Job cost components (all multiply EIV):
+  • System Cost Index (SCI) — per-system, per-activity; reflects local job congestion
+  • SCC Surcharge — flat CONCORD tax. Currently 2% (temporarily halved from 4% on
+    18 Jul 2025 pending CCP's industry rework; assume it may revert to 4% — flag this
+    when giving long-horizon ROI advice).
+  • Facility Tax — set by structure owner (NPC stations fixed 0.25%; player structures 0–10%)
+  • Alpha clone tax — extra 0.25% for Alpha accounts (Omega = 0%)
+Structure role bonuses (Engineering Complex) reduce the SCI portion of the cost.
+
 ── System Cost Index (SCI) Quick Reference ──
 SCI is the system-specific multiplier for manufacturing job cost.
   < 1%   Excellent (rare, low-activity null systems)
@@ -5239,12 +5719,32 @@ Racial variants use their isotope: Hydrogen (Minmatar), Oxygen (Gallente), Heliu
 Fuel blocks are profitable when: isotope cost + PI cost < market price of blocks.
 Alliance/corp manufacturing POCOs + local PI = significant cost advantage.
 
-── Reaction Manufacturing (activity_id = 9) ──
-Reactions convert moon goo or gas into T2 component materials. No ME bonus applies.
-Simple reaction: raw moon material → basic product (1 input, 1 output)
-Complex reaction: 2+ inputs → advanced component (Nanotransistors, Sylramic Fibers, etc.)
-Required for: all T2 ships, modules, structures. Very high volume in alliance manufacturing.
-Profitable when moon rental + fuel cost < product market price.
+── Reaction Manufacturing (activity_id = 9) — verified wiki.eveuniversity.org/Reactions ──
+Reactions convert moon ore / gas into intermediate and composite materials feeding T2/T3.
+KEY: reactions IGNORE ME entirely (no ME research, no structure/rig ME bonus on inputs).
+Reaction Formulae cannot be researched, copied, or invented — inputs are fixed.
+
+Where: Refinery structures only — Athanor (medium) or Tatara (large) — in systems with
+security ≤ 0.4 (lowsec, null, WH). Cannot run reactions in hisec. Reactor service module
++ 5 fuel blocks per cycle. Tatara gives a time/material rig advantage over Athanor.
+
+Reactor types (each handles one category):
+  • Composite Reactor   — moon materials → T2 production materials (the big one for T2 mfg)
+  • Biochemical Reactor — k-space gas → booster/drug components
+  • Hybrid Reactor      — w-space Fullerite gas → T3 (strategic cruiser / subsystem) inputs
+
+The composite T2 chain (most relevant to alliance manufacturing):
+  1. Mine moon ore → reprocess into raw moon materials (e.g. Hydrocarbons, Silicates)
+  2. Simple reaction: 2 raw moon materials (+ fuel) → Intermediate (e.g. Crystallite Alloy)
+  3. Composite reaction: 2 intermediates (+ fuel) → Composite (e.g. Sylramic Fibers,
+     Nanotransistors, Fernite Carbide) — these are the "advanced components" T2 BPs consume
+  4. T2 manufacturing consumes composites + a T2 BPC + minerals
+Typical moon/composite reactions: 100 + 100 units in → 200 units out, ~1 hr cycle, 5 fuel.
+
+Profitable when: moon ore value (or rental) + fuel < composite market price. Vertical
+integration (own the moon → reaction → T2 build) captures margin at every step. Use FORGE's
+chain drill-down (⛓ badge on a material row) to see where in a T2 build the cost concentrates
+and whether each leg is cheaper to react/build yourself vs buy off market.
 
 ── Production Optimisation ──
 ISK/hour = profit_per_run × runs_per_hour = profit / (build_time_hours × slots_used)
@@ -5255,6 +5755,25 @@ ISK/hour = profit_per_run × runs_per_hour = profit / (build_time_hours × slots
   • Blueprint ME research: diminishing returns above ME8 for cheap materials;
     for capitals/structures with billion-ISK material costs, ME10 is always worth it.
   • TE research matters mainly for time-constrained builders (slot-limited).
+
+── Research & Copying (BPO lifecycle) ──
+Four research/support activities run on BLUEPRINT ORIGINALS (BPOs), each on its own slot type:
+  • Material Efficiency research (activity 4): ME 0→10, each level −1% material. 10 levels max.
+  • Time Efficiency research (activity 3): TE 0→20%, each level −2% build time (10 levels, 2% each).
+  • Copying (activity 5): produce BPCs from a BPO (copies have the BPO's current ME/TE).
+  • Invention (activity 8): consume a T1 BPC → T2/T3 BPC (see INVENTION MECHANICS).
+Key facts:
+  • Only BPOs can be researched/copied. BPCs are fixed at creation — cannot be re-researched.
+  • Research time rises steeply per level (ME9→10 and TE9→10 are the longest single steps).
+  • Research has an install cost = EIV × SCI-for-that-activity × multipliers (cheaper in low-SCI
+    systems, same as manufacturing). Engineering Complex + research rigs cut research TIME
+    (Raitaru/Azbel/Sotiyo give research time bonuses; specific research rigs add more).
+  • Skills: Science (research speed), Metallurgy (ME research speed), Research (TE speed),
+    Advanced Industry (all job speed), Laboratory Operation/Adv. Lab Op (concurrent science slots).
+  • ME Research ROI rule of thumb: payback = (material saving per build × builds you'll run)
+    vs (research time opportunity cost + install fee). For high-material-cost items
+    (capitals, structures, ships) ME10 pays back almost immediately; for cheap high-volume
+    T1 ammo it may never matter. Always research the BPO before mass production.
 
 ── UKC / Goonswarm Nullsec Context ──
   Build location: Goonswarm sovereignty space (C-J6MT area / 4DS system)
@@ -5293,6 +5812,18 @@ TIERS:
   P4 — Advanced Commodities (multiple P3 inputs; require multiple planet types):
        Broadcast Node, Integrity Response Drones, Nano-Factory, Organic Mortar Applicators,
        Recursive Computing Module, Self-Harmonizing Power Core, Wetware Mainframe
+
+COLONY & EXTRACTION MECHANICS (operational basics):
+  • Command Center (one per planet) sets the colony's power/CPU budget; upgrade via
+    Command Center Upgrades skill (CCU1–5). Higher CCU = more pins (structures) per planet.
+  • Extractor Control Unit (ECU) spawns up to 10 extractor heads; heads mine P0 over a
+    program cycle you set (hours→days). Output is front-loaded: short cycles = higher peak
+    rate but more micromanagement; long cycles = lower steady rate, less babysitting.
+  • Basic/Advanced/High-Tech Industry Facilities run schematics: P0→P1 (basic),
+    P1+P1→P2 (advanced), → P3/P4 (high-tech). Each schematic has a fixed cycle time/throughput.
+  • Routing links carry materials between pins and consume CPU/power — colony layout matters.
+  • Self-sufficiency tiers: 1 planet ≈ P1 (or P2 with imports); P3/P4 need multiple planets
+    or buying lower tiers off market. P4 realistically needs corp-level coordination.
 
 PLANET TYPES AND PRIMARY P1 OUTPUTS:
   Barren    → Reactive Metals, Chiral Structures
@@ -6777,6 +7308,30 @@ initDatabase().then(async () => {
         console.error('⚠ Scheduled pre-compute failed:', err.message);
       });
     }, SIX_HOURS);
+
+    // ── Contract price ingest — weekly (contract-only stock is slow-moving) ──
+    const ONE_WEEK = 7 * 24 * 60 * 60 * 1000;
+    // Initial run 30s after start, only if the cache is empty or older than a week.
+    setTimeout(async () => {
+      try {
+        const row  = await dbGet('SELECT MAX(computed_at) AS last FROM contract_prices WHERE region_id = ?', [CONTRACT_INGEST_REGION]);
+        const last = row?.last ? Date.parse(row.last) : 0;
+        if (!last || (Date.now() - last) > ONE_WEEK) {
+          console.log('⟳ Running initial contract ingest...');
+          ingestRegionContracts().then(r => console.log('✓ Initial contract ingest:', r.status));
+        } else {
+          console.log(`✓ Contract prices fresh (computed ${row.last}) — skipping initial ingest`);
+        }
+      } catch (err) {
+        console.error('⚠ Contract ingest startup check failed:', err.message);
+      }
+    }, 30000);
+    setInterval(() => {
+      console.log('⟳ Scheduled weekly contract ingest...');
+      ingestRegionContracts()
+        .then(r => console.log('✓ Weekly contract ingest:', r.status))
+        .catch(err => console.error('⚠ Weekly contract ingest failed:', err.message));
+    }, ONE_WEEK).unref();
   });
 
   // Error handler must be after all routes

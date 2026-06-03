@@ -11,8 +11,9 @@ import type {
   CorpStatus,
   CorpAccessStatus,
 } from '../types';
-import ItemTable from './ItemTable';
-import CorpTab   from './CorpTab';
+import ItemTable    from './ItemTable';
+import CorpTab      from './CorpTab';
+import ResearchTab  from './ResearchTab';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -46,6 +47,9 @@ interface MainContentProps {
   /** Called when any item is selected (typeId + name) — opens RightSidebar */
   onSelectItem: (typeId: number, name: string) => void;
 
+  /** v1.11 — selected market hub region id (drives Research ROI material prices) */
+  regionId: number;
+
   // v1.4.0 — Corp tab props
   token:            string | null;
   corpStatus:       CorpStatus | null;
@@ -65,6 +69,7 @@ const EMPTY_BP_OWNER_MAP = new Map<number, string>();
 const TABS = [
   { key: 'market',     label: '◈ Market Opportunities' },
   { key: 'blueprints', label: '◈ Your blueprints' },
+  { key: 'research',   label: '🔬 Research ROI' },   // v1.11.0
   { key: 'assets',     label: '◉ Assets' },
   { key: 'jobs',       label: '⚙ Jobs' },
   { key: 'corp',       label: '🏭 Corp' },      // v1.4.0
@@ -89,6 +94,7 @@ const MainContent: FC<MainContentProps> = ({
   activeJobs,
   itemNames,
   onSelectItem,
+  regionId,
   marketSearchQuery,
   marketSearching,
   onMarketSearch,
@@ -665,6 +671,15 @@ const MainContent: FC<MainContentProps> = ({
             </div>
           )}
         </div>
+      )}
+
+      {/* v1.11.0 — ME Research ROI tab */}
+      {activeTab === 'research' && (
+        <ResearchTab
+          blueprints={blueprints}
+          regionId={regionId}
+          onSelectItem={onSelectItem}
+        />
       )}
 
       {/* v1.4.0 — Corp tab */}

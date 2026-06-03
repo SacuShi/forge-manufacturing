@@ -21,8 +21,9 @@
  *   - No dangerouslySetInnerHTML.
  */
 
-import { useMemo, useState, useCallback, useRef, type FC } from 'react';
-import type { ItemDetail, ItemDetailApiResponse, EsiBlueprint, Market, TrueCostResponse, AltCharacter } from '../types';
+import { useMemo, useState, useCallback, useRef, useEffect, Fragment, type FC } from 'react';
+import type { ItemDetail, ItemDetailApiResponse, EsiBlueprint, Market, TrueCostResponse, AltCharacter, MaterialBreakdownResponse, BreakdownMaterial } from '../types';
+import { apiPost } from '../api/client';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -85,6 +86,184 @@ function formatISK(n: number | null | undefined): string {
 function fmtN(n: number): string {
   return n.toLocaleString();
 }
+
+// ── Chain drill-down (inline reaction / manufacturing tree) ───────────────────
+// Module-level cache keyed by `${typeId}:${regionId}` so re-opening a node (or
+// re-expanding after collapse) never refetches. Cleared on full page reload.
+const breakdownCache = new Map<string, MaterialBreakdownResponse>();
+
+interface ChainTreeProps {
+  /** The product whose blueprint materials we expand (one level). */
+  parentTypeId:    number;
+  regionId:        number;
+  ownedBlueprints: EsiBlueprint[];
+  /** Nesting depth — drives indentation (1 = first sub-level). */
+  depth:           number;
+  onSelectItem:    (typeId: number, name: string) => void;
+}
+
+/** Lazily fetches + renders one level of sub-materials beneath a chain node. */
+const ChainTree: FC<ChainTreeProps> = ({ parentTypeId, regionId, ownedBlueprints, depth, onSelectItem }) => {
+  const cacheKey = `${parentTypeId}:${regionId}`;
+  const [data, setData]       = useState<MaterialBreakdownResponse | null>(breakdownCache.get(cacheKey) ?? null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState(false);
+
+  useEffect(() => {
+    const cached = breakdownCache.get(cacheKey);
+    if (cached) { setData(cached); return; }
+    let cancelled = false;
+    setLoading(true);
+    setError(false);
+    apiPost<MaterialBreakdownResponse>('/api/material-breakdown', {
+      typeId: parentTypeId, regionId, ownedBlueprints,
+    })
+      .then(res => { if (!cancelled) { breakdownCache.set(cacheKey, res); setData(res); } })
+      .catch(() => { if (!cancelled) setError(true); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+    // ownedBlueprints reference is stable per render of RightSidebar; key on the IDs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [parentTypeId, regionId]);
+
+  const indent = 8 + depth * 12;
+
+  if (loading) {
+    return <div className="chain-sub-note" style={{ paddingLeft: indent }}>· loading chain…</div>;
+  }
+  if (error) {
+    return <div className="chain-sub-note" style={{ paddingLeft: indent, color: 'var(--color-danger)' }}>· chain unavailable</div>;
+  }
+  if (!data || !data.materials.length) {
+    return <div className="chain-sub-note" style={{ paddingLeft: indent }}>· no further breakdown</div>;
+  }
+
+  return (
+    <>
+      {data.materials.map(m => (
+        <ChainRow
+          key={m.materialId}
+          mat={m}
+          regionId={regionId}
+          ownedBlueprints={ownedBlueprints}
+          depth={depth}
+          onSelectItem={onSelectItem}
+        />
+      ))}
+    </>
+  );
+};
+
+interface ChainRowProps {
+  mat:             BreakdownMaterial;
+  regionId:        number;
+  ownedBlueprints: EsiBlueprint[];
+  depth:           number;
+  onSelectItem:    (typeId: number, name: string) => void;
+}
+
+/** One sub-material row inside the chain tree; expandable if it is itself producible. */
+const ChainRow: FC<ChainRowProps> = ({ mat, regionId, ownedBlueprints, depth, onSelectItem }) => {
+  const [open, setOpen] = useState(false);
+  const isReaction = mat.activityId === 9;
+  const indent     = 8 + depth * 12;
+
+  const buyTotal   = mat.buyPricePerUnit * mat.quantity;
+  const buildTotal = mat.mfgCostPerUnit != null ? mat.mfgCostPerUnit * mat.quantity : null;
+
+  return (
+    <>
+      <div
+        className="chain-row"
+        style={{ paddingLeft: indent }}
+        role="button"
+        tabIndex={0}
+        title={`Open ${mat.name} in market view`}
+        onClick={() => onSelectItem(mat.materialId, mat.name)}
+        onKeyDown={(e) => e.key === 'Enter' && onSelectItem(mat.materialId, mat.name)}
+      >
+        {/* Expand toggle (only when producible) */}
+        {mat.canManufacture ? (
+          <span
+            className="chain-toggle"
+            role="button"
+            tabIndex={0}
+            title={open ? 'Collapse' : `Expand ${isReaction ? 'reaction' : 'build'} chain`}
+            onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); setOpen(o => !o); } }}
+            style={{
+              color: isReaction ? '#fbbf24' : 'var(--color-accent-primary)',
+              cursor: 'pointer', width: 12, flexShrink: 0, fontSize: 10,
+            }}
+          >
+            {open ? '▾' : '▸'}
+          </span>
+        ) : (
+          <span style={{ width: 12, flexShrink: 0 }} />
+        )}
+
+        <img
+          src={`${ICON_BASE}/${mat.materialId}/icon?size=32`}
+          alt="" width={14} height={14} crossOrigin="anonymous"
+          onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = 'hidden'; }}
+          style={{ flexShrink: 0, opacity: 0.85 }}
+        />
+
+        <span className="chain-name" style={{ flex: 1 }}>
+          {mat.name}
+          {mat.canManufacture && (
+            <span style={{
+              marginLeft: 4, fontSize: 8,
+              color: isReaction ? '#fbbf24' : (mat.blueprintOwned ? '#c084fc' : 'var(--color-accent-primary)'),
+            }}>
+              {isReaction ? '⚗ react' : (mat.blueprintOwned ? '⛓ owned' : '⛓ build')}
+            </span>
+          )}
+          {mat.piTier && (
+            <span style={{ marginLeft: 4, fontSize: 8, color: '#fbbf24' }}>PI·P{mat.piTier}</span>
+          )}
+        </span>
+
+        <span className="chain-qty" style={{ fontSize: 9, color: 'var(--color-text-tertiary)', flexShrink: 0 }}>
+          ×{fmtN(mat.quantity)}
+        </span>
+
+        {/* Build-vs-buy verdict — the core chain insight */}
+        <span style={{ fontSize: 9, flexShrink: 0, marginLeft: 4, textAlign: 'right' }}>
+          {buildTotal != null ? (
+            <>
+              <span style={{
+                color: mat.recommendation === 'buy' ? 'var(--color-success)' : 'var(--color-text-tertiary)',
+                fontWeight: mat.recommendation === 'buy' ? 700 : 400,
+              }}>
+                {formatISK(buyTotal)}
+              </span>
+              <span style={{ color: 'var(--color-text-tertiary)', opacity: 0.5 }}> / </span>
+              <span style={{
+                color: mat.recommendation === 'build' ? 'var(--color-success)' : 'var(--color-text-tertiary)',
+                fontWeight: mat.recommendation === 'build' ? 700 : 400,
+              }}>
+                {formatISK(buildTotal)}
+              </span>
+            </>
+          ) : (
+            <span style={{ color: 'var(--color-text-tertiary)' }}>{formatISK(buyTotal)}</span>
+          )}
+        </span>
+      </div>
+
+      {open && mat.canManufacture && (
+        <ChainTree
+          parentTypeId={mat.materialId}
+          regionId={regionId}
+          ownedBlueprints={ownedBlueprints}
+          depth={depth + 1}
+          onSelectItem={onSelectItem}
+        />
+      )}
+    </>
+  );
+};
 
 // ── Component ────────────────────────────────────────────────────────────────
 
@@ -203,6 +382,18 @@ const RightSidebar: FC<RightSidebarProps> = ({
     setRunsInputVal(String(n));
     onBuildRunsChange(n);
   }, [runsInputVal, onBuildRunsChange]);
+
+  // ── Chain drill-down: which top-level material rows are expanded ──────────
+  const [expandedChains, setExpandedChains] = useState<Set<number>>(new Set());
+  const toggleChain = useCallback((materialId: number) => {
+    setExpandedChains(prev => {
+      const next = new Set(prev);
+      if (next.has(materialId)) next.delete(materialId); else next.add(materialId);
+      return next;
+    });
+  }, []);
+  // Collapse all when the selected item changes (new build = fresh tree)
+  useEffect(() => { setExpandedChains(new Set()); }, [selectedTypeId]);
 
   // ── Multibuy copy ────────────────────────────────────────────────────────
   const [copiedShortfall, setCopiedShortfall] = useState(false);
@@ -501,6 +692,41 @@ const RightSidebar: FC<RightSidebarProps> = ({
               </div>
             )}
 
+            {/* ── Contract pricing (v1.12.0) — distinct amber callout ────────── */}
+            {apiDetail.contractPricing && (
+              <div className="detail-section contract-pricing">
+                <div className="contract-pricing-heading">
+                  ◆ CONTRACT PRICING — {apiDetail.contractPricing.regionName}
+                </div>
+                <div className="contract-pricing-sub">live single-item contracts</div>
+
+                <div className="price-grid" style={{ marginTop: 6 }}>
+                  <div>
+                    <div className="price-cell-label">LOWEST LISTED</div>
+                    <div className="price-cell-value contract-price">
+                      {formatISK(apiDetail.contractPricing.low)}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="price-cell-label">SUGGESTED SELL</div>
+                    <div className="price-cell-value contract-price-suggested">
+                      {formatISK(apiDetail.contractPricing.suggested)}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="price-cell-label">HIGHEST LISTED</div>
+                    <div className="price-cell-value contract-price">
+                      {formatISK(apiDetail.contractPricing.high)}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="contract-rationale">
+                  “{apiDetail.contractPricing.rationale}”
+                </div>
+              </div>
+            )}
+
             {/* ── Build requirements + materials ───────────────────────────── */}
             {apiDetail.buildInfo && (
               <div className="detail-section">
@@ -550,17 +776,16 @@ const RightSidebar: FC<RightSidebarProps> = ({
                     const ok           = shortForRuns <= 0;
                     // canManufacture: set by server from blueprints DB (any game blueprint exists)
                     // isOwned: user personally owns a blueprint for this material
-                    const isChain = mat.canManufacture ?? ownedProductTypeIds.has(mat.materialId);
-                    const isOwned = ownedProductTypeIds.has(mat.materialId);
+                    const isChain     = mat.canManufacture ?? ownedProductTypeIds.has(mat.materialId);
+                    const isOwned     = ownedProductTypeIds.has(mat.materialId);
+                    const isExpanded  = expandedChains.has(mat.materialId);
                     return (
+                      <Fragment key={mat.materialId}>
                       <div
-                        key={mat.materialId}
                         className={`mat-row mat-row-clickable${ok ? ' mat-ok' : ' mat-bad'}`}
                         role="button"
                         tabIndex={0}
-                        title={isChain
-                          ? `Click to view production chain for ${mat.name}${isOwned ? ' (you own this blueprint)' : ''}`
-                          : `Click to view market data for ${mat.name}`}
+                        title={`Click to view market data for ${mat.name}`}
                         onClick={() => onSelectItem(mat.materialId, mat.name)}
                         onKeyDown={(e) => e.key === 'Enter' && onSelectItem(mat.materialId, mat.name)}
                       >
@@ -593,22 +818,28 @@ const RightSidebar: FC<RightSidebarProps> = ({
                         <span className="mat-name" style={{ flex: 1 }}>
                           {mat.name}
                           {isChain && (
-                            <span style={{
-                              marginLeft: 5,
-                              fontSize: 9,
-                              background: isOwned
-                                ? 'rgba(192, 132, 252, 0.2)'
-                                : 'rgba(79, 195, 247, 0.12)',
-                              color: isOwned ? '#c084fc' : 'var(--color-accent-primary)',
-                              border: `0.5px solid ${isOwned
-                                ? 'rgba(192, 132, 252, 0.35)'
-                                : 'rgba(79, 195, 247, 0.3)'}`,
-                              borderRadius: 2,
-                              padding: '1px 4px',
-                              verticalAlign: 'middle',
-                              cursor: 'pointer',
-                            }}>
-                              ⛓ {isOwned ? 'owned' : 'chain'}
+                            <span
+                              role="button"
+                              tabIndex={0}
+                              title={isExpanded ? 'Collapse production chain' : 'Expand production chain'}
+                              onClick={(e) => { e.stopPropagation(); toggleChain(mat.materialId); }}
+                              onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); toggleChain(mat.materialId); } }}
+                              style={{
+                                marginLeft: 5,
+                                fontSize: 9,
+                                background: isOwned
+                                  ? 'rgba(192, 132, 252, 0.2)'
+                                  : 'rgba(79, 195, 247, 0.12)',
+                                color: isOwned ? '#c084fc' : 'var(--color-accent-primary)',
+                                border: `0.5px solid ${isOwned
+                                  ? 'rgba(192, 132, 252, 0.35)'
+                                  : 'rgba(79, 195, 247, 0.3)'}`,
+                                borderRadius: 2,
+                                padding: '1px 4px',
+                                verticalAlign: 'middle',
+                                cursor: 'pointer',
+                              }}>
+                              {isExpanded ? '▾' : '▸'} ⛓ {isOwned ? 'owned' : 'chain'}
                             </span>
                           )}
                           {mat.piTier && (
@@ -650,6 +881,18 @@ const RightSidebar: FC<RightSidebarProps> = ({
                           opacity: 0.6,
                         }}>▶</span>
                       </div>
+
+                      {/* Inline production-chain tree (lazy-loaded on badge click) */}
+                      {isChain && isExpanded && (
+                        <ChainTree
+                          parentTypeId={mat.materialId}
+                          regionId={selectedMarket.id}
+                          ownedBlueprints={blueprints}
+                          depth={1}
+                          onSelectItem={onSelectItem}
+                        />
+                      )}
+                      </Fragment>
                     );
                   })}
                 </div>

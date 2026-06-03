@@ -872,6 +872,7 @@ const App: FC = () => {
           itemNames={itemNames}
           selectedTypeId={selectedTypeId}
           onSelectItem={handleSelectItem}
+          regionId={selectedMarket.id}
           onMarketSelect={handleItemSelect}
           onLoadMoreMarket={handleLoadMoreMarket}
           marketLoadingMore={marketLoadingMore}

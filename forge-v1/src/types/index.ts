@@ -266,6 +266,94 @@ export interface ItemDetailApiResponse {
     /** 'live' | 'history_30d' | 'no_data' — indicates whether sell price came from live orders or historical average */
     sellPriceSource?: string;
   };
+  /** v1.12.0 — pricing derived from public single-item exchange contracts in-region. */
+  contractPricing?: ContractPricing;
+}
+
+/** Contract-derived price range for an item (POST /api/item-details, v1.12.0). */
+export interface ContractPricing {
+  regionId:    number;
+  regionName:  string;
+  /** Lowest qualifying single-item contract unit price. */
+  low:         number;
+  /** Highest. */
+  high:        number;
+  median:      number;
+  /** Suggested sell price (median, nudged toward low end on wide spreads). */
+  suggested:   number;
+  /** Number of qualifying contracts behind these figures. */
+  sampleCount: number;
+  /** 'single' (v1) — single-item contracts. */
+  source:      string;
+  /** ISO timestamp of the ingest that produced this. */
+  computedAt:  string;
+  /** Human, data-derived explanation of the suggested price. */
+  rationale:   string;
+}
+
+/** One sub-material in a chain breakdown (POST /api/material-breakdown). */
+export interface BreakdownMaterial {
+  materialId: number;
+  name: string;
+  /** Raw quantity per blueprint run (ME 0 — sub-levels are not ME-reduced in v1). */
+  quantity: number;
+  /** Buy-from-market unit price (sell-sourced, matching True Profit). */
+  unitCost: number;
+  buyPricePerUnit: number;
+  /** Cheapest per-unit build cost (recursive). Null when not producible. */
+  mfgCostPerUnit: number | null;
+  /** True if a blueprint/reaction produces this sub-material (further expandable). */
+  canManufacture: boolean;
+  /** Activity of the sub-material's own blueprint: 1=manufacturing, 9=reaction. Null if not producible. */
+  activityId: number | null;
+  /** True if the user personally owns a blueprint for this sub-material. */
+  blueprintOwned: boolean;
+  /** PI tier 1–4, or null. */
+  piTier: number | null;
+  /** Cheaper sourcing for this node given current prices. */
+  recommendation: 'build' | 'buy';
+}
+
+/** Full response from POST /api/material-breakdown (one chain level). */
+export interface MaterialBreakdownResponse {
+  typeId: number;
+  manufacturable: boolean;
+  /** Activity of the blueprint producing this node: 1=manufacturing, 9=reaction. */
+  activityId?: number;
+  productQuantity?: number;
+  buildTime?: number;
+  materials: BreakdownMaterial[];
+}
+
+/** One ranked blueprint in the ME Research ROI table (POST /api/me-research-roi). */
+export interface ResearchRoiItem {
+  blueprintTypeId: number;
+  productId:       number;
+  productName:     string;
+  /** Current researched ME of the owned BPO. */
+  currentME:       number;
+  /** Target ME used for the saving calc (default 10). */
+  targetME:        number;
+  /** Material cost for one run at current ME (sell-sourced). */
+  matCostNow:      number;
+  /** Material cost for one run at target ME. */
+  matCostTarget:   number;
+  /** ISK saved per run by researching current → target ME. */
+  savingPerRun:    number;
+  /** Saving as a % of current material cost. */
+  pctSaving:       number;
+  productQuantity: number;
+  /** Estimated seconds to research current → target ME. Null until SDE research_time imported. */
+  researchTimeSec: number | null;
+}
+
+/** Full response from POST /api/me-research-roi. */
+export interface ResearchRoiResponse {
+  items: ResearchRoiItem[];
+  /** True when at least one blueprint had research_time (SDE imported). */
+  research_time_available: boolean;
+  target_me?: number;
+  region_id?: number;
 }
 
 // ══════════════════════════════════════════════════════════════════════════

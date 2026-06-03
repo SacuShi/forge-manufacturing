@@ -503,6 +503,37 @@ async function tagPiTiers(typesData) {
   console.log('  ✓ PI tagging complete');
 }
 
+// ── Step 7b: Populate ME research time (v1.11.0) ──────────────────────────────
+// Manufacturing blueprint rows are pre-seeded; here we UPDATE research_time from
+// the SDE research_material activity. Powers the ME Research ROI ranker.
+
+async function importResearchTimes(bpData) {
+  console.log('\n═══ Step 7b: ME research times ═══');
+
+  try {
+    await dbRun('ALTER TABLE blueprints ADD COLUMN research_time INTEGER DEFAULT NULL');
+    console.log('  ✓ research_time column added to blueprints');
+  } catch (e) {
+    if (e.message.includes('duplicate') || e.message.includes('already exists')) {
+      console.log('  ✓ research_time column already exists');
+    } else throw e;
+  }
+
+  let updated = 0;
+  await dbRun('BEGIN TRANSACTION');
+  for (const [bpId, bp] of Object.entries(bpData)) {
+    const t = bp.activities?.research_material?.time;
+    if (!t) continue;
+    const result = await dbRun(
+      'UPDATE blueprints SET research_time = ? WHERE blueprint_id = ?',
+      [t, parseInt(bpId)]
+    );
+    if (result.changes > 0) updated++;
+  }
+  await dbRun('COMMIT');
+  console.log(`  ✓ research_time set on ${updated} blueprints`);
+}
+
 // ── Step 8: Verify ────────────────────────────────────────────────────────────
 
 async function verify() {
@@ -529,6 +560,7 @@ async function verify() {
 
   const totalItems = await dbGet('SELECT COUNT(*) as c FROM items');
   const piTagged   = await dbGet(`SELECT COUNT(*) as c FROM items WHERE pi_tier IS NOT NULL`);
+  const rtCount    = await dbGet(`SELECT COUNT(*) as c FROM blueprints WHERE research_time IS NOT NULL`);
 
   console.log(`  total items in DB:              ${totalItems.c}`);
   console.log(`  items with meta_level=1 (T2):  ${t2.c}`);
@@ -536,6 +568,7 @@ async function verify() {
   console.log(`  blueprint_skills rows:          ${sk.c}`);
   console.log(`  blueprints — manufacturing:     ${mfgCount.c}`);
   console.log(`  blueprints — reactions:         ${rxCount.c}`);
+  console.log(`  blueprints with research_time:  ${rtCount.c}`);
   console.log(`  blueprints without a name:      ${unnamed.c}${unnamed.c > 0 ? ' ⚠' : ' ✓'}`);
   if (sample?.names) console.log(`  Sample reaction products: ${sample.names}`);
   else console.log('  ⚠ No reaction products found — check blueprints.json reaction data');
@@ -584,6 +617,7 @@ async function main() {
     await ensureAllBlueprintItems(typesData);
     await importAllTypes(typesData);
     await tagPiTiers(typesData);
+    await importResearchTimes(bpData);
     await verify();
 
     console.log('\n✅ Done. Next steps:');
