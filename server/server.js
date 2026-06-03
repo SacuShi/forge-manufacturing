@@ -772,20 +772,54 @@ const DIRECTOR_CACHE_TTL_SHORT   = 60 * 1000;      // fallback/error: 1 min (re-
  * Resolve whether a character is a Director or CEO in the configured corp.
  *
  * Check order (first success wins):
- *   1. GET /corporations/{corp_id}/roles/ with user token
- *        scope: esi-corporations.read_corporation_membership.v1 (in default SCOPES)
- *        Returns all members if the caller is a Director, or just the caller's own
- *        entry otherwise — either way we find our characterId and inspect its roles.
- *        This is the most reliable path; does NOT depend on the legacy per-character
- *        scope that caused the original Director access failures.
- *   2. GET /characters/{id}/roles/ with user token  (fallback for old sessions)
- *        scope: esi-characters.read_corporation_roles.v1
+ *   1. GET /characters/{id}/roles/ with user token  ← PRIMARY (fixed v1.13.1)
+ *        scope: esi-characters.read_corporation_roles.v1 (granted at login).
+ *        Returns THIS character's own roles directly — no pagination, no need to
+ *        already hold a privileged role. This is the authoritative, reliable check.
+ *   2. GET /corporations/{corp_id}/roles/ with user token  (fallback, PAGINATED)
+ *        scope: esi-corporations.read_corporation_membership.v1.
+ *        Only reachable by privileged members; the corp-wide list is paged, so we
+ *        walk every page looking for the caller's Director role.
  *   3. Public GET /corporations/{corp_id}/ ceo_id check — no scope needed.
  *   4. Setup director_char_id match — last resort when all ESI calls fail.
+ *
+ * BUGFIX (v1.13.1): the old code used #2 as PRIMARY and only fell back to #1 on a
+ * 403. For large corps that endpoint returns 200 but paginates, so a Director not
+ * on page 1 was silently "not found" → denied, and the reliable per-character
+ * fallback never ran. Reordering #1 to primary resolves the Director-access failure.
  *
  * Cache note: null corpId means the character-info call failed; we skip the
  * cached value in that case and re-check on the next request.
  */
+// Fallback role check: scan the PAGINATED corp-wide roles list for the caller's
+// Director role. Used only when the per-character roles endpoint is unavailable.
+// Returns true/false when the list is readable, or null when it can't be read
+// (missing scope / not a privileged member / ESI error) so the caller can fall
+// back further (setup-director match).
+async function corpRolesListHasDirector(corpId, characterId, headers) {
+  try {
+    let page = 1, pages = 1, readable = false;
+    do {
+      const res = await esiFetch(
+        `https://esi.evetech.net/latest/corporations/${corpId}/roles/?datasource=tranquility&page=${page}`,
+        { headers }
+      );
+      if (!res.ok) return readable ? false : null; // first-page failure = unreadable
+      readable = true;
+      const list = await res.json();
+      if (Array.isArray(list)) {
+        const mine = list.find(e => e.character_id === characterId);
+        if (mine?.roles?.includes('Director')) return true;
+      }
+      pages = parseInt(res.headers.get('x-pages') || '1', 10);
+      page++;
+    } while (page <= pages);
+    return false;
+  } catch (_) {
+    return null;
+  }
+}
+
 async function checkIsDirector(characterId, bearerToken, configCorpId, directorCharId) {
   const cacheKey = `director:${characterId}`;
   const cached   = getCached(cacheKey);
@@ -801,16 +835,16 @@ async function checkIsDirector(characterId, bearerToken, configCorpId, directorC
   let cacheTtl   = DIRECTOR_CACHE_TTL_MS;
 
   try {
-    // Fetch character info, corp roles list, and public corp info all in parallel.
-    const [charRes, corpRolesRes, corpPublicRes] = await Promise.all([
+    // Fetch in parallel: character info (corp id), the character's OWN roles
+    // (authoritative + pagination-free), and public corp info (CEO check).
+    const [charRes, charRolesRes, corpPublicRes] = await Promise.all([
       esiFetch(
         `https://esi.evetech.net/latest/characters/${characterId}/?datasource=tranquility`,
         { headers }
       ),
-      // PRIMARY role check — esi-corporations.read_corporation_membership.v1
-      // Works for Directors (sees all) and non-Directors (sees own entry only).
+      // PRIMARY — esi-characters.read_corporation_roles.v1 (granted at login).
       esiFetch(
-        `https://esi.evetech.net/latest/corporations/${configCorpId}/roles/?datasource=tranquility`,
+        `https://esi.evetech.net/latest/characters/${characterId}/roles/?datasource=tranquility`,
         { headers }
       ),
       // CEO check — public endpoint, no auth needed
@@ -829,24 +863,19 @@ async function checkIsDirector(characterId, bearerToken, configCorpId, directorC
     if (charCorpId !== null && charCorpId !== configCorpId) {
       isDirector = false;
     } else {
-      // ── Primary: corp-level roles list ────────────────────────────────────
-      if (corpRolesRes.ok) {
-        const list = await corpRolesRes.json();
-        const mine = Array.isArray(list) ? list.find(e => e.character_id === characterId) : null;
-        if (mine?.roles?.includes('Director')) isDirector = true;
-      } else if (corpRolesRes.status === 403 || corpRolesRes.status === 401) {
-        // Scope not present or token issue — try character-level endpoint (fallback)
-        const charRolesRes = await esiFetch(
-          `https://esi.evetech.net/latest/characters/${characterId}/roles/?datasource=tranquility`,
-          { headers }
-        );
-        if (charRolesRes.ok) {
-          const data = await charRolesRes.json();
-          isDirector = Array.isArray(data.roles) && data.roles.includes('Director');
-        } else if (charRolesRes.status === 403) {
-          // Neither scope available — allow only the setup director; re-check sooner
+      // ── Primary: the character's own roles (direct, no pagination) ────────
+      if (charRolesRes.ok) {
+        const data = await charRolesRes.json();
+        if (Array.isArray(data.roles) && data.roles.includes('Director')) isDirector = true;
+      } else if (charRolesRes.status === 403 || charRolesRes.status === 401) {
+        // Per-character scope missing — fall back to the PAGINATED corp roles list.
+        const listResult = await corpRolesListHasDirector(configCorpId, characterId, headers);
+        if (listResult === null) {
+          // List unreadable too — allow only the setup director; re-check sooner.
           isDirector = characterId === directorCharId;
           cacheTtl   = DIRECTOR_CACHE_TTL_SHORT;
+        } else {
+          isDirector = listResult;
         }
       }
 
@@ -7017,6 +7046,46 @@ app.get('/api/corp/access-status', security.apiLimiter, security.verifyEveToken,
       characterId, token, config.corp_id, config.director_char_id
     );
     res.json({ hasAccess: isDirector, method: isDirector ? 'director' : undefined });
+  } catch (err) {
+    res.status(500).json({ error: clientErrMsg(err) });
+  }
+});
+
+// ── GET /api/corp/access-debug (v1.13.1) ─────────────────────────────────────
+// Diagnostic: shows the LIVE corp-access decision for the calling character,
+// bypassing the director cache. Use this to confirm why a Director is/isn't
+// granted. Returns the raw ESI signals behind checkIsDirector.
+app.get('/api/corp/access-debug', security.apiLimiter, security.verifyEveToken, async (req, res) => {
+  try {
+    const characterId = req.characterId;
+    const config = await dbGet('SELECT corp_id, director_char_id FROM corp_config LIMIT 1');
+    if (!config) return res.json({ configured: false });
+
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+    const headers = { Authorization: `Bearer ${token}` };
+
+    const [charRes, charRolesRes, corpPublicRes] = await Promise.all([
+      esiFetch(`https://esi.evetech.net/latest/characters/${characterId}/?datasource=tranquility`, { headers }),
+      esiFetch(`https://esi.evetech.net/latest/characters/${characterId}/roles/?datasource=tranquility`, { headers }),
+      esiFetch(`https://esi.evetech.net/latest/corporations/${config.corp_id}/?datasource=tranquility`, {}),
+    ]);
+
+    const charCorpId = charRes.ok ? (await charRes.json()).corporation_id : null;
+    const perCharRoles = charRolesRes.ok ? ((await charRolesRes.json()).roles || []) : null;
+    const ceoId = corpPublicRes.ok ? (await corpPublicRes.json()).ceo_id : null;
+
+    res.json({
+      characterId,
+      configCorpId:        config.corp_id,
+      characterCorpId:     charCorpId,
+      inConfiguredCorp:    charCorpId === config.corp_id,
+      perCharRolesStatus:  charRolesRes.status,
+      perCharRoles,                                        // null = endpoint failed (check scope)
+      isDirectorByRoles:   Array.isArray(perCharRoles) && perCharRoles.includes('Director'),
+      isCeo:               ceoId === characterId,
+      isSetupDirector:     characterId === config.director_char_id,
+    });
   } catch (err) {
     res.status(500).json({ error: clientErrMsg(err) });
   }
