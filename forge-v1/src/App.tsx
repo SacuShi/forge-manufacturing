@@ -301,13 +301,22 @@ const App: FC = () => {
     return auth.altCharacters.find((a) => a.characterId === feeCharacterId)?.name ?? 'Primary';
   }, [feeCharacterId, auth.character, auth.altCharacters]);
 
-  // v1.4.0 — Corp feature: director-role access (no PIN)
+  // v1.13.2 — Corp access is checked against the CURRENTLY-SELECTED character's
+  // token (the view chip in the sidebar), so a Director alt is recognised and a
+  // non-Director selection is denied. "All" view (null) falls back to the primary.
+  const corpToken = useMemo(() => {
+    if (viewCharacterId == null || viewCharacterId === auth.character?.characterId) return auth.token;
+    return auth.altCharacters.find((a) => a.characterId === viewCharacterId)?.token ?? auth.token;
+  }, [viewCharacterId, auth.token, auth.character, auth.altCharacters]);
+
+  // v1.4.0 — Corp feature: director-role access (no PIN). Re-checks when the
+  // selected character (corpToken) changes.
   const {
     corpStatus,
     accessStatus: corpAccessStatus,
     loading:      corpDataLoading,
   } = useCorpData(
-    auth.token,
+    corpToken,
     activeTab === 'corp' && auth.status === 'authed',
   );
 
@@ -878,7 +887,7 @@ const App: FC = () => {
           marketLoadingMore={marketLoadingMore}
           marketHasMore={marketHasMore}
           haulConfigured={!!(industrySettings?.haul_enabled)}
-          token={auth.token}
+          token={corpToken}
           corpStatus={corpStatus}
           accessStatus={corpAccessStatus}
           corpDataLoading={corpDataLoading}

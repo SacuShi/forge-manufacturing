@@ -500,12 +500,13 @@ const CorpJobsView: FC<CorpJobsProps> = ({ token }) => {
 const CorpTab: FC<CorpTabProps> = ({ token, corpStatus, accessStatus, corpDataLoading }) => {
   const [activeSubTab, setActiveSubTab] = useState<CorpSubTab>('blueprints');
 
-  // Still fetching corp status — show spinner so we don't flash "Not Configured"
-  if (corpDataLoading && corpStatus === null) {
+  // Still fetching corp status, or re-checking access after a character switch —
+  // show a spinner so we don't flash "Not Configured" or a stale access decision.
+  if (corpDataLoading && (corpStatus === null || accessStatus === null)) {
     return (
       <div className="corp-not-configured">
         <span className="corp-nc-icon" aria-hidden="true">⏳</span>
-        <h3 className="corp-nc-title">Loading corp data…</h3>
+        <h3 className="corp-nc-title">Checking corp access…</h3>
       </div>
     );
   }
@@ -532,8 +533,10 @@ const CorpTab: FC<CorpTabProps> = ({ token, corpStatus, accessStatus, corpDataLo
         <h3 className="corp-nc-title">{corpStatus.corp_name}</h3>
         <p className="corp-nc-desc">
           Corp data is only accessible to characters with the Director or CEO role.
-          If you are a Director or CEO and see this message, try logging out and back
-          in to grant the updated EVE permissions.
+          Access is checked against the <strong>currently selected character</strong> —
+          if you have a Director on another character, select them using the character
+          chips in the sidebar. If you are a Director and still see this, log out and
+          back in to refresh EVE permissions.
         </p>
       </div>
     );

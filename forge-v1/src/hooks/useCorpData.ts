@@ -38,12 +38,17 @@ export function useCorpData(
   const [accessStatus, setAccessStatus] = useState<CorpAccessStatus | null>(null);
   const [loading,      setLoading]      = useState(false);
 
-  // ── Load corp status + access status when the Corp tab first becomes active ──
+  // ── Load corp status + access status when the Corp tab becomes active OR the
+  //    selected character (token) changes. Re-keying on the token value (not just
+  //    its truthiness) means switching characters re-evaluates Director access.
   useEffect(() => {
     if (!isActive || !token) return;
 
     let cancelled = false;
     setLoading(true);
+    // Clear stale access so a character switch never briefly shows the previous
+    // character's corp access (or denial) before the re-check resolves.
+    setAccessStatus(null);
 
     Promise.allSettled([
       apiGet<CorpStatus>('/api/corp/status'),
@@ -69,9 +74,8 @@ export function useCorpData(
       });
 
     return () => { cancelled = true; };
-  // Fires once per Corp-tab activation while logged in
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isActive, !!token]);
+  // Re-fire on Corp-tab activation AND whenever the selected character's token changes
+  }, [isActive, token]);
 
   // ── Re-check access (e.g. after scope grant / re-auth) ──────────────────────
   const refreshAccess = useCallback(async () => {
