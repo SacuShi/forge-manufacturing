@@ -4926,7 +4926,13 @@ app.get('/api/top-profitable-by-skills', security.apiLimiter, security.verifyEve
     };
     const orderClause = allowedSorts[sort] || allowedSorts.profit;
 
-    // Build candidate query — fetches 3× the needed count to survive skill filtering
+    // Candidate pool size. New/low-skill characters can build only a small fraction
+    // of the top-profit items, so we must scan DEEP enough to still find `limit`
+    // buildable items (and not miss buildable T1 items ranked far down the profit
+    // list). Bulk skill-filtering below keeps this cheap regardless of pool size.
+    const poolSize = Math.min(Math.max((offset + limit) * 10, 1000), 5000);
+
+    // Build candidate query — pulls the pool ordered by the chosen sort.
     let candidates;
 
     if (!isCrossHub) {
@@ -4951,7 +4957,7 @@ app.get('/api/top-profitable-by-skills', security.apiLimiter, security.verifyEve
         WHERE ${whereConditions.join(' AND ')}
         ORDER BY ${orderClause}
         LIMIT ?
-      `, [...params, (offset + limit) * 3]);
+      `, [...params, poolSize]);
 
     } else {
       // ── Cross-hub path: materials from sourceRegionId, sell in regionId ─
@@ -4999,24 +5005,59 @@ app.get('/api/top-profitable-by-skills', security.apiLimiter, security.verifyEve
           ON  src.blueprint_id = sell.blueprint_id
           AND src.region_id    = ?
         WHERE ${joinConditions.join(' AND ')}
-        ORDER BY profit DESC
+        ORDER BY ${orderClause}
         LIMIT ?
       `,
       // sourceRegionId must be FIRST — it binds the JOIN's src.region_id = ?
       // which appears before the WHERE clause in the SQL text.
-      [sourceRegionId, ...params, (offset + limit) * 3]);
+      [sourceRegionId, ...params, poolSize]);
     }
 
-    // Filter by skill requirements, skipping the first `offset` qualified items
+    // ── Bulk skill filter ────────────────────────────────────────────────────
+    // Load the skill requirements for ALL candidate blueprints in ONE query, then
+    // filter in-memory. This replaces the old per-candidate DB call (which forced a
+    // tiny candidate pool) — now we can scan deep and still be fast.
+    const bpIds = candidates.map(c => c.blueprint_id);
+    const reqMap = new Map(); // blueprint_id → [{ skill_id, skill_level }]
+    try {
+      // Chunk the IN(...) to stay under SQLite's host-parameter limit (999 on older builds).
+      const CHUNK = 900;
+      for (let i = 0; i < bpIds.length; i += CHUNK) {
+        const slice = bpIds.slice(i, i + CHUNK);
+        const ph = slice.map(() => '?').join(',');
+        const reqRows = await dbAll(
+          `SELECT blueprint_id, skill_id, skill_level FROM blueprint_skills WHERE blueprint_id IN (${ph})`,
+          slice
+        );
+        for (const r of reqRows) {
+          const arr = reqMap.get(r.blueprint_id);
+          if (arr) arr.push(r); else reqMap.set(r.blueprint_id, [r]);
+        }
+      }
+    } catch (_) {
+      // blueprint_skills table missing — leave reqMap empty → everything allowed through.
+    }
+
+    // Character's trained skill levels for O(1) lookup.
+    const skillMap = {};
+    for (const s of characterSkills) skillMap[s.skill_id] = s.active_skill_level || 0;
+
+    // A blueprint is buildable if every required skill is trained to the needed level.
+    // No known requirements → allow through (matches canBuildBlueprint behaviour).
+    const meetsSkillReqs = (bpId) => {
+      const reqs = reqMap.get(bpId);
+      if (!reqs || reqs.length === 0) return true;
+      return reqs.every(r => (skillMap[r.skill_id] || 0) >= r.skill_level);
+    };
+
+    // Keep buildable items in profit order, skipping the first `offset` qualified.
     const results = [];
     let skipped = 0;
     for (const item of candidates) {
-      const canBuild = await canBuildBlueprint(characterSkills, item.blueprint_id);
-      if (canBuild) {
-        if (skipped < offset) { skipped++; continue; }
-        results.push(item);
-        if (results.length >= limit) break;
-      }
+      if (!meetsSkillReqs(item.blueprint_id)) continue;
+      if (skipped < offset) { skipped++; continue; }
+      results.push(item);
+      if (results.length >= limit) break;
     }
 
     // ── Add haul_cost_per_unit to each result (Phase 2) ──────────────────────
