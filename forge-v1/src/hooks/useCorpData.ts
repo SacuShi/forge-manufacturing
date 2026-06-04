@@ -51,7 +51,8 @@ export function useCorpData(
     setAccessStatus(null);
 
     Promise.allSettled([
-      apiGet<CorpStatus>('/api/corp/status'),
+      // v1.14.0 — status is now per-character (the selected Director's corp)
+      apiGet<CorpStatus>('/api/corp/status', token),
       apiGet<CorpAccessStatus>('/api/corp/access-status', token),
     ])
       .then(([statusResult, accessResult]) => {

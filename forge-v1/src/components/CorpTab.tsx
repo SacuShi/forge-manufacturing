@@ -516,10 +516,12 @@ const CorpTab: FC<CorpTabProps> = ({ token, corpStatus, accessStatus, corpDataLo
     return (
       <div className="corp-not-configured">
         <span className="corp-nc-icon" aria-hidden="true">🏭</span>
-        <h3 className="corp-nc-title">Corp Data Not Configured</h3>
+        <h3 className="corp-nc-title">No Corporation Data</h3>
         <p className="corp-nc-desc">
-          A corp director or CEO needs to connect the corporation via the admin setup process.
-          Once connected, corp blueprints, assets, and jobs will appear here.
+          The selected character isn't in a player corporation, or their EVE permissions
+          haven't been granted yet. Select a character with the Director role using the
+          sidebar chips. If you are a Director and recently updated FORGE, log out and back
+          in once to grant the corp data permissions.
         </p>
       </div>
     );

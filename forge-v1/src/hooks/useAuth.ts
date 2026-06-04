@@ -60,7 +60,12 @@ const SCOPES =
   'esi-planets.manage_planets.v1 ' +
   'esi-characters.read_standings.v1 ' +
   'esi-characters.read_corporation_roles.v1 ' +
-  'esi-corporations.read_corporation_membership.v1';
+  'esi-corporations.read_corporation_membership.v1 ' +
+  // v1.14.0 — corp data scopes so a Director can read THEIR OWN corp's
+  // blueprints/assets/jobs directly (dynamic any-corp model; no admin setup).
+  'esi-corporations.read_blueprints.v1 ' +
+  'esi-assets.read_corporation_assets.v1 ' +
+  'esi-industry.read_corporation_jobs.v1';
 
 const SESSION_TOKEN_KEY = 'forge_token';
 const SESSION_STATE_KEY = 'forge_oauth_state';

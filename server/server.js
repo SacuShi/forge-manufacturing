@@ -603,10 +603,38 @@ async function esiCorpFetchAll(path, accessToken) {
  * Uses the stored director refresh token.  Called on demand and on a schedule.
  * Updates corp_config.last_refresh_* columns on completion.
  */
-async function refreshCorpData(corpId) {
+// In-memory record of when each corp's cached data was last refreshed (epoch ms).
+// Cleared on restart so the first access after a deploy re-pulls fresh data.
+const corpDataRefreshedAt = new Map();
+const CORP_DATA_TTL_MS    = 30 * 60 * 1000; // 30 min — corp data isn't fast-moving
+const corpRefreshInFlight = new Map();      // corpId → Promise (dedupe concurrent refreshes)
+
+// ISO timestamp of the last successful refresh for a corp, or null.
+function corpLastRefreshIso(corpId) {
+  const ts = corpDataRefreshedAt.get(corpId);
+  return ts ? new Date(ts).toISOString() : null;
+}
+
+// Ensure a corp's cached data is fresh, fetching live with the viewer's token when
+// stale or missing. Never throws — on ESI failure the endpoint returns whatever is
+// already cached (possibly empty) so a transient error can't 500 the corp tab.
+async function ensureCorpDataFresh(corpId, accessToken, { force = false } = {}) {
+  const last = corpDataRefreshedAt.get(corpId) || 0;
+  if (!force && Date.now() - last < CORP_DATA_TTL_MS) return;
+  if (corpRefreshInFlight.has(corpId)) { try { await corpRefreshInFlight.get(corpId); } catch (_) {} return; }
+  const p = refreshCorpData(corpId, accessToken)
+    .catch(err => { console.warn(`⚠ Corp ${corpId} on-demand refresh failed: ${err.message}`); })
+    .finally(() => corpRefreshInFlight.delete(corpId));
+  corpRefreshInFlight.set(corpId, p);
+  await p;
+}
+
+async function refreshCorpData(corpId, providedAccessToken = null) {
   console.log(`⟳ Corp ${corpId}: refreshing ESI data...`);
   try {
-    const accessToken = await refreshCorpAccessToken(corpId);
+    // v1.14.0: prefer the viewing Director's access token (dynamic any-corp model);
+    // fall back to the legacy stored corp refresh token if one was ever configured.
+    const accessToken = providedAccessToken || await refreshCorpAccessToken(corpId);
 
     // ── Blueprints ───────────────────────────────────────────────────────────
     const bps = await esiCorpFetchAll(
@@ -735,6 +763,7 @@ async function refreshCorpData(corpId) {
       [corpId]
     );
     console.log(`✓ Corp ${corpId}: ESI data refresh complete`);
+    corpDataRefreshedAt.set(corpId, Date.now());
     return { ok: true, blueprints: bps.length, assets: assets.length, jobs: jobs.length };
 
   } catch (err) {
@@ -750,47 +779,22 @@ async function refreshCorpData(corpId) {
 }
 
 /**
- * Middleware: verify that the authed character has corp data access.
- * Access model (v1.5.2 — PIN removed):
- *   1. corp_admin_access entry (admin/dev whitelist) → immediate access
- *   2. Character has Director role in ESI for the configured corp → access
- *   3. Else → 403 NOT_DIRECTOR
+ * Corp data access model (v1.14.0 — dynamic, any-corp):
+ * ANY character holding the in-game Director (or CEO) role can view THEIR OWN
+ * corp's blueprints/assets/jobs. There is no server-side corp "setup" — data is
+ * fetched live from ESI using the viewing Director's own access token (which must
+ * carry the corp scopes, granted at login). `requireDirectorRole` attaches
+ * req.corpId / req.corpName / req.corpAccessToken for the data endpoints.
  *
- * The ESI check calls /characters/{id}/roles/ with the character's own Bearer
- * token. Results are cached 5 minutes per character to avoid hammering ESI.
- * Falls back to director_char_id match when esi-characters.read_roles.v1 scope
- * has not yet been granted (users who haven't re-authed since the scope was added).
- *
- * Must be used AFTER security.verifyEveToken (which sets req.characterId).
+ * History: pre-v1.14.0 required a one-time admin OAuth "setup" that stored a single
+ * corp's encrypted refresh token in corp_config; only that one corp was visible.
+ * The legacy corp_config / setup / refreshCorpAccessToken path is retained but no
+ * longer required (refreshCorpData falls back to it only if no viewer token given).
  */
 
-// Director role TTLs — stored in the general `cache` under "director:<characterId>"
-const DIRECTOR_CACHE_TTL_MS      = 5 * 60 * 1000; // normal: 5 min
-const DIRECTOR_CACHE_TTL_SHORT   = 60 * 1000;      // fallback/error: 1 min (re-check sooner)
+const DIRECTOR_CACHE_TTL_MS    = 5 * 60 * 1000; // 5 min
+const DIRECTOR_CACHE_TTL_SHORT = 60 * 1000;     // 1 min (after an ESI error — retry sooner)
 
-/**
- * Resolve whether a character is a Director or CEO in the configured corp.
- *
- * Check order (first success wins):
- *   1. GET /characters/{id}/roles/ with user token  ← PRIMARY (fixed v1.13.1)
- *        scope: esi-characters.read_corporation_roles.v1 (granted at login).
- *        Returns THIS character's own roles directly — no pagination, no need to
- *        already hold a privileged role. This is the authoritative, reliable check.
- *   2. GET /corporations/{corp_id}/roles/ with user token  (fallback, PAGINATED)
- *        scope: esi-corporations.read_corporation_membership.v1.
- *        Only reachable by privileged members; the corp-wide list is paged, so we
- *        walk every page looking for the caller's Director role.
- *   3. Public GET /corporations/{corp_id}/ ceo_id check — no scope needed.
- *   4. Setup director_char_id match — last resort when all ESI calls fail.
- *
- * BUGFIX (v1.13.1): the old code used #2 as PRIMARY and only fell back to #1 on a
- * 403. For large corps that endpoint returns 200 but paginates, so a Director not
- * on page 1 was silently "not found" → denied, and the reliable per-character
- * fallback never ran. Reordering #1 to primary resolves the Director-access failure.
- *
- * Cache note: null corpId means the character-info call failed; we skip the
- * cached value in that case and re-check on the next request.
- */
 // Fallback role check: scan the PAGINATED corp-wide roles list for the caller's
 // Director role. Used only when the per-character roles endpoint is unavailable.
 // Returns true/false when the list is readable, or null when it can't be read
@@ -820,120 +824,82 @@ async function corpRolesListHasDirector(corpId, characterId, headers) {
   }
 }
 
-async function checkIsDirector(characterId, bearerToken, configCorpId, directorCharId) {
-  const cacheKey = `director:${characterId}`;
+// Resolve the calling character's OWN corporation + Director status from ESI.
+// Dynamic any-corp model (v1.14.0): no configured corp — a character can view
+// whichever corp they are a Director (or CEO) of. Cached 5 min per character.
+// Returns { corpId, corpName, isDirector }.
+async function resolveViewerCorpAccess(characterId, bearerToken) {
+  const cacheKey = `corpaccess:${characterId}`;
   const cached   = getCached(cacheKey);
-  // Only trust the cache when we have a confirmed corpId — a null corpId stored
-  // previously means the char-info call failed and we should retry.
-  if (cached && cached.corpId !== null) {
-    return cached.isDirector && cached.corpId === configCorpId;
-  }
+  if (cached && cached.corpId !== null) return cached;
 
-  const headers  = { Authorization: `Bearer ${bearerToken}` };
-  let isDirector = false;
-  let charCorpId = null;
-  let cacheTtl   = DIRECTOR_CACHE_TTL_MS;
+  const headers = { Authorization: `Bearer ${bearerToken}` };
+  let corpId = null, corpName = null, isDirector = false;
+  let ttl = DIRECTOR_CACHE_TTL_MS;
 
   try {
-    // Fetch in parallel: character info (corp id), the character's OWN roles
-    // (authoritative + pagination-free), and public corp info (CEO check).
-    const [charRes, charRolesRes, corpPublicRes] = await Promise.all([
-      esiFetch(
-        `https://esi.evetech.net/latest/characters/${characterId}/?datasource=tranquility`,
-        { headers }
-      ),
-      // PRIMARY — esi-characters.read_corporation_roles.v1 (granted at login).
-      esiFetch(
-        `https://esi.evetech.net/latest/characters/${characterId}/roles/?datasource=tranquility`,
-        { headers }
-      ),
-      // CEO check — public endpoint, no auth needed
-      esiFetch(
-        `https://esi.evetech.net/latest/corporations/${configCorpId}/?datasource=tranquility`,
-        {}
-      ),
+    // Character info (their corp) + their OWN roles (authoritative, no pagination).
+    const [charRes, rolesRes] = await Promise.all([
+      esiFetch(`https://esi.evetech.net/latest/characters/${characterId}/?datasource=tranquility`, { headers }),
+      esiFetch(`https://esi.evetech.net/latest/characters/${characterId}/roles/?datasource=tranquility`, { headers }),
     ]);
 
-    // Resolve character's corporation
-    if (charRes.ok) {
-      charCorpId = (await charRes.json()).corporation_id;
+    if (charRes.ok) corpId = (await charRes.json()).corporation_id ?? null;
+
+    if (rolesRes.ok) {
+      const data = await rolesRes.json();
+      isDirector = Array.isArray(data.roles) && data.roles.includes('Director');
+    } else if ((rolesRes.status === 403 || rolesRes.status === 401) && corpId) {
+      // Per-character roles scope missing on this token — fall back to the paginated corp list.
+      const listResult = await corpRolesListHasDirector(corpId, characterId, headers);
+      if (listResult === null) ttl = DIRECTOR_CACHE_TTL_SHORT;
+      else isDirector = listResult;
+    } else if (!rolesRes.ok) {
+      ttl = DIRECTOR_CACHE_TTL_SHORT; // transient — retry sooner
     }
 
-    // If the character is confirmed to be in a different corp, deny immediately
-    if (charCorpId !== null && charCorpId !== configCorpId) {
-      isDirector = false;
-    } else {
-      // ── Primary: the character's own roles (direct, no pagination) ────────
-      if (charRolesRes.ok) {
-        const data = await charRolesRes.json();
-        if (Array.isArray(data.roles) && data.roles.includes('Director')) isDirector = true;
-      } else if (charRolesRes.status === 403 || charRolesRes.status === 401) {
-        // Per-character scope missing — fall back to the PAGINATED corp roles list.
-        const listResult = await corpRolesListHasDirector(configCorpId, characterId, headers);
-        if (listResult === null) {
-          // List unreadable too — allow only the setup director; re-check sooner.
-          isDirector = characterId === directorCharId;
-          cacheTtl   = DIRECTOR_CACHE_TTL_SHORT;
-        } else {
-          isDirector = listResult;
-        }
-      }
-
-      // ── CEO check (public, no scope required) ─────────────────────────────
-      if (!isDirector && corpPublicRes.ok) {
-        const corpData = await corpPublicRes.json();
-        if (corpData.ceo_id === characterId) isDirector = true;
+    // Public corp info: name + CEO check (the CEO implicitly holds Director).
+    if (corpId) {
+      const corpRes = await esiFetch(`https://esi.evetech.net/latest/corporations/${corpId}/?datasource=tranquility`, {});
+      if (corpRes.ok) {
+        const cd = await corpRes.json();
+        corpName = cd.name ?? null;
+        if (!isDirector && cd.ceo_id === characterId) isDirector = true;
       }
     }
   } catch (esiErr) {
-    console.warn(`ESI director/CEO check failed for ${characterId}:`, esiErr.message);
-    // On connectivity error: allow only the setup director (fail safe)
-    isDirector = characterId === directorCharId;
-    charCorpId = charCorpId ?? configCorpId; // preserve any partial result
-    cacheTtl   = DIRECTOR_CACHE_TTL_SHORT;
+    console.warn(`Corp access resolve failed for ${characterId}: ${esiErr.message}`);
+    ttl = DIRECTOR_CACHE_TTL_SHORT;
   }
 
-  setCached(cacheKey, { isDirector, corpId: charCorpId }, cacheTtl);
-  // corpId check is embedded in logic above; null means char-info failed (treated as same corp)
-  return isDirector && (charCorpId === null || charCorpId === configCorpId);
+  const result = { corpId, corpName, isDirector };
+  setCached(cacheKey, result, ttl);
+  return result;
 }
 
+// Middleware: allow only characters holding the Director (or CEO) role in their
+// own corp. On success attaches req.corpId, req.corpName, req.corpAccessToken for
+// the data endpoints to fetch live ESI data with the viewer's own token.
 async function requireDirectorRole(req, res, next) {
   const characterId = req.characterId;
   if (!characterId) return res.status(401).json({ error: 'Not authenticated' });
 
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+  if (!token) return res.status(401).json({ error: 'Authorization required' });
+
   try {
-    // 1. Admin/dev whitelist
-    const adminRow = await dbGet(
-      'SELECT 1 FROM corp_admin_access WHERE character_id = ?',
-      [characterId]
-    );
-    if (adminRow) return next();
-
-    // 2. Corp must be configured
-    const config = await dbGet(
-      'SELECT corp_id, director_char_id FROM corp_config LIMIT 1'
-    );
-    if (!config) {
-      return res.status(404).json({ error: 'Corp not configured' });
+    const access = await resolveViewerCorpAccess(characterId, token);
+    if (!access.isDirector || !access.corpId) {
+      return res.status(403).json({
+        error: 'Corp data access requires the Director role on the selected character.',
+        code:  'NOT_DIRECTOR',
+      });
     }
-
-    // 3. Verify Director/CEO role via ESI
-    //    checkIsDirector uses /corporations/{id}/roles/ as primary (no per-character scope needed)
-    //    then falls back to /characters/{id}/roles/, then CEO check, then setup-director match.
-    const authHeader = req.headers.authorization || '';
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
-    if (!token) return res.status(401).json({ error: 'Authorization required' });
-
-    const allowed = await checkIsDirector(
-      characterId, token, config.corp_id, config.director_char_id
-    );
-    if (allowed) return next();
-
-    return res.status(403).json({
-      error: 'Corp data access requires the Director or CEO role in the configured corporation.',
-      code:  'NOT_DIRECTOR',
-    });
+    req.corpId          = access.corpId;
+    req.corpName        = access.corpName;
+    req.corpAccessToken = token;
+    return next();
   } catch (err) {
     console.error('requireDirectorRole error:', err.message);
     return res.status(500).json({ error: 'Access check failed' });
@@ -6855,21 +6821,23 @@ function isAdminRequest(req) {
 // ── GET /api/corp/status ─────────────────────────────────────────────────────
 // Public (no EVE token needed) — lets the frontend know whether a corp has been
 // set up so it can show the correct UI state.
-app.get('/api/corp/status', security.apiLimiter, async (req, res) => {
+// v1.14.0 — dynamic any-corp model: "configured" now means the SELECTED character
+// is in a player corporation (so the tab shows data or the not-Director notice,
+// never the old "not set up" screen). Requires the character's token.
+app.get('/api/corp/status', security.apiLimiter, security.verifyEveToken, async (req, res) => {
   try {
-    const config = await dbGet(
-      'SELECT corp_id, corp_name, director_char_name, last_refresh_at, last_refresh_status FROM corp_config LIMIT 1'
-    );
-    if (!config) {
-      return res.json({ configured: false });
-    }
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+    if (!token) return res.json({ configured: false });
+
+    const access = await resolveViewerCorpAccess(req.characterId, token);
+    if (!access.corpId) return res.json({ configured: false });
+
     res.json({
-      configured:         true,
-      corp_id:            config.corp_id,
-      corp_name:          config.corp_name,
-      director_char_name: config.director_char_name,
-      last_refresh_at:    config.last_refresh_at,
-      last_refresh_status: config.last_refresh_status,
+      configured:      true,
+      corp_id:         access.corpId,
+      corp_name:       access.corpName || `Corp ${access.corpId}`,
+      last_refresh_at: corpLastRefreshIso(access.corpId),
     });
   } catch (err) {
     res.status(500).json({ error: clientErrMsg(err) });
@@ -7023,68 +6991,66 @@ app.post('/api/corp/setup', security.adminLimiter, async (req, res) => {
 // Used by frontend to decide whether to show corp data or the "not a director" message.
 app.get('/api/corp/access-status', security.apiLimiter, security.verifyEveToken, async (req, res) => {
   try {
-    const characterId = req.characterId;
-
-    // Admin whitelist
-    const adminRow = await dbGet(
-      'SELECT 1 FROM corp_admin_access WHERE character_id = ?', [characterId]
-    );
-    if (adminRow) return res.json({ hasAccess: true, method: 'admin' });
-
-    // Corp must be configured
-    const config = await dbGet(
-      'SELECT corp_id, director_char_id FROM corp_config LIMIT 1'
-    );
-    if (!config) return res.json({ hasAccess: false });
-
-    // Check Director role via ESI (uses same cache as requireDirectorRole)
+    // Dynamic: access = the SELECTED character is a Director (or CEO) of their own corp.
     const authHeader = req.headers.authorization || '';
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
     if (!token) return res.json({ hasAccess: false });
 
-    const isDirector = await checkIsDirector(
-      characterId, token, config.corp_id, config.director_char_id
-    );
-    res.json({ hasAccess: isDirector, method: isDirector ? 'director' : undefined });
+    const access = await resolveViewerCorpAccess(req.characterId, token);
+    const hasAccess = !!(access.isDirector && access.corpId);
+    res.json({
+      hasAccess,
+      method:    hasAccess ? 'director' : undefined,
+      corp_id:   access.corpId || undefined,
+      corp_name: access.corpName || undefined,
+    });
   } catch (err) {
     res.status(500).json({ error: clientErrMsg(err) });
   }
 });
 
-// ── GET /api/corp/access-debug (v1.13.1) ─────────────────────────────────────
-// Diagnostic: shows the LIVE corp-access decision for the calling character,
-// bypassing the director cache. Use this to confirm why a Director is/isn't
-// granted. Returns the raw ESI signals behind checkIsDirector.
+// ── GET /api/corp/access-debug (v1.14.0) ─────────────────────────────────────
+// Diagnostic: shows the LIVE corp-access decision for the calling character in the
+// dynamic any-corp model. Confirms the character's own corp + Director role and
+// whether their token carries the corp scopes needed to read corp data.
 app.get('/api/corp/access-debug', security.apiLimiter, security.verifyEveToken, async (req, res) => {
   try {
     const characterId = req.characterId;
-    const config = await dbGet('SELECT corp_id, director_char_id FROM corp_config LIMIT 1');
-    if (!config) return res.json({ configured: false });
-
     const authHeader = req.headers.authorization || '';
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
     const headers = { Authorization: `Bearer ${token}` };
 
-    const [charRes, charRolesRes, corpPublicRes] = await Promise.all([
+    const [charRes, charRolesRes] = await Promise.all([
       esiFetch(`https://esi.evetech.net/latest/characters/${characterId}/?datasource=tranquility`, { headers }),
       esiFetch(`https://esi.evetech.net/latest/characters/${characterId}/roles/?datasource=tranquility`, { headers }),
-      esiFetch(`https://esi.evetech.net/latest/corporations/${config.corp_id}/?datasource=tranquility`, {}),
     ]);
 
-    const charCorpId = charRes.ok ? (await charRes.json()).corporation_id : null;
+    const charCorpId   = charRes.ok ? (await charRes.json()).corporation_id : null;
     const perCharRoles = charRolesRes.ok ? ((await charRolesRes.json()).roles || []) : null;
-    const ceoId = corpPublicRes.ok ? (await corpPublicRes.json()).ceo_id : null;
+
+    // Probe the corp blueprints endpoint to confirm the token has the corp scopes
+    // and the in-game Director role (ESI returns 403 if either is missing).
+    let corpBlueprintsStatus = null;
+    if (charCorpId) {
+      const bpRes = await esiFetch(
+        `https://esi.evetech.net/latest/corporations/${charCorpId}/blueprints/?datasource=tranquility&page=1`,
+        { headers }
+      );
+      corpBlueprintsStatus = bpRes.status; // 200 = can read corp data; 403 = no role/scope
+    }
 
     res.json({
       characterId,
-      configCorpId:        config.corp_id,
-      characterCorpId:     charCorpId,
-      inConfiguredCorp:    charCorpId === config.corp_id,
-      perCharRolesStatus:  charRolesRes.status,
+      characterCorpId:      charCorpId,
+      perCharRolesStatus:   charRolesRes.status,
       perCharRoles,                                        // null = endpoint failed (check scope)
-      isDirectorByRoles:   Array.isArray(perCharRoles) && perCharRoles.includes('Director'),
-      isCeo:               ceoId === characterId,
-      isSetupDirector:     characterId === config.director_char_id,
+      isDirectorByRoles:    Array.isArray(perCharRoles) && perCharRoles.includes('Director'),
+      corpBlueprintsStatus, // 200 = token can read corp data; 403 = missing role or corp scopes
+      verdict: (Array.isArray(perCharRoles) && perCharRoles.includes('Director') && corpBlueprintsStatus === 200)
+        ? 'OK — corp data should load'
+        : (corpBlueprintsStatus === 403
+            ? 'Blocked — token lacks corp scopes or the character is not a Director (log out/in to refresh scopes)'
+            : 'Not a Director on this character'),
     });
   } catch (err) {
     res.status(500).json({ error: clientErrMsg(err) });
@@ -7100,8 +7066,8 @@ app.get('/api/corp/blueprints',
   requireDirectorRole,
   async (req, res) => {
     try {
-      const config = await dbGet('SELECT corp_id, last_refresh_at FROM corp_config LIMIT 1');
-      if (!config) return res.status(404).json({ error: 'Corp not configured' });
+      const corpId = req.corpId;
+      await ensureCorpDataFresh(corpId, req.corpAccessToken);
 
       const search = String(req.query.search || '').replace(/[^a-zA-Z0-9 '\-]/g, '').trim();
       const type   = req.query.type || 'all';   // BPO | BPC | all
@@ -7109,7 +7075,7 @@ app.get('/api/corp/blueprints',
       const offset = Math.max(0,   parseInt(req.query.offset || '0')   || 0);
 
       let whereClause = 'WHERE cb.corp_id = ?';
-      const params = [config.corp_id];
+      const params = [corpId];
 
       if (type === 'BPO') {
         whereClause += ' AND cb.runs = -1';
@@ -7150,7 +7116,8 @@ app.get('/api/corp/blueprints',
           total:          total?.n ?? 0,
           limit,
           offset,
-          last_refresh_at: config.last_refresh_at,
+          corp_name:       req.corpName,
+          last_refresh_at: corpLastRefreshIso(corpId),
         },
       });
     } catch (err) {
@@ -7169,15 +7136,15 @@ app.get('/api/corp/assets',
   requireDirectorRole,
   async (req, res) => {
     try {
-      const config = await dbGet('SELECT corp_id, last_refresh_at FROM corp_config LIMIT 1');
-      if (!config) return res.status(404).json({ error: 'Corp not configured' });
+      const corpId = req.corpId;
+      await ensureCorpDataFresh(corpId, req.corpAccessToken);
 
       const search = String(req.query.search || '').replace(/[^a-zA-Z0-9 '\-]/g, '').trim();
       const limit  = Math.min(500, parseInt(req.query.limit  || '200') || 200);
       const offset = Math.max(0,   parseInt(req.query.offset || '0')   || 0);
 
       let whereClause = 'WHERE ca.corp_id = ?';
-      const params = [config.corp_id];
+      const params = [corpId];
 
       if (search) {
         whereClause += ' AND LOWER(COALESCE(i.name, "")) LIKE ?';
@@ -7214,7 +7181,8 @@ app.get('/api/corp/assets',
           total:          total?.n ?? 0,
           limit,
           offset,
-          last_refresh_at: config.last_refresh_at,
+          corp_name:       req.corpName,
+          last_refresh_at: corpLastRefreshIso(corpId),
         },
       });
     } catch (err) {
@@ -7232,8 +7200,8 @@ app.get('/api/corp/jobs',
   requireDirectorRole,
   async (req, res) => {
     try {
-      const config = await dbGet('SELECT corp_id, last_refresh_at FROM corp_config LIMIT 1');
-      if (!config) return res.status(404).json({ error: 'Corp not configured' });
+      const corpId = req.corpId;
+      await ensureCorpDataFresh(corpId, req.corpAccessToken);
 
       const jobs = await dbAll(
         // installer_id is a CHARACTER ID — cannot be joined against items (which holds type_ids).
@@ -7253,12 +7221,12 @@ app.get('/api/corp/jobs',
          LEFT JOIN items bp   ON bp.type_id   = cj.blueprint_type_id
          WHERE cj.corp_id = ?
          ORDER BY cj.end_date ASC`,
-        [config.corp_id]
+        [corpId]
       );
 
       res.json({
         jobs,
-        meta: { count: jobs.length, last_refresh_at: config.last_refresh_at },
+        meta: { count: jobs.length, corp_name: req.corpName, last_refresh_at: corpLastRefreshIso(corpId) },
       });
     } catch (err) {
       console.error('Corp jobs error:', err.message);
@@ -7275,11 +7243,8 @@ app.post('/api/corp/refresh',
   requireDirectorRole,
   async (req, res) => {
     try {
-      const config = await dbGet('SELECT corp_id FROM corp_config LIMIT 1');
-      if (!config) return res.status(404).json({ error: 'Corp not configured' });
-
-      // Run in background so the response returns immediately
-      refreshCorpData(config.corp_id)
+      // Force a live re-pull using the viewing Director's own token.
+      refreshCorpData(req.corpId, req.corpAccessToken)
         .then(result => console.log(`✓ Manual corp refresh complete:`, result))
         .catch(err    => console.error(`⚠ Manual corp refresh failed: ${err.message}`));
 
