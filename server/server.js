@@ -2906,6 +2906,51 @@ app.post('/api/blueprint-metadata', security.apiLimiter, async (req, res) => {
   }
 });
 
+// ── POST /api/blueprint-profits (v1.15.0) ────────────────────────────────────
+// Per-blueprint profitability for the "My Blueprints" tab, from the same
+// precomputed_profits data that powers Market Opportunities. Body:
+//   { blueprintTypeIds: number[], regionId?: number }
+// Returns a map keyed by blueprint type_id (= blueprint_id):
+//   { [bpTypeId]: { profit, margin, iskPerHour, sellPrice, materialCost, buildTime } }
+app.post('/api/blueprint-profits', security.apiLimiter, async (req, res) => {
+  try {
+    const { blueprintTypeIds, regionId } = req.body;
+    if (!Array.isArray(blueprintTypeIds) || blueprintTypeIds.length === 0) return res.json({});
+
+    const region = VALID_REGIONS.includes(parseInt(regionId)) ? parseInt(regionId) : 10000002;
+    const limited = blueprintTypeIds.slice(0, 2000);
+
+    const out = {};
+    const CHUNK = 900; // stay under SQLite host-parameter limit
+    for (let i = 0; i < limited.length; i += CHUNK) {
+      const slice = limited.slice(i, i + CHUNK);
+      const ph = slice.map(() => '?').join(',');
+      const rows = await dbAll(
+        `SELECT blueprint_id, profit, profit_margin, isk_per_hour,
+                sell_price, material_cost, build_time, liquidity_risk
+         FROM precomputed_profits
+         WHERE region_id = ? AND blueprint_id IN (${ph})`,
+        [region, ...slice]
+      );
+      for (const r of rows) {
+        out[r.blueprint_id] = {
+          profit:        r.profit,
+          margin:        r.profit_margin,
+          iskPerHour:    r.isk_per_hour,
+          sellPrice:     r.sell_price,
+          materialCost:  r.material_cost,
+          buildTime:     r.build_time,
+          liquidityRisk: r.liquidity_risk,
+        };
+      }
+    }
+    res.json(out);
+  } catch (err) {
+    console.error('❌ Blueprint profits error:', err.message);
+    res.status(500).json({ error: clientErrMsg(err) });
+  }
+});
+
 
 // AI CHAT - Anthropic proxy with function calling
 // ── AI guardrail (v1.13.0) ───────────────────────────────────────────────────

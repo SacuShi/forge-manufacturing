@@ -768,6 +768,48 @@ tbody td.align-center { text-align: center; }
 
 .bp-card:hover { border-color: var(--color-accent-primary); }
 
+/* v1.15.0 — per-blueprint profitability metrics on the right of each card */
+.bp-metrics {
+  display: flex;
+  gap: 10px;
+  flex-shrink: 0;
+  margin-left: auto;
+  padding-left: 10px;
+}
+.bp-metric {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  min-width: 56px;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+.bp-metric.active {
+  background: rgba(79, 195, 247, 0.1);
+  outline: 0.5px solid rgba(79, 195, 247, 0.35);
+}
+.bp-metric-label {
+  font-size: 8px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+}
+.bp-metric-val {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+.bp-metrics-empty {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 9px;
+  text-align: right;
+  color: var(--color-text-tertiary);
+  opacity: 0.6;
+  line-height: 1.2;
+}
+
 .bp-icon {
   width: 36px;
   height: 36px;

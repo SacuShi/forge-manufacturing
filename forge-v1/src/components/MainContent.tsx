@@ -14,6 +14,16 @@ import type {
 import ItemTable    from './ItemTable';
 import CorpTab      from './CorpTab';
 import ResearchTab  from './ResearchTab';
+import { formatISK, formatMargin } from '../utils/format';
+
+// Per-blueprint profitability (from /api/blueprint-profits — same data as Market Opps)
+interface BlueprintProfit {
+  profit:     number;
+  margin:     number;
+  iskPerHour: number;
+  sellPrice?: number;
+}
+type BpSortField = 'name' | 'iskPerHour' | 'margin' | 'profit';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -110,6 +120,10 @@ const MainContent: FC<MainContentProps> = ({
   const [bpSearch, setBpSearch] = useState('');
   const [bpFilter, setBpFilter] = useState<'all' | 'bpo' | 'bpc'>('all');
   const [bpMetadata, setBpMetadata] = useState<Record<number, number>>({});
+  // v1.15.0 — My Blueprints profitability + sorting (mirrors Market Opportunities)
+  const [bpProfits, setBpProfits] = useState<Record<number, BlueprintProfit>>({});
+  const [bpSort,    setBpSort]    = useState<BpSortField>('iskPerHour');
+  const [bpSortDir, setBpSortDir] = useState<'asc' | 'desc'>('desc');
   const [assetSearch, setAssetSearch] = useState('');
 
   const getBpName = (typeId: number) =>
@@ -158,6 +172,32 @@ const MainContent: FC<MainContentProps> = ({
       .catch(err => console.error('Failed to load blueprint metadata:', err));
   }, [blueprints]);
 
+  // v1.15.0 — fetch per-blueprint profitability for the selected hub (same source
+  // as Market Opportunities). Refetches when the blueprint set or hub changes.
+  useEffect(() => {
+    if (!blueprints || blueprints.length === 0) { setBpProfits({}); return; }
+    const typeIds = [...new Set(blueprints.map(b => b.type_id))];
+    let cancelled = false;
+    fetch('/api/blueprint-profits', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ blueprintTypeIds: typeIds, regionId }),
+    })
+      .then(res => res.json())
+      .then(data => { if (!cancelled) setBpProfits(data || {}); })
+      .catch(err => console.error('Failed to load blueprint profits:', err));
+    return () => { cancelled = true; };
+  }, [blueprints, regionId]);
+
+  const handleBpSort = (field: BpSortField) => {
+    if (field === bpSort) {
+      setBpSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setBpSort(field);
+      setBpSortDir(field === 'name' ? 'asc' : 'desc');
+    }
+  };
+
   const handleSort = (field: SortField) => {
     if (field === sortField) {
       setSortDirection((d) => (d === 'asc' ? 'desc' : 'asc'));
@@ -205,15 +245,33 @@ const MainContent: FC<MainContentProps> = ({
       else groups.set(b.type_id, [b]);
     });
 
-    // Step 3 — name search + sort
-    return Array.from(groups.entries())
-      .filter(([typeId]) => {
-        if (!q) return true;
-        return getBpName(typeId).toLowerCase().includes(q);
-      })
-      .sort(([a], [b]) => getBpName(a).localeCompare(getBpName(b)));
+    // Step 3 — name search
+    const entries = Array.from(groups.entries()).filter(([typeId]) => {
+      if (!q) return true;
+      return getBpName(typeId).toLowerCase().includes(q);
+    });
+
+    // Step 4 — sort. Name = alphabetical; metric sorts use /api/blueprint-profits
+    // values, with blueprints lacking market data pushed to the end.
+    const dir = bpSortDir === 'asc' ? 1 : -1;
+    const metric = (typeId: number): number | null => {
+      const p = bpProfits[typeId];
+      if (!p) return null;
+      return bpSort === 'margin' ? p.margin
+           : bpSort === 'profit' ? p.profit
+           : p.iskPerHour;
+    };
+    entries.sort(([a], [b]) => {
+      if (bpSort === 'name') return getBpName(a).localeCompare(getBpName(b));
+      const va = metric(a), vb = metric(b);
+      if (va == null && vb == null) return getBpName(a).localeCompare(getBpName(b));
+      if (va == null) return 1;   // no-data always last
+      if (vb == null) return -1;
+      return va === vb ? getBpName(a).localeCompare(getBpName(b)) : (va - vb) * dir;
+    });
+    return entries;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [blueprints, bpSearch, bpFilter, itemNames]);
+  }, [blueprints, bpSearch, bpFilter, itemNames, bpProfits, bpSort, bpSortDir]);
 
   const assetGroups = useMemo(() => {
     const g = new Map<string, { qty: number; typeId: number }>();
@@ -414,6 +472,29 @@ const MainContent: FC<MainContentProps> = ({
             ))}
           </div>
 
+          {/* Sort controls — same metrics as Market Opportunities (selected hub) */}
+          <div style={{ display: 'flex', gap: 4, marginBottom: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 10, color: 'var(--color-text-tertiary)', letterSpacing: 0.5, marginRight: 2 }}>
+              SORT
+            </span>
+            {([
+              ['iskPerHour', 'ISK/hr'],
+              ['margin',     'Margin'],
+              ['profit',     'Total ISK'],
+              ['name',       'Name'],
+            ] as [BpSortField, string][]).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                className={`pill-filter${bpSort === key ? ' active' : ''}`}
+                onClick={() => handleBpSort(key)}
+                aria-pressed={bpSort === key}
+              >
+                {label}{bpSort === key ? (bpSortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+              </button>
+            ))}
+          </div>
+
           {/* Blueprint list — grouped by type_id */}
           <div className="bp-list">
             {groupedBps.map(([typeId, copies]) => {
@@ -516,6 +597,34 @@ const MainContent: FC<MainContentProps> = ({
                       </div>
                     )}
                   </div>
+
+                  {/* Profitability metrics (selected hub) — active sort highlighted */}
+                  {(() => {
+                    const p = bpProfits[typeId];
+                    if (!p) {
+                      return <div className="bp-metrics bp-metrics-empty">no market<br/>data</div>;
+                    }
+                    return (
+                      <div className="bp-metrics">
+                        <div className={`bp-metric${bpSort === 'iskPerHour' ? ' active' : ''}`}>
+                          <span className="bp-metric-label">ISK/hr</span>
+                          <span className="bp-metric-val" style={{ color: p.iskPerHour > 0 ? 'var(--color-success)' : 'var(--color-danger)' }}>
+                            {formatISK(p.iskPerHour)}
+                          </span>
+                        </div>
+                        <div className={`bp-metric${bpSort === 'margin' ? ' active' : ''}`}>
+                          <span className="bp-metric-label">Margin</span>
+                          <span className="bp-metric-val">{formatMargin(p.margin)}</span>
+                        </div>
+                        <div className={`bp-metric${bpSort === 'profit' ? ' active' : ''}`}>
+                          <span className="bp-metric-label">Total ISK</span>
+                          <span className="bp-metric-val" style={{ color: p.profit > 0 ? 'var(--color-success)' : 'var(--color-danger)' }}>
+                            {formatISK(p.profit)}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               );
             })}
