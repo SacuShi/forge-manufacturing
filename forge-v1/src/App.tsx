@@ -182,7 +182,7 @@ const App: FC = () => {
     try { return JSON.parse(localStorage.getItem(PANEL_WIDTHS_KEY) || '{}').right ?? 460; } catch { return 460; }
   });
   const appBodyRef = useRef<HTMLDivElement>(null);
-  const panelDragRef = useRef<null | 'left' | 'right'>(null);
+  const panelDragRef = useRef<null | { which: 'left' | 'right'; startX: number; startW: number }>(null);
 
   const [marketHasMore,     setMarketHasMore]     = useState(true);
   const [marketError,       setMarketError]       = useState<string | null>(null);
@@ -645,22 +645,31 @@ const App: FC = () => {
   }, []);
 
   // ── Panel resize (v1.16.0) ────────────────────────────────────────────────
+  // Delta-from-drag-start (robust — independent of element offsets/overflow) +
+  // pointer capture so the drag survives the cursor leaving the thin handle.
   const startPanelDrag = useCallback((which: 'left' | 'right') => (e: React.PointerEvent) => {
     e.preventDefault();
-    panelDragRef.current = which;
+    panelDragRef.current = {
+      which,
+      startX: e.clientX,
+      startW: which === 'left' ? leftWidth : rightWidth,
+    };
+    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* ignore */ }
     document.body.style.userSelect = 'none';
     document.body.style.cursor = 'col-resize';
-  }, []);
+  }, [leftWidth, rightWidth]);
 
   useEffect(() => {
     const onMove = (e: PointerEvent) => {
-      const which = panelDragRef.current;
-      const rect = appBodyRef.current?.getBoundingClientRect();
-      if (!which || !rect) return;
-      if (which === 'left') {
-        setLeftWidth(Math.min(Math.max(e.clientX - rect.left, 180), 460));
+      const d = panelDragRef.current;
+      if (!d) return;
+      const delta = e.clientX - d.startX;
+      if (d.which === 'left') {
+        // Drag right → wider.
+        setLeftWidth(Math.min(Math.max(d.startW + delta, 180), 460));
       } else {
-        setRightWidth(Math.min(Math.max(rect.right - e.clientX, 300), 760));
+        // Right panel is right-docked: drag left → wider, drag right → narrower.
+        setRightWidth(Math.min(Math.max(d.startW - delta, 300), 760));
       }
     };
     const onUp = () => {
