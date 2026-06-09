@@ -171,6 +171,19 @@ const App: FC = () => {
   // React state updates are async so the closed-over state value can be stale
   // when two click events fire before the first re-render; a ref is set synchronously.
   const loadingMoreRef = useRef(false);
+
+  // v1.16.0 — user-resizable panels (left + right). Persisted across sessions.
+  // The right panel stays collapsed (width 0) until an item is selected (detailOpen).
+  const PANEL_WIDTHS_KEY = 'forge_panel_widths';
+  const [leftWidth, setLeftWidth] = useState<number>(() => {
+    try { return JSON.parse(localStorage.getItem(PANEL_WIDTHS_KEY) || '{}').left ?? 240; } catch { return 240; }
+  });
+  const [rightWidth, setRightWidth] = useState<number>(() => {
+    try { return JSON.parse(localStorage.getItem(PANEL_WIDTHS_KEY) || '{}').right ?? 460; } catch { return 460; }
+  });
+  const appBodyRef = useRef<HTMLDivElement>(null);
+  const panelDragRef = useRef<null | 'left' | 'right'>(null);
+
   const [marketHasMore,     setMarketHasMore]     = useState(true);
   const [marketError,       setMarketError]       = useState<string | null>(null);
   const [selectedMarket,    setSelectedMarket]    = useState<Market>(MARKETS[0]);
@@ -631,6 +644,46 @@ const App: FC = () => {
     setPanelHistory([]);   // clear back-stack on explicit close
   }, []);
 
+  // ── Panel resize (v1.16.0) ────────────────────────────────────────────────
+  const startPanelDrag = useCallback((which: 'left' | 'right') => (e: React.PointerEvent) => {
+    e.preventDefault();
+    panelDragRef.current = which;
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'col-resize';
+  }, []);
+
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      const which = panelDragRef.current;
+      const rect = appBodyRef.current?.getBoundingClientRect();
+      if (!which || !rect) return;
+      if (which === 'left') {
+        setLeftWidth(Math.min(Math.max(e.clientX - rect.left, 180), 460));
+      } else {
+        setRightWidth(Math.min(Math.max(rect.right - e.clientX, 300), 760));
+      }
+    };
+    const onUp = () => {
+      if (!panelDragRef.current) return;
+      panelDragRef.current = null;
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+  }, []);
+
+  // Persist panel widths
+  useEffect(() => {
+    try {
+      localStorage.setItem(PANEL_WIDTHS_KEY, JSON.stringify({ left: leftWidth, right: rightWidth }));
+    } catch { /* ignore */ }
+  }, [leftWidth, rightWidth]);
+
   const handleMarketChange = useCallback(async (market: Market) => {
     setSelectedMarket(market);
     setRawResults([]);
@@ -830,6 +883,14 @@ const App: FC = () => {
 
       <div
         className="app-body"
+        ref={appBodyRef}
+        style={{
+          // Desktop-only resizable widths (distinct vars so mobile/tablet media
+          // queries that use --sidebar-*-width are unaffected). Right panel
+          // collapses to 0 until an item is selected.
+          '--left-panel-w':  `${leftWidth}px`,
+          '--right-panel-w': detailOpen ? `${rightWidth}px` : '0px',
+        } as React.CSSProperties}
         onClick={(e) => {
           if (!chatAutoOpened) return;
           if (!(e.target as HTMLElement).closest('.chat-panel')) {
@@ -866,6 +927,16 @@ const App: FC = () => {
           totalWalletISK={totalWalletISK}
         />
 
+        {/* Drag handle: resize left sidebar (desktop only) */}
+        <div
+          className="resize-handle"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize navigation panel"
+          title="Drag to resize"
+          onPointerDown={startPanelDrag('left')}
+        />
+
         <MainContent
           activeTab={activeTab}
           onTabChange={setActiveTab}
@@ -893,6 +964,18 @@ const App: FC = () => {
           corpDataLoading={corpDataLoading}
           blueprintOwnerMap={blueprintOwnerMap}
         />
+
+        {/* Drag handle: resize the info panel — only when it's open (desktop only) */}
+        {detailOpen && (
+          <div
+            className="resize-handle"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize information panel"
+            title="Drag to resize"
+            onPointerDown={startPanelDrag('right')}
+          />
+        )}
 
         {/* Tablet overlay (dims background when detail panel is open) */}
         <div
