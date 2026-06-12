@@ -218,8 +218,12 @@ const MainContent: FC<MainContentProps> = ({
     }
 
     list.sort((a, b) => {
-      const aVal = a[sortField as keyof MarketItem] as number;
-      const bVal = b[sortField as keyof MarketItem] as number;
+      // Coerce null/undefined (e.g. un-enriched avgDailyVolume) to -Infinity so
+      // those rows always sink to the bottom regardless of sort direction.
+      const aRaw = a[sortField as keyof MarketItem] as number | null | undefined;
+      const bRaw = b[sortField as keyof MarketItem] as number | null | undefined;
+      const aVal = aRaw == null ? -Infinity : aRaw;
+      const bVal = bRaw == null ? -Infinity : bRaw;
       return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
     });
     return list;

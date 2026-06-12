@@ -27,6 +27,8 @@ import {
   formatISK,
   formatISKPerHour,
   formatMargin,
+  formatPerDay,
+  liquidityInfo,
   marginColourClass,
   profitColourClass,
 } from '../utils/format';
@@ -58,6 +60,12 @@ const EST_HINT =
   'GROSS estimate — sell minus materials, before your fees, with an unresearched blueprint. ' +
   'A comparison baseline (same value the AI quotes). Open an item to see your NET (True Profit).';
 
+// Liquidity column: how much the market actually absorbs per day. A fat margin on a
+// 2/day item is a trap — you crater your own price trying to offload a batch.
+const VOL_HINT =
+  'Sellable/day — mean units traded on the market (30-day history). High margin + low ' +
+  'volume = slow to liquidate. Dot: green liquid · amber thin · grey contract-only · red suspect.';
+
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const ICON_BASE = 'https://images.evetech.net/types';
@@ -69,6 +77,7 @@ const BASE_COLUMNS: ColDef[] = [
   { label: 'Margin',         field: 'margin',           align: 'right', hint: EST_HINT },
   { label: 'Est. ISK/hr',    field: 'iskPerHour',       align: 'right', hint: EST_HINT },
   { label: 'Build Time',   field: 'buildTimeMinutes', align: 'right'  },
+  { label: 'Sellable/day', field: 'avgDailyVolume',   align: 'right', hint: VOL_HINT },
   { label: 'Owned',        field: null,               align: 'center' },
   { label: 'Action',       field: null,               align: 'center' },
 ];
@@ -224,6 +233,22 @@ const ItemTable: FC<ItemTableProps> = ({
                   )}
                 </td>
               )}
+
+              {/* Sellable/day — market liquidity (always present) */}
+              {(() => {
+                const liq = liquidityInfo(item.liquidityRisk);
+                const isContract = item.liquidityRisk === 'contract_only';
+                return (
+                  <td className="align-right" title={liq.tip}>
+                    <span className="vol-cell">
+                      <span className={`liq-dot liq-${liq.dot}`} aria-hidden="true" />
+                      <span className="num" style={{ color: 'var(--color-text-secondary)' }}>
+                        {isContract ? 'contract' : formatPerDay(item.avgDailyVolume)}
+                      </span>
+                    </span>
+                  </td>
+                );
+              })()}
 
               {/* Owned badge */}
               <td className="align-center">

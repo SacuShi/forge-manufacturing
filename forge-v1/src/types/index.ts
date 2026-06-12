@@ -42,6 +42,10 @@ export interface MarketItem {
   priceSource?: string | null;
   /** 30-day average price when sell orders are absent (display reference only) */
   avg30dPrice?: number | null;
+  /** v1.20 — mean daily units traded on the market (from ESI 30-day history). Liquidity signal. */
+  avgDailyVolume?: number | null;
+  /** v1.20 — liquidity classification from the precompute: 'low_volume' | 'contract_only' | 'extreme_margin' | 'no_buy_orders' | 'suspicious_spread' | null (liquid) */
+  liquidityRisk?: string | null;
   /** v1.7 — haul cost for 1 finished unit (goods-out leg) */
   haulCostPerUnit?: number;
   /** v1.7 — effective ISK/m³ for the goods-out leg */
@@ -85,7 +89,7 @@ export interface ChatMessage {
 }
 
 export type TabId = 'market' | 'blueprints';
-export type SortField = 'rank' | 'profitPerRun' | 'margin' | 'iskPerHour' | 'buildTimeMinutes';
+export type SortField = 'rank' | 'profitPerRun' | 'margin' | 'iskPerHour' | 'buildTimeMinutes' | 'avgDailyVolume';
 export type SortDirection = 'asc' | 'desc';
 
 export interface ActiveJob {

@@ -1277,6 +1277,42 @@ tbody td.align-center { text-align: center; }
   margin: 2px 0 6px;
 }
 
+/* v1.20 — market-liquidity (Sellable/day) cell + dot */
+.vol-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.liq-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--color-text-tertiary);
+}
+.liq-success { background: var(--color-success); }
+.liq-warning { background: var(--color-warning); }
+.liq-danger  { background: var(--color-danger);  }
+.liq-muted   { background: var(--color-text-tertiary); }
+
+/* v1.20 — liquidity note under True Profit */
+.liquidity-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin-top: 8px;
+  padding: 7px 9px;
+  border-radius: 6px;
+  background: var(--color-bg-tertiary);
+  border: 0.5px solid rgba(79, 195, 247, 0.12);
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--color-text-secondary);
+}
+.liquidity-note .liq-dot { margin-top: 4px; }
+.liquidity-note strong { color: var(--color-text-primary); font-weight: 600; }
+
 .mat-list {
   background: var(--color-bg-tertiary);
   border: 0.5px solid rgba(79, 195, 247, 0.12);

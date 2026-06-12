@@ -24,6 +24,7 @@
 import { useMemo, useState, useCallback, useRef, useEffect, Fragment, type FC } from 'react';
 import type { ItemDetail, ItemDetailApiResponse, EsiBlueprint, Market, TrueCostResponse, AltCharacter, MaterialBreakdownResponse, BreakdownMaterial } from '../types';
 import { apiPost } from '../api/client';
+import { formatPerDay, liquidityInfo } from '../utils/format';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -65,6 +66,9 @@ interface RightSidebarProps {
   // v1.6 — Build runs selector
   buildRuns:            number;
   onBuildRunsChange:    (runs: number) => void;
+  // v1.20 — market liquidity for the selected item (drives the "days to clear" note)
+  selectedVolume:       number | null;
+  selectedLiquidityRisk: string | null;
   // v1.17.1 — implant selector for True Profit ISK/hr (default: none)
   activeImplants:       number[];
   selectedImplants:     number[];
@@ -306,6 +310,8 @@ const RightSidebar: FC<RightSidebarProps> = ({
   onFeeCharacterChange,
   buildRuns,
   onBuildRunsChange,
+  selectedVolume,
+  selectedLiquidityRisk,
   activeImplants,
   selectedImplants,
   onImplantsChange,
@@ -1496,6 +1502,33 @@ const RightSidebar: FC<RightSidebarProps> = ({
 
               </div>
             )}
+
+            {/* ── Market liquidity — can you actually sell it? (v1.20) ── */}
+            {(selectedVolume != null || selectedLiquidityRisk === 'contract_only') && (() => {
+              const liq  = liquidityInfo(selectedLiquidityRisk);
+              const vol  = selectedVolume ?? 0;
+              // Units to offload ≈ runs (1 output/run for the high-value items this
+              // matters for). A rough, honestly-hedged "days to clear" — not a promise.
+              const days = vol > 0 ? Math.ceil(displayRuns / vol) : 0;
+
+              let body;
+              if (selectedLiquidityRisk === 'contract_only') {
+                body = <>Not sold on the open market — moves via <strong>contracts</strong> only. The daily-volume signal doesn&rsquo;t apply here.</>;
+              } else if (selectedLiquidityRisk === 'low_volume') {
+                body = <>Thin market — only <strong>{formatPerDay(vol)}</strong> trade. Your {displayRuns}-run batch ≈ <strong>{days} day{days !== 1 ? 's' : ''}</strong> to clear; expect to undercut to sell faster.</>;
+              } else if (liq.dot === 'danger') {
+                body = <><strong>{liq.label}.</strong> {liq.tip}</>;
+              } else {
+                body = <>Liquid — market trades <strong>{formatPerDay(vol)}</strong>. Your {displayRuns}-run batch should sell without moving the price.</>;
+              }
+
+              return (
+                <div className="liquidity-note" title={liq.tip}>
+                  <span className={`liq-dot liq-${liq.dot}`} aria-hidden="true" />
+                  <span>{body}</span>
+                </div>
+              );
+            })()}
 
             {/* ── Throughput: effective build time + ISK/hr (v1.17.0) ── */}
             {trueCostData && !trueCostLoading && trueCostData.time && trueCostData.time.base_build_seconds > 0 && (() => {

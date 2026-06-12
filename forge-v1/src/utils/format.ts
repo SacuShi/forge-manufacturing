@@ -69,6 +69,49 @@ export function formatMargin(margin: number): string {
   return `+${margin.toFixed(1)}%`;
 }
 
+// ── Market liquidity ──────────────────────────────────────────────────────────
+
+/**
+ * Formats a mean daily traded volume into a compact "/day" string.
+ * Null/zero means the precompute hasn't enriched this item yet.
+ * @example formatPerDay(1843) → "1.8K/day"
+ * @example formatPerDay(2)    → "2/day"
+ */
+export function formatPerDay(volume: number | null | undefined): string {
+  if (volume == null || volume <= 0) return '—';
+  if (volume >= 1e6) return `${(volume / 1e6).toFixed(1)}M/day`;
+  if (volume >= 1e3) return `${(volume / 1e3).toFixed(1)}K/day`;
+  if (volume >= 100) return `${Math.round(volume)}/day`;
+  // Thin markets: keep one decimal so 1.5/day ≠ 2/day
+  return `${volume.toFixed(volume < 10 ? 1 : 0)}/day`;
+}
+
+/**
+ * Maps a precompute liquidity_risk classification to a display descriptor.
+ * `null`/'' means the item passed every liquidity check → liquid.
+ * `low_volume` is a soft warning (thin but tradeable); the rest are hard risks.
+ */
+export function liquidityInfo(risk: string | null | undefined): {
+  dot: 'success' | 'warning' | 'danger' | 'muted';
+  label: string;
+  tip: string;
+} {
+  switch (risk) {
+    case 'low_volume':
+      return { dot: 'warning', label: 'Thin', tip: 'Thin market — high margin but slow to liquidate. You may move only a few per day.' };
+    case 'contract_only':
+      return { dot: 'muted', label: 'Contract', tip: 'Not sold on the regional market — only moves via contracts. Volume figure does not apply.' };
+    case 'extreme_margin':
+      return { dot: 'danger', label: 'Suspect', tip: 'Margin exceeds 500% — likely a phantom/scam price, not a real spread.' };
+    case 'no_buy_orders':
+      return { dot: 'danger', label: 'No bids', tip: 'No buy orders against a high sell price — price may be unreliable.' };
+    case 'suspicious_spread':
+      return { dot: 'danger', label: 'Suspect', tip: 'Spread over 90% — unusual; treat the sell price with caution.' };
+    default:
+      return { dot: 'success', label: 'Liquid', tip: 'Healthy daily volume for its price tier — should sell at the listed price.' };
+  }
+}
+
 // ── Build time ───────────────────────────────────────────────────────────────
 
 /**

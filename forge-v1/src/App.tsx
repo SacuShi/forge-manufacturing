@@ -88,6 +88,8 @@ function mapToMarketItems(
       canBuild:         owned !== '—',
       priceSource:      item.price_source ?? null,
       avg30dPrice:      item.avg_30d_price ?? null,
+      avgDailyVolume:   item.avg_daily_volume ?? null,
+      liquidityRisk:    item.liquidity_risk ?? null,
       haulCostPerUnit:  item.haul_cost_per_unit ?? 0,
       haulIskPerM3:     item.haul_isk_per_m3    ?? 0,
       haulVolumeM3:     item.haul_volume_m3      ?? 0,
@@ -538,6 +540,14 @@ const App: FC = () => {
     return toItemDetail(raw, mi?.owned ?? '—');
   })();
 
+  // v1.20 — liquidity signal for the selected item, fed to the True Profit panel.
+  // Prefer the mapped MarketItem (covers drill-down items not in rawResults).
+  const selectedItem = selectedTypeId
+    ? marketItems.find((m) => m.typeId === selectedTypeId) ?? null
+    : null;
+  const selectedVolume       = selectedItem?.avgDailyVolume ?? null;
+  const selectedLiquidityRisk = selectedItem?.liquidityRisk ?? null;
+
   const handleLoadMoreMarket = useCallback(async () => {
     // Use a ref guard (not state) so the check is synchronous — prevents two rapid
     // clicks from both passing the guard before the first setState re-render fires.
@@ -984,6 +994,8 @@ const App: FC = () => {
           onFeeCharacterChange={setFeeCharacterId}
           buildRuns={buildRuns}
           onBuildRunsChange={setBuildRuns}
+          selectedVolume={selectedVolume}
+          selectedLiquidityRisk={selectedLiquidityRisk}
           activeImplants={auth.implants}
           selectedImplants={selectedImplants}
           onImplantsChange={setSelectedImplants}

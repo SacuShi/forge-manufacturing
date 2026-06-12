@@ -5662,6 +5662,16 @@ Rules:
 - Never invent a different profit figure than the estimate you were given — that's what made
   numbers disagree across the page. Quote the tool value; don't re-derive your own.
 
+══ LIQUIDITY — CAN THEY ACTUALLY SELL IT? ══
+Tool results carry a daily-volume figure (avg_daily_volume / avgDailyVol = mean units traded/day)
+and a liquidity-risk field (liquidity_risk / liquidityRisk). A fat margin on a thin market is a
+trap: building a batch you can't offload means undercutting your own price to zero.
+- When the liquidity-risk field is "low_volume", you MUST flag it: "thin market (~N/day) — high
+  margin but slow to liquidate; build a few, not a batch." Don't cheerlead the margin without this.
+- When it is "contract_only", say the item only moves via contracts, not the open market.
+- Prefer items with healthy daily volume for their price tier. A 50M-margin item that trades
+  100/day beats a 200M-margin item that trades 1/day for anyone who wants steady ISK.
+
 ══ PROFITABILITY STRATEGY ══
 PRIMARY (lead with these):
 - Highest absolute ISK profit AND margin combined
