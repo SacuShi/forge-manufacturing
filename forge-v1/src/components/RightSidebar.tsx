@@ -966,8 +966,8 @@ const RightSidebar: FC<RightSidebarProps> = ({
         {!apiDetail && !detailLoading && fallbackDetail && (
           <>
             <div className="detail-section">
-              <div className="detail-section-heading" title="Gross estimate before your fees/blueprint — same baseline as the Market table and the AI. True Profit (your net) loads below.">
-                Estimate (pre-fee)
+              <div className="detail-section-heading" title="GROSS estimate before your fees/blueprint — same baseline as the Market table and the AI. True Profit (your NET) loads below.">
+                Gross Estimate (pre-fee)
               </div>
               <div className="stat-card">
                 <div className="stat-card-label">Sell Price</div>
@@ -978,7 +978,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
                 <div className="stat-card-value">{formatISK(fallbackDetail.matCost)}</div>
               </div>
               <div className="stat-card">
-                <div className="stat-card-label">Est. Profit / Run</div>
+                <div className="stat-card-label">Est. Gross Profit / Run</div>
                 <div
                   className="stat-card-value"
                   style={{ color: fallbackDetail.profitPerRun > 0 ? 'var(--color-success)' : 'var(--color-danger)' }}
@@ -1019,7 +1019,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
         {selectedTypeId && (
           <div className="detail-section">
             <div className="detail-section-heading" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span>True Profit</span>
+              <span>True Profit (Net)</span>
               {/* v1.5 — Fee character selector (only shown when alts are loaded) */}
               {altCharacters.length > 0 && (
                 <select
@@ -1345,7 +1345,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
 
                   return (
                     <div className={`cost-box true-profit${trueCostData.true_profit >= 0 ? ' positive' : ' negative'}`}>
-                      <span className="cost-box-label">True Profit</span>
+                      <span className="cost-box-label">True Profit (Net)</span>
                       <span className="cost-box-value">
                         {formatISK(trueCostData.true_profit)}
                       </span>

@@ -5649,14 +5649,14 @@ Use this as your baseline before calling tools. Call get_active_jobs for full jo
 
 ══ FIGURE CONSISTENCY — READ THIS ══
 There is ONE shared baseline and ONE per-character figure. Keep them straight:
-- get_precomputed / compare_markets / analyze_blueprints profit + ISK/hr = the ESTIMATED
-  SPREAD: gross, BEFORE broker fee, sales tax, job fees (SCI/SCC/facility) and haulage, and
+- get_precomputed / compare_markets / analyze_blueprints profit + ISK/hr = the GROSS
+  ESTIMATE: sell minus materials, BEFORE broker fee, sales tax, job fees (SCI/SCC/facility) and haulage, and
   assuming an UNRESEARCHED blueprint (ME 0). This is the raw precompute — the SAME numbers the
   Market Opportunities table shows and the DB stores. It is a comparison baseline, NOT take-home.
-- "True Profit" (the item info panel) = the player's NET: their effective ME, skills, standings,
-  structure, runs and haulage applied. This is the real number.
+- "True Profit (Net)" (the item info panel) = the player's NET: their effective ME, skills, standings,
+  structure, runs and haulage applied. This is the real take-home number.
 Rules:
-- Call your numbers an "estimated spread (before fees)" — never present them as guaranteed net.
+- Call your numbers a "gross estimate (before fees)" — never present them as guaranteed net.
 - When the user asks what they'll ACTUALLY make on a specific item, give the estimate, then say
   the exact figure is "True Profit" in the item panel (which nets out fees, their blueprint ME, etc.).
 - Never invent a different profit figure than the estimate you were given — that's what made
@@ -6754,45 +6754,65 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
     const facilityTaxCost = eiv * facilityTaxDecimal;
     const totalJobCost   = systemJobCost + sccSurcharge + facilityTaxCost;
 
-    // ── Prices: derive from the SAME precompute baseline the Market estimate uses ──
-    // v1.19.1 — True Profit now starts from the precompute row (sell_price +
-    // material_cost) for the relevant hubs, so it RECONCILES with the Market
-    // Opportunities / AI estimate. The only differences become visible line items:
-    //   True Profit = Est. gross  − ME savings (materials × meFactor)
-    //                            − Mfg job fees − Sales fees − Haulage
-    // Job-fee EIV still uses CCP adjusted prices (computed above) — that is the
-    // game's fee basis and is independent of market price.
-    // Live regionPriceCache is used ONLY as a fallback for items the precompute
-    // doesn't cover (e.g. reactions), so coverage is unchanged.
-    const [precompMat, precompSell] = await Promise.all([
-      dbGet('SELECT material_cost FROM precomputed_profits WHERE product_id = ? AND region_id = ?', [product_id, matRegionId]),
-      dbGet('SELECT sell_price   FROM precomputed_profits WHERE product_id = ? AND region_id = ?', [product_id, sellRegionId]),
-    ]);
+    // ── Prices: LIVE, and the SAME live source the materials/shortfall list uses ──
+    // v1.19.2 — the per-item panel is the decision moment, so it uses CURRENT market
+    // prices (regionPriceCache, sell-sourced) for both material cost and sell price —
+    // identical to the materials list and the "to buy" shortfall, so the whole panel
+    // agrees with itself and reflects the market right now.
+    //   • Source hub (matRegionId)  — where the player buys raw materials
+    //   • Sell hub   (sellRegionId) — where the finished goods are listed
+    // The Market Opportunities table / AI deliberately use the (6-hourly) precompute
+    // "Est." baseline for cross-item ranking — that's a labelled estimate, not this.
+    // When a region cache is cold (e.g. just after a restart) we temporarily fall back
+    // to the precompute row, flag prices_warm=false, and warm in the background; the
+    // client silently retries so the figure upgrades to live within ~15s.
     const matEntry  = regionPriceCache.get(matRegionId);
     const sellEntry = regionPriceCache.get(sellRegionId);
+    const matWarm   = !!(matEntry  && Date.now() < matEntry.expiry);
+    const sellWarm  = !!(sellEntry && Date.now() < sellEntry.expiry);
+    const pricesWarm = matWarm && sellWarm;
 
-    // Material cost — precompute baseline (ME0, 1 run) × meFactor × runs.
-    let totalMaterialCost;
-    if (precompMat && precompMat.material_cost > 0) {
-      totalMaterialCost = precompMat.material_cost * meFactor * runs;
-    } else if (matEntry) {
-      // Fallback: live source-hub prices for items not in the precompute.
-      totalMaterialCost = 0;
+    // Material cost — live source-hub sell prices, ME-adjusted per material (ceil).
+    let totalMaterialCost = 0;
+    if (matWarm) {
       for (const mat of materials) {
         const matPrice = matEntry.prices[mat.material_id]?.sell || 0;
-        totalMaterialCost += matPrice * Math.max(1, Math.ceil(mat.quantity * meFactor)) * runs;
+        totalMaterialCost += matPrice * (Math.max(1, Math.ceil(mat.quantity * meFactor)) * runs);
       }
     } else {
-      totalMaterialCost = 0;
+      // Cold — temporary precompute fallback (ME-scaled) + background warm.
+      const precompMat = await dbGet(
+        'SELECT material_cost FROM precomputed_profits WHERE product_id = ? AND region_id = ?',
+        [product_id, matRegionId]
+      );
+      totalMaterialCost = (precompMat?.material_cost || 0) * meFactor * runs;
+      if (!regionWarmingSet.has(matRegionId)) {
+        regionWarmingSet.add(matRegionId);
+        fetchRegionPrices(matRegionId)
+          .then(prices => setRegionPriceCache(matRegionId, prices))
+          .catch(() => {})
+          .finally(() => regionWarmingSet.delete(matRegionId));
+      }
     }
 
-    // Sell price (per unit) — precompute baseline, live fallback.
-    const unitSell = (precompSell && precompSell.sell_price > 0)
-      ? precompSell.sell_price
-      : (sellEntry?.prices[product_id]?.sell || 0);
-
-    // We deliberately use the precompute baseline → always "warm" (it IS the source).
-    const pricesWarm = true;
+    // Sell price — live sell-hub price, precompute fallback when cold.
+    let unitSell = 0;
+    if (sellWarm) {
+      unitSell = sellEntry.prices[product_id]?.sell || 0;
+    } else {
+      const precompSell = await dbGet(
+        'SELECT sell_price FROM precomputed_profits WHERE product_id = ? AND region_id = ?',
+        [product_id, sellRegionId]
+      );
+      unitSell = precompSell?.sell_price || 0;
+      if (!regionWarmingSet.has(sellRegionId)) {
+        regionWarmingSet.add(sellRegionId);
+        fetchRegionPrices(sellRegionId)
+          .then(prices => setRegionPriceCache(sellRegionId, prices))
+          .catch(() => {})
+          .finally(() => regionWarmingSet.delete(sellRegionId));
+      }
+    }
 
     const productUnits = (blueprint.product_quantity || 1) * runs;
     const sellPrice    = unitSell * productUnits;

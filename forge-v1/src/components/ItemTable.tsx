@@ -55,8 +55,8 @@ interface ColDef {
 
 // Shared explanation of the "Est." figures so every header tells the same story.
 const EST_HINT =
-  'Estimated spread — gross, before your fees, with an unresearched blueprint. ' +
-  'A comparison baseline (same value the AI quotes). Open an item to see your all-in True Profit.';
+  'GROSS estimate — sell minus materials, before your fees, with an unresearched blueprint. ' +
+  'A comparison baseline (same value the AI quotes). Open an item to see your NET (True Profit).';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -65,9 +65,9 @@ const ICON_BASE = 'https://images.evetech.net/types';
 const BASE_COLUMNS: ColDef[] = [
   { label: '#',            field: 'rank',            align: 'center' },
   { label: 'Item',         field: null                               },
-  { label: 'Est. Profit',  field: 'profitPerRun',    align: 'right', hint: EST_HINT },
-  { label: 'Margin',       field: 'margin',           align: 'right', hint: EST_HINT },
-  { label: 'Est. ISK/hr',  field: 'iskPerHour',       align: 'right', hint: EST_HINT },
+  { label: 'Est. Gross',     field: 'profitPerRun',    align: 'right', hint: EST_HINT },
+  { label: 'Margin',         field: 'margin',           align: 'right', hint: EST_HINT },
+  { label: 'Est. ISK/hr',    field: 'iskPerHour',       align: 'right', hint: EST_HINT },
   { label: 'Build Time',   field: 'buildTimeMinutes', align: 'right'  },
   { label: 'Owned',        field: null,               align: 'center' },
   { label: 'Action',       field: null,               align: 'center' },
