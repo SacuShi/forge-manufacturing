@@ -6754,69 +6754,45 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
     const facilityTaxCost = eiv * facilityTaxDecimal;
     const totalJobCost   = systemJobCost + sccSurcharge + facilityTaxCost;
 
-    // ── Market prices: source hub for materials, sell hub for revenue ────
-    //
-    // Source hub  (matRegionId)  — where the player buys raw materials
-    // Sell hub    (sellRegionId) — where the finished goods are listed
-    //
-    // When both caches are warm, prices are exact.
-    // When either is cold (e.g. first request after a restart), we fall back
-    // to the precomputed DB row for that region (ME-scaled approximation) and
-    // kick off a background warm so the next request gets live prices.
+    // ── Prices: derive from the SAME precompute baseline the Market estimate uses ──
+    // v1.19.1 — True Profit now starts from the precompute row (sell_price +
+    // material_cost) for the relevant hubs, so it RECONCILES with the Market
+    // Opportunities / AI estimate. The only differences become visible line items:
+    //   True Profit = Est. gross  − ME savings (materials × meFactor)
+    //                            − Mfg job fees − Sales fees − Haulage
+    // Job-fee EIV still uses CCP adjusted prices (computed above) — that is the
+    // game's fee basis and is independent of market price.
+    // Live regionPriceCache is used ONLY as a fallback for items the precompute
+    // doesn't cover (e.g. reactions), so coverage is unchanged.
+    const [precompMat, precompSell] = await Promise.all([
+      dbGet('SELECT material_cost FROM precomputed_profits WHERE product_id = ? AND region_id = ?', [product_id, matRegionId]),
+      dbGet('SELECT sell_price   FROM precomputed_profits WHERE product_id = ? AND region_id = ?', [product_id, sellRegionId]),
+    ]);
     const matEntry  = regionPriceCache.get(matRegionId);
     const sellEntry = regionPriceCache.get(sellRegionId);
-    const matWarm   = !!(matEntry  && Date.now() < matEntry.expiry);
-    const sellWarm  = !!(sellEntry && Date.now() < sellEntry.expiry);
-    const pricesWarm = matWarm && sellWarm; // both must be warm for live flag
 
-    // ── Material cost ─────────────────────────────────────────────────────
-    let totalMaterialCost = 0;
-
-    if (matWarm) {
-      // Live source-hub prices — exact ME-adjusted quantities
+    // Material cost — precompute baseline (ME0, 1 run) × meFactor × runs.
+    let totalMaterialCost;
+    if (precompMat && precompMat.material_cost > 0) {
+      totalMaterialCost = precompMat.material_cost * meFactor * runs;
+    } else if (matEntry) {
+      // Fallback: live source-hub prices for items not in the precompute.
+      totalMaterialCost = 0;
       for (const mat of materials) {
         const matPrice = matEntry.prices[mat.material_id]?.sell || 0;
-        const adjQty   = Math.max(1, Math.ceil(mat.quantity * meFactor)) * runs;
-        totalMaterialCost += matPrice * adjQty;
+        totalMaterialCost += matPrice * Math.max(1, Math.ceil(mat.quantity * meFactor)) * runs;
       }
     } else {
-      // Cold — fall back to precomputed DB value (ME=0, scaled by meFactor)
-      const precompMat = await dbGet(
-        'SELECT material_cost FROM precomputed_profits WHERE product_id = ? AND region_id = ?',
-        [product_id, matRegionId]
-      );
-      totalMaterialCost = ((precompMat?.material_cost || 0) * meFactor * runs);
-      // Trigger background warm for source hub
-      if (!regionWarmingSet.has(matRegionId)) {
-        regionWarmingSet.add(matRegionId);
-        fetchRegionPrices(matRegionId)
-          .then(prices => setRegionPriceCache(matRegionId, prices))
-          .catch(() => {})
-          .finally(() => regionWarmingSet.delete(matRegionId));
-      }
+      totalMaterialCost = 0;
     }
 
-    // ── Sell price ────────────────────────────────────────────────────────
-    let unitSell = 0;
+    // Sell price (per unit) — precompute baseline, live fallback.
+    const unitSell = (precompSell && precompSell.sell_price > 0)
+      ? precompSell.sell_price
+      : (sellEntry?.prices[product_id]?.sell || 0);
 
-    if (sellWarm) {
-      unitSell = sellEntry.prices[product_id]?.sell || 0;
-    } else {
-      // Cold — fall back to precomputed sell price for the sell hub
-      const precompSell = await dbGet(
-        'SELECT sell_price FROM precomputed_profits WHERE product_id = ? AND region_id = ?',
-        [product_id, sellRegionId]
-      );
-      unitSell = precompSell?.sell_price || 0;
-      // Trigger background warm for sell hub (if not already warming)
-      if (!regionWarmingSet.has(sellRegionId)) {
-        regionWarmingSet.add(sellRegionId);
-        fetchRegionPrices(sellRegionId)
-          .then(prices => setRegionPriceCache(sellRegionId, prices))
-          .catch(() => {})
-          .finally(() => regionWarmingSet.delete(sellRegionId));
-      }
-    }
+    // We deliberately use the precompute baseline → always "warm" (it IS the source).
+    const pricesWarm = true;
 
     const productUnits = (blueprint.product_quantity || 1) * runs;
     const sellPrice    = unitSell * productUnits;
