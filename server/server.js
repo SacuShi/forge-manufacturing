@@ -6653,6 +6653,10 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
       runs           = 1,
       regionId       = 10000002,  // sell hub (backward-compat param name)
       materialRegionId = regionId, // source hub — where materials are purchased
+      // v1.17.1 — implant set to apply to the ISK/hr calc. DEFAULT = none.
+      // The client passes the type_ids of the clone/implant set the user explicitly
+      // selected; otherwise True Profit reflects NO implants (honest default).
+      implants: selectedImplants = [],
     } = req.body;
 
     // Validate both hub IDs against the known whitelist
@@ -6664,8 +6668,10 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
 
     if (!product_id) return res.status(400).json({ error: 'product_id required' });
 
-    // ── Session: skills + standings + implants ─────────────────────────────
-    const { skillMap, standings, implants } = getCharacterSession(characterId);
+    // ── Session: skills + standings ────────────────────────────────────────
+    const { skillMap, standings } = getCharacterSession(characterId);
+    // Implant set is whatever the client explicitly selected (default none).
+    const implants = Array.isArray(selectedImplants) ? selectedImplants : [];
 
     // ── Industry settings (system, structure, rigs, facility tax) ──────────
     const settings = await dbGet(

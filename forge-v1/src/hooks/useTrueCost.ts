@@ -38,6 +38,7 @@ export function useTrueCost(
   te:               number,       // time efficiency — passed through to server for future use
   token:            string | null,
   runs:             number = 1,   // number of manufacturing runs
+  implants:         number[] = [], // v1.17.1 — selected implant set (default none)
 ): UseTrueCostResult {
   const [data,    setData]    = useState<TrueCostResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -73,6 +74,7 @@ export function useTrueCost(
           runs:             Math.max(1, runs),
           regionId:         sellRegionId,
           materialRegionId: materialRegionId,
+          implants,
         }, token);
 
         if (!cancelled) {
@@ -115,7 +117,7 @@ export function useTrueCost(
 
   // Re-fetch when item, hub, blueprint ME/TE, or runs count changes
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [productTypeId, sellRegionId, materialRegionId, token, me, te, runs]);
+  }, [productTypeId, sellRegionId, materialRegionId, token, me, te, runs, implants.join(',')]);
 
   return { data, loading, error };
 }

@@ -65,11 +65,24 @@ interface RightSidebarProps {
   // v1.6 — Build runs selector
   buildRuns:            number;
   onBuildRunsChange:    (runs: number) => void;
+  // v1.17.1 — implant selector for True Profit ISK/hr (default: none)
+  activeImplants:       number[];
+  selectedImplants:     number[];
+  onImplantsChange:     (implants: number[]) => void;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const ICON_BASE = 'https://images.evetech.net/types';
+
+// v1.17.1 — manufacturing-time implants offered in the True Profit implant selector.
+// Mirrors the server's INDUSTRY_IMPLANTS (mfg_time entries). type_id → {short, pct}.
+const MFG_TIME_IMPLANTS: Record<number, { short: string; pct: number }> = {
+  27170: { short: 'BX-801', pct: 1 },
+  27167: { short: 'BX-802', pct: 2 },
+  27171: { short: 'BX-804', pct: 4 },
+};
+const WHATIF_BX_IDS = [27170, 27167, 27171]; // always offered as "what-if"
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -293,6 +306,9 @@ const RightSidebar: FC<RightSidebarProps> = ({
   onFeeCharacterChange,
   buildRuns,
   onBuildRunsChange,
+  activeImplants,
+  selectedImplants,
+  onImplantsChange,
 }) => {
   const isJita       = selectedMarket.id === 10000002;
   const marketLabel  = `${selectedMarket.name}${selectedMarket.type === 'nullsec' ? ' [NULLSEC]' : ''}`;
@@ -1061,6 +1077,48 @@ const RightSidebar: FC<RightSidebarProps> = ({
                 <span style={{ fontSize: 10, color: 'var(--color-text-tertiary)' }}>runs</span>
               </div>
             </div>
+
+            {/* v1.17.1 — Implant selector. Default = none (no implant applied to ISK/hr).
+                Lets the user opt into seeing the throughput effect of their current
+                clone's implant, or a what-if BX-80x. */}
+            {(() => {
+              const opts: Array<{ value: string; label: string; ids: number[] }> = [
+                { value: '', label: 'No implants (default)', ids: [] },
+              ];
+              const seen = new Set<number>();
+              for (const id of activeImplants) {
+                const imp = MFG_TIME_IMPLANTS[id];
+                if (!imp || seen.has(id)) continue;
+                opts.push({ value: `c${id}`, label: `Current clone — ${imp.short} (−${imp.pct}% time)`, ids: [id] });
+                seen.add(id);
+              }
+              for (const id of WHATIF_BX_IDS) {
+                if (seen.has(id)) continue;
+                const imp = MFG_TIME_IMPLANTS[id];
+                opts.push({ value: `w${id}`, label: `What-if: ${imp.short} (−${imp.pct}% time)`, ids: [id] });
+              }
+              const curId = selectedImplants[0];
+              const curValue = !curId ? ''
+                : (activeImplants.includes(curId) ? `c${curId}` : `w${curId}`);
+              return (
+                <div className="implant-selector">
+                  <span className="implant-selector-label">💊 Implants</span>
+                  <select
+                    className="fee-char-select"
+                    value={curValue}
+                    title="Implants affect build time → ISK/hr only (not material cost). Default applies none."
+                    onChange={(e) => {
+                      const opt = opts.find(o => o.value === e.target.value);
+                      onImplantsChange(opt ? opt.ids : []);
+                    }}
+                    aria-label="Implant set to apply to ISK/hr"
+                    style={{ flex: 1 }}
+                  >
+                    {opts.map(o => <option key={o.value || 'none'} value={o.value}>{o.label}</option>)}
+                  </select>
+                </div>
+              );
+            })()}
 
             {trueCostLoading && (
               <div style={{ textAlign: 'center', padding: '12px 0',

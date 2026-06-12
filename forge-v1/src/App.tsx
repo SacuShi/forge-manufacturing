@@ -210,6 +210,8 @@ const App: FC = () => {
   const [viewCharacterId, setViewCharacterId] = useState<number | null>(null);
   const [feeCharacterId,  setFeeCharacterId]  = useState<number | null>(null);
   const [buildRuns,       setBuildRuns]       = useState(1);
+  // v1.17.1 — implant set the user chose to apply to True Profit ISK/hr (default none)
+  const [selectedImplants, setSelectedImplants] = useState<number[]>([]);
 
   // ── v1.5 Aggregation ──────────────────────────────────────────────────────
   // Derive combined/isolated datasets from primary + alts based on viewCharacterId.
@@ -423,6 +425,7 @@ const App: FC = () => {
     selectedBlueprintTE,
     feeToken,
     buildRuns,
+    selectedImplants,
   );
 
   useEffect(() => {
@@ -1018,6 +1021,9 @@ const App: FC = () => {
           onFeeCharacterChange={setFeeCharacterId}
           buildRuns={buildRuns}
           onBuildRunsChange={setBuildRuns}
+          activeImplants={auth.implants}
+          selectedImplants={selectedImplants}
+          onImplantsChange={setSelectedImplants}
         />
 
         <ChatPanel

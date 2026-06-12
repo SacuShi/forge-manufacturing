@@ -99,6 +99,8 @@ export interface AuthState {
   blueprints:       EsiBlueprint[];
   assets:           EsiAsset[];
   skills:           Array<{ skill_id: number; active_skill_level: number }>;
+  /** v1.17.1 — primary character's active implant type_ids (for the True Profit implant selector) */
+  implants:         number[];
   hasStandingsScope: boolean;
   /** Primary character standings — exposed so App.tsx can include them in combined re-POST */
   primaryStandings: StandingsData | null;
@@ -201,6 +203,8 @@ export function useAuth(): AuthState & {
   const [blueprints,        setBlueprints]        = useState<EsiBlueprint[]>([]);
   const [assets,            setAssets]            = useState<EsiAsset[]>([]);
   const [skills,            setSkills]            = useState<Array<{ skill_id: number; active_skill_level: number }>>([]);
+  // v1.17.1 — primary character's active implant type_ids (for the True Profit implant selector)
+  const [implants,          setImplants]          = useState<number[]>([]);
   const [hasStandingsScope, setHasStandingsScope] = useState(false);
   const [primaryStandings,  setPrimaryStandings]  = useState<StandingsData | null>(null);
   const [error,             setError]             = useState<string | null>(null);
@@ -384,6 +388,7 @@ export function useAuth(): AuthState & {
       let implantData: number[] = [];
       try {
         implantData = await esiGet<number[]>(`/characters/${cid}/implants/`, acc);
+        setImplants(implantData);
         addLog('Implants', 'ok', `${implantData.length} plugged in`);
       } catch (e) {
         addLog('Implants', 'warn', `Not loaded — ${(e as Error).message}`);
@@ -766,6 +771,7 @@ export function useAuth(): AuthState & {
     setBlueprints([]);
     setAssets([]);
     setSkills([]);
+    setImplants([]);
     setHasStandingsScope(false);
     setPrimaryStandings(null);
     setError(null);
@@ -792,6 +798,7 @@ export function useAuth(): AuthState & {
     blueprints,
     assets,
     skills,
+    implants,
     hasStandingsScope,
     primaryStandings,
     error,
