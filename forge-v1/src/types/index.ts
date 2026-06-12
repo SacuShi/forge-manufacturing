@@ -595,6 +595,19 @@ export interface TrueCostResponse {
   prices_warm:  boolean;
   setup_configured: boolean;
 
+  /** v1.17.0 — effective build time + ISK/hr (incl. TE, Industry skills, structure TE, implant) */
+  time?: {
+    base_build_seconds:      number;
+    effective_build_seconds: number;
+    isk_per_hour:            number;
+    te_pct:                  number;
+    industry_level:          number;
+    advanced_industry_level: number;
+    structure_te_bonus_pct:  number;
+    mfg_implant:    { name: string; pct: number } | null;
+    reproc_implant: { name: string; pct: number } | null;
+  };
+
   manufacturing_setup: {
     system_id:         number | null;
     system_name:       string;

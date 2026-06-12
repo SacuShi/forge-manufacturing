@@ -65,7 +65,9 @@ const SCOPES =
   // blueprints/assets/jobs directly (dynamic any-corp model; no admin setup).
   'esi-corporations.read_blueprints.v1 ' +
   'esi-assets.read_corporation_assets.v1 ' +
-  'esi-industry.read_corporation_jobs.v1';
+  'esi-industry.read_corporation_jobs.v1 ' +
+  // v1.17.0 — active implants (industry hardwirings affect build time / ISK-hr).
+  'esi-clones.read_implants.v1';
 
 const SESSION_TOKEN_KEY = 'forge_token';
 const SESSION_STATE_KEY = 'forge_oauth_state';
@@ -375,6 +377,18 @@ export function useAuth(): AuthState & {
         }
       }
 
+      // ── 9b. Active implants (industry hardwirings → build time / ISK-hr) ──
+      // Returns an array of plugged-in implant type_ids. Graceful: a missing
+      // scope (old session) just leaves the list empty.
+      setLoadStep('Loading implants…');
+      let implantData: number[] = [];
+      try {
+        implantData = await esiGet<number[]>(`/characters/${cid}/implants/`, acc);
+        addLog('Implants', 'ok', `${implantData.length} plugged in`);
+      } catch (e) {
+        addLog('Implants', 'warn', `Not loaded — ${(e as Error).message}`);
+      }
+
       // ── Build CharacterInfo ──────────────────────────────────────────────
       const bpoCount = bData.filter((bp) => bp.quantity === -1).length;
       setCharacter({
@@ -400,6 +414,7 @@ export function useAuth(): AuthState & {
           total_sp:  totalSp,
           standings: standingsScopeGranted ? standingsData : null,
           planets:   planetData,
+          implants:  implantData,
         }, acc);
         addLog('Session', 'ok', 'Cached on server (2hr expiry)');
       } catch (e) {

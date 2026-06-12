@@ -1458,6 +1458,38 @@ const RightSidebar: FC<RightSidebarProps> = ({
               </div>
             )}
 
+            {/* ── Throughput: effective build time + ISK/hr (v1.17.0) ── */}
+            {trueCostData && !trueCostLoading && trueCostData.time && trueCostData.time.base_build_seconds > 0 && (() => {
+              const t = trueCostData.time;
+              const fmtDur = (s: number) => {
+                if (!s || s <= 0) return '—';
+                const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+                if (d > 0) return `${d}d ${h}h`;
+                if (h > 0) return `${h}h ${m}m`;
+                return `${m}m`;
+              };
+              const tip =
+                `Effective build time for ${trueCostData.runs} run(s): ${fmtDur(t.effective_build_seconds)} ` +
+                `(base ${fmtDur(t.base_build_seconds)}).\n` +
+                `Applied: TE ${t.te_pct}%, Industry L${t.industry_level} (−${4 * t.industry_level}%), ` +
+                `Adv. Industry L${t.advanced_industry_level} (−${3 * t.advanced_industry_level}%), ` +
+                `structure TE −${t.structure_te_bonus_pct}%` +
+                (t.mfg_implant ? `, ${t.mfg_implant.name} (−${t.mfg_implant.pct}%)` : ', no mfg-time implant') +
+                `.\nISK/hr = True Profit ÷ build hours.` +
+                (t.reproc_implant ? `\nAlso plugged in: ${t.reproc_implant.name} (+${t.reproc_implant.pct}% reprocessing).` : '');
+              return (
+                <div className="iskhr-row" title={tip}>
+                  <span className="iskhr-time">⏱ {fmtDur(t.effective_build_seconds)}</span>
+                  <span className="iskhr-value" style={{ color: t.isk_per_hour >= 0 ? 'var(--color-success)' : 'var(--color-danger)' }}>
+                    {formatISK(t.isk_per_hour)}/hr
+                  </span>
+                  {t.mfg_implant
+                    ? <span className="iskhr-implant" title={t.mfg_implant.name}>💊 −{t.mfg_implant.pct}%</span>
+                    : <span className="iskhr-implant iskhr-implant-none">no implant</span>}
+                </div>
+              );
+            })()}
+
             {/* ── Haul box row — shown when any haul is configured ── */}
             {trueCostData && !trueCostLoading && (() => {
               const h = trueCostData.haul_cost;

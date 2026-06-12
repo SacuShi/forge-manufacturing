@@ -888,6 +888,30 @@ tbody td.align-center { text-align: center; }
   transition: flex-basis 0.18s ease, width 0.18s ease, transform 0.25s ease;
 }
 
+/* v1.17.0 — throughput line (effective build time + ISK/hr + implant) */
+.iskhr-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 5px 8px;
+  font-size: 11px;
+  background: var(--color-bg-tertiary);
+  border: 0.5px solid var(--color-border-light);
+  border-radius: 4px;
+  cursor: help;
+}
+.iskhr-time  { color: var(--color-text-secondary); font-family: var(--font-mono); }
+.iskhr-value { font-family: var(--font-mono); font-weight: 700; margin-left: auto; }
+.iskhr-implant {
+  font-size: 9px;
+  color: #fbbf24;
+  border: 0.5px solid rgba(251, 191, 36, 0.35);
+  border-radius: 2px;
+  padding: 1px 4px;
+}
+.iskhr-implant-none { color: var(--color-text-tertiary); border-color: var(--color-border-light); opacity: 0.7; }
+
 /* v1.16.0 — draggable panel resize handles (desktop only) */
 .resize-handle {
   flex: 0 0 5px;

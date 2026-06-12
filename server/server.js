@@ -3014,7 +3014,7 @@ app.post('/api/ai-chat',
 
     console.log(`✓ Session data loaded: ${sessionData.assets?.length || 0} assets, ${sessionData.blueprints?.length || 0} blueprints`);
 
-    const { assets, blueprints, prices, wallet, jobs, skills, total_sp, planets } = sessionData;
+    const { assets, blueprints, prices, wallet, jobs, skills, total_sp, planets, implants } = sessionData;
 
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
@@ -3145,6 +3145,18 @@ app.post('/api/ai-chat',
       piColoniesLine = `PI colonies (${planets.length} active): ${colonyDesc}`;
     }
 
+    // ── Industry implants context (v1.17.0) ────────────────────────────────────
+    // Only the industry-relevant Zainou 'Beancounter' hardwirings are surfaced.
+    let implantsLine = null;
+    if (Array.isArray(implants)) {
+      const known = implants.map(id => INDUSTRY_IMPLANTS[id]).filter(Boolean);
+      implantsLine = known.length
+        ? `Industry implants plugged in: ${known.map(i =>
+            `${i.name} (${i.kind === 'mfg_time' ? `−${i.pct}% mfg time` : i.kind === 'reprocessing' ? `+${i.pct}% reprocessing` : `${i.pct}%`})`
+          ).join(', ')}`
+        : `Industry implants plugged in: none — no Zainou 'Beancounter' industry hardwiring detected (a slot-8 BX-80x would cut build time and lift ISK/hr).`;
+    }
+
     const builtContext = [
       `Wallet: ${(wallet / 1e9).toFixed(2)}B ISK`,
       `Blueprints: ${blueprints.length} total (${bpoCount} BPOs, ${bpcCount} BPCs)`,
@@ -3154,6 +3166,7 @@ app.post('/api/ai-chat',
       `Total skill points: ${playerSp > 0 ? playerSp.toLocaleString() + ` SP (${experienceTier})` : 'Unknown'}`,
       keySkillsBlock,
       piColoniesLine,
+      implantsLine,
       `Response tone: ${experienceNote}`,
     ].filter(Boolean).join('\n');
 
@@ -3923,7 +3936,7 @@ app.post('/api/session-data',
   async (req, res) => {
     try {
       const characterId = req.characterId;
-      const { assets, blueprints, prices, wallet, jobs, skills, total_sp, standings, planets } = req.body;
+      const { assets, blueprints, prices, wallet, jobs, skills, total_sp, standings, planets, implants } = req.body;
 
       // Validate data exists
       if (!assets || !blueprints) {
@@ -3969,6 +3982,7 @@ app.post('/api/session-data',
         total_sp:   total_sp || 0,
         standings:  standings || { factions: {}, corps: {} },
         planets:    planets || [],
+        implants:   Array.isArray(implants) ? implants : [],  // active implant type_ids (v1.17.0)
         accessibleStructures: Array.from(structureIds),
         cachedAt: new Date().toISOString()
       }, 7200000); // 2 hours
@@ -5968,6 +5982,23 @@ ISK/hour = profit_per_run × runs_per_hour = profit / (build_time_hours × slots
     for capitals/structures with billion-ISK material costs, ME10 is always worth it.
   • TE research matters mainly for time-constrained builders (slot-limited).
 
+── Industry Implants (verified — recommend these when asked, and proactively) ──
+Implants affect manufacturing TIME and reprocessing — NOT material quantity (ME). So
+they raise ISK/hr (throughput), they do NOT reduce a build's material cost. Be precise.
+Zainou 'Beancounter' hardwirings (slot 8/10):
+  • Industry BX-801 / BX-802 / BX-804 → −1% / −2% / −4% manufacturing TIME.
+    The BX-804 is the one to recommend for serious producers — cheap relative to the
+    throughput gain on long/repeated builds (capitals, fuel, runs in bulk).
+  • Reprocessing RX-801 / RX-802 / RX-804 → +1% / +2% / +4% reprocessing yield (only
+    matters if they reprocess ore/loot themselves; FORGE prices inputs at market).
+  • 'Beancounter' Research-line implants reduce ME/TE research, copy, and invention TIME —
+    worth it for someone running a research/invention farm, not a one-off.
+When recommending: BX-80x is the universal industry pick (more runs/hour = more ISK/hour).
+The benefit scales with how much they build — quantify it from build time when you can
+(e.g. "−4% on a 5-day capital ≈ 4.8 hours saved per hull"). FORGE's True Profit ISK/hr
+already reflects whichever BX implant the character has plugged in (shown in their context).
+Don't claim an implant lowers material cost or ME.
+
 ── Research & Copying (BPO lifecycle) ──
 Four research/support activities run on BLUEPRINT ORIGINALS (BPOs), each on its own slot type:
   • Material Efficiency research (activity 4): ME 0→10, each level −1% material. 10 levels max.
@@ -6294,10 +6325,24 @@ function getCharacterSession(characterId) {
   const session   = getCached(`session:${characterId}`);
   const skillsArr = session?.skills   || [];
   const standings = session?.standings || { factions: {}, corps: {} };
+  const implants  = Array.isArray(session?.implants) ? session.implants : [];
   const skillMap  = {};
   skillsArr.forEach(s => { skillMap[Number(s.skill_id)] = s.active_skill_level || 0; });
-  return { skillMap, standings };
+  return { skillMap, standings, implants };
 }
+
+// ── Industry implants (v1.17.0) ───────────────────────────────────────────────
+// Zainou 'Beancounter' hardwirings (slot 8). Only manufacturing-time implants are
+// applied to True Profit ISK/hr; reprocessing implants are surfaced for the AI.
+// type_id → { kind, pct, name }. (Verified type_ids for the BX series.)
+const INDUSTRY_IMPLANTS = {
+  27170: { kind: 'mfg_time',     pct: 1, name: "Zainou 'Beancounter' Industry BX-801" },
+  27167: { kind: 'mfg_time',     pct: 2, name: "Zainou 'Beancounter' Industry BX-802" },
+  27171: { kind: 'mfg_time',     pct: 4, name: "Zainou 'Beancounter' Industry BX-804" },
+  27174: { kind: 'reprocessing', pct: 4, name: "Zainou 'Beancounter' Reprocessing RX-804" },
+};
+// Structure manufacturing-TIME bonus (separate from the 1% ME bonus).
+const STRUCTURE_TE_BONUS = { 35825: 15, 35826: 20, 35827: 25 }; // Raitaru / Azbel / Sotiyo
 
 /**
  * Calculate EVE broker fee and transaction tax rates for a character at a trade hub.
@@ -6619,8 +6664,8 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
 
     if (!product_id) return res.status(400).json({ error: 'product_id required' });
 
-    // ── Session: skills + standings ────────────────────────────────────────
-    const { skillMap, standings } = getCharacterSession(characterId);
+    // ── Session: skills + standings + implants ─────────────────────────────
+    const { skillMap, standings, implants } = getCharacterSession(characterId);
 
     // ── Industry settings (system, structure, rigs, facility tax) ──────────
     const settings = await dbGet(
@@ -6640,7 +6685,7 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
 
     // ── Blueprint materials from DB ────────────────────────────────────────
     const blueprint = await dbGet(
-      'SELECT blueprint_id, product_quantity FROM blueprints WHERE product_id = ?',
+      'SELECT blueprint_id, product_quantity, build_time FROM blueprints WHERE product_id = ?',
       [product_id]
     );
     if (!blueprint) {
@@ -6848,6 +6893,36 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
     const trueProfit = sellPrice - brokerFee - transactionTax - totalMaterialCost - totalJobCost - totalHaulCost;
     const trueMargin = sellPrice > 0 ? (trueProfit / sellPrice) * 100 : 0;
 
+    // ── Effective build time + ISK/hr (v1.17.0) ───────────────────────────
+    // Manufacturing time stacks multiplicatively: TE × Industry × Advanced
+    // Industry × structure TE bonus × Beancounter (BX) implant. This is where
+    // industry implants actually affect profitability (throughput), not material cost.
+    const baseBuildSeconds   = (blueprint.build_time || 0) * runs;
+    const teFactor           = Math.max(0, 1 - (te || 0) / 100);
+    const industryLvl        = skillMap[3380] || 0;          // Industry: −4%/lvl mfg time
+    const advIndustryLvl     = skillMap[3388] || 0;          // Advanced Industry: −3%/lvl all jobs
+    const industryFactor     = 1 - 0.04 * industryLvl;
+    const advIndustryFactor  = 1 - 0.03 * advIndustryLvl;
+    const structureTeBonus   = settings?.structure_type_id ? (STRUCTURE_TE_BONUS[settings.structure_type_id] || 0) : 0;
+    const structureTeFactor  = 1 - structureTeBonus / 100;
+    // Best manufacturing-time implant the character has plugged in (if any).
+    const mfgImplant = (implants || [])
+      .map(id => INDUSTRY_IMPLANTS[id])
+      .filter(imp => imp && imp.kind === 'mfg_time')
+      .sort((a, b) => b.pct - a.pct)[0] || null;
+    const implantFactor = mfgImplant ? (1 - mfgImplant.pct / 100) : 1;
+
+    const effectiveBuildSeconds = baseBuildSeconds
+      * teFactor * industryFactor * advIndustryFactor * structureTeFactor * implantFactor;
+    const buildHours  = effectiveBuildSeconds / 3600;
+    const iskPerHour  = buildHours > 0 ? trueProfit / buildHours : 0;
+
+    // Reprocessing implant (informational — FORGE prices materials at market, not reprocess yield)
+    const reprocImplant = (implants || [])
+      .map(id => INDUSTRY_IMPLANTS[id])
+      .filter(imp => imp && imp.kind === 'reprocessing')
+      .sort((a, b) => b.pct - a.pct)[0] || null;
+
     const STRUCTURE_LABELS = { 35825: 'Raitaru', 35826: 'Azbel', 35827: 'Sotiyo' };
     const structureLabel = settings?.structure_type_id
       ? (STRUCTURE_LABELS[settings.structure_type_id] || 'Engineering Complex')
@@ -6919,6 +6994,20 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
       // Box 4 + summary — true profit
       true_profit: trueProfit,
       true_margin: trueMargin,
+
+      // Throughput — effective build time + ISK/hr (v1.17.0).
+      // Where industry implants actually affect profitability.
+      time: {
+        base_build_seconds:      baseBuildSeconds,
+        effective_build_seconds: Math.round(effectiveBuildSeconds),
+        isk_per_hour:            iskPerHour,
+        te_pct:                  te || 0,
+        industry_level:          industryLvl,
+        advanced_industry_level: advIndustryLvl,
+        structure_te_bonus_pct:  structureTeBonus,
+        mfg_implant:    mfgImplant   ? { name: mfgImplant.name,   pct: mfgImplant.pct }   : null,
+        reproc_implant: reprocImplant ? { name: reprocImplant.name, pct: reprocImplant.pct } : null,
+      },
 
       region_id:        regionId,
       prices_warm:      pricesWarm,
