@@ -760,26 +760,10 @@ const RightSidebar: FC<RightSidebarProps> = ({
                     ⚠ No live sell orders — profit estimated from 30-day trade average
                   </div>
                 )}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 8 }}>
-                  <div className="stat-card">
-                    <div className="stat-card-label">Material Cost</div>
-                    <div className="stat-card-value">{formatISK(apiDetail.buildInfo.totalCost)}</div>
-                  </div>
-                  <div className="stat-card">
-                    <div className="stat-card-label">
-                      Profit / Run
-                      {apiDetail.buildInfo.sellPriceSource === 'history_30d' && (
-                        <span className="price-source-hist" title="Based on 30-day average — no live sell orders">~</span>
-                      )}
-                    </div>
-                    <div
-                      className="stat-card-value"
-                      style={{ color: apiDetail.buildInfo.profit > 0 ? 'var(--color-success)' : 'var(--color-danger)' }}
-                    >
-                      {formatISK(apiDetail.buildInfo.profit)}
-                    </div>
-                  </div>
-                </div>
+                {/* v1.19.0 — money figures (material cost, profit, ISK/hr) live ONLY in the
+                    True Profit panel below, to avoid showing competing numbers for the same
+                    item. This section is purely the build's material requirements. */}
+                <div className="mat-section-heading">Materials required</div>
 
                 {/* Materials list — every row is clickable → drills into that item */}
                 <div className="mat-list">
@@ -964,11 +948,6 @@ const RightSidebar: FC<RightSidebarProps> = ({
                   );
                 })()}
 
-                {apiDetail.buildInfo.profitMargin !== 0 && (
-                  <div style={{ marginTop: 6, fontSize: 11, color: 'var(--color-text-tertiary)' }}>
-                    Margin: {apiDetail.buildInfo.profitMargin.toFixed(1)}%
-                  </div>
-                )}
               </div>
             )}
 
@@ -987,17 +966,19 @@ const RightSidebar: FC<RightSidebarProps> = ({
         {!apiDetail && !detailLoading && fallbackDetail && (
           <>
             <div className="detail-section">
-              <div className="detail-section-heading">Financials</div>
+              <div className="detail-section-heading" title="Gross estimate before your fees/blueprint — same baseline as the Market table and the AI. True Profit (your net) loads below.">
+                Estimate (pre-fee)
+              </div>
               <div className="stat-card">
                 <div className="stat-card-label">Sell Price</div>
                 <div className="stat-card-value">{formatISK(fallbackDetail.sellPrice)}</div>
               </div>
               <div className="stat-card">
-                <div className="stat-card-label">Material Cost</div>
+                <div className="stat-card-label">Est. Material Cost</div>
                 <div className="stat-card-value">{formatISK(fallbackDetail.matCost)}</div>
               </div>
               <div className="stat-card">
-                <div className="stat-card-label">Profit / Run</div>
+                <div className="stat-card-label">Est. Profit / Run</div>
                 <div
                   className="stat-card-value"
                   style={{ color: fallbackDetail.profitPerRun > 0 ? 'var(--color-success)' : 'var(--color-danger)' }}
@@ -1010,7 +991,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
                 <div className="stat-card-value">{fallbackDetail.margin.toFixed(1)}%</div>
               </div>
               <div className="stat-card">
-                <div className="stat-card-label">ISK / Hour</div>
+                <div className="stat-card-label">Est. ISK / Hour</div>
                 <div className="stat-card-value">{formatISK(fallbackDetail.iskPerHour)}</div>
               </div>
             </div>

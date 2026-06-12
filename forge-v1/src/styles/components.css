@@ -1269,6 +1269,14 @@ tbody td.align-center { text-align: center; }
 }
 
 /* Material list */
+.mat-section-heading {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--color-text-tertiary);
+  margin: 2px 0 6px;
+}
+
 .mat-list {
   background: var(--color-bg-tertiary);
   border: 0.5px solid rgba(79, 195, 247, 0.12);

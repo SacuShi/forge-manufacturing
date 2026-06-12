@@ -9,7 +9,6 @@ import type {
   AiChatResponse,
   Market,
   IndustrySettings,
-  FeeRates,
   EsiBlueprint,
   EsiAsset,
 } from './types';
@@ -50,52 +49,30 @@ import { useCorpData }       from './hooks/useCorpData';
 function mapToMarketItems(
   results: TopProfitableResponse['results'],
   esiBlueprints: EsiBlueprint[],
-  feeRates: FeeRates | null = null,
   rankOffset = 0
 ): MarketItem[] {
-  // Map blueprint type_id → owned status + best ME level
-  const bpMap  = new Map<number, 'BPO' | 'BPC'>();
-  const bpMeMap = new Map<number, number>();
-
+  // Map blueprint type_id → owned status (BPO wins over BPC)
+  const bpMap = new Map<number, 'BPO' | 'BPC'>();
   esiBlueprints.forEach((bp) => {
     const isBpo = bp.runs === -1;
-    // BPO wins if any copy is an original (don't downgrade BPO → BPC)
     if (isBpo || !bpMap.has(bp.type_id)) {
       bpMap.set(bp.type_id, isBpo ? 'BPO' : 'BPC');
-    }
-    // Track highest ME among owned copies (BPO usually has best ME)
-    const me = bp.material_efficiency ?? 0;
-    if (!bpMeMap.has(bp.type_id) || me > (bpMeMap.get(bp.type_id) ?? 0)) {
-      bpMeMap.set(bp.type_id, me);
     }
   });
 
   return results.map((item, index) => {
     const owned = bpMap.get(item.blueprint_id) ?? '—';
 
-    let profitPerRun = item.profit;
-    let margin       = item.profit_margin;
-    let iskPerHour   = item.isk_per_hour;
-
-    // Apply fee-adjusted math when rates are available and sell price is known
-    if (feeRates && item.sell_price > 0) {
-      const me        = bpMeMap.get(item.blueprint_id) ?? 0;
-      const meFactor  = Math.max(0, 1 - me / 100);
-
-      // ME-adjusted material cost (precomputed baseline is ME=0)
-      const adjMatCost = item.material_cost * meFactor;
-
-      // Manufacturing job cost: EIV proxy = adjMatCost; see /api/true-cost for exact formula
-      const jobCost = adjMatCost * (feeRates.sci + feeRates.scc_rate + feeRates.facility_tax);
-
-      // Sales fees: broker fee + transaction tax on full sell revenue
-      const fees = item.sell_price * (feeRates.broker_fee_rate + feeRates.transaction_tax_rate);
-
-      profitPerRun = item.sell_price - adjMatCost - jobCost - fees;
-      margin       = (profitPerRun / item.sell_price) * 100;
-      const buildHrs = (item.build_time ?? 0) / 3600;
-      iskPerHour   = buildHrs > 0 ? profitPerRun / buildHrs : 0;
-    }
+    // v1.19.0 — SINGLE BASELINE: the table shows the RAW precomputed estimate
+    // (gross spread, unresearched BP, before your fees/haul). This is identical to
+    // what the AI quotes (get_precomputed) and what's stored in the DB. The
+    // per-character, all-in net is "True Profit" in the info panel — a deliberately
+    // separate, clearly-labelled figure. We no longer re-derive a hybrid here (the
+    // old fee math matched neither the estimate nor True Profit, which is exactly
+    // what made figures disagree across the page).
+    const profitPerRun = item.profit;
+    const margin       = item.profit_margin;
+    const iskPerHour   = item.isk_per_hour;
 
     return {
       rank:             rankOffset + index + 1,
@@ -198,7 +175,6 @@ const App: FC = () => {
   });
 
   // v1.5.1 — Character fee rates (broker, tax, SCI, facility tax) for profit alignment
-  const [feeRates, setFeeRates] = useState<FeeRates | null>(null);
 
   // v1.2.0 — Industry settings + settings modal
   const [industrySettings, setIndustrySettings] = useState<IndustrySettings | null>(null);
@@ -342,8 +318,8 @@ const App: FC = () => {
   const marketItems = useMemo<MarketItem[]>(() => {
     const source = marketSearchResults ?? rawResults;
     if (!source.length) return [];
-    return mapToMarketItems(source, allBlueprints, feeRates);
-  }, [rawResults, marketSearchResults, allBlueprints, feeRates]);
+    return mapToMarketItems(source, allBlueprints);
+  }, [rawResults, marketSearchResults, allBlueprints]);
 
   // Server-side name search — called when user types in the market search box.
   const handleMarketSearch = useCallback((query: string) => {
@@ -453,19 +429,6 @@ const App: FC = () => {
       .catch(() => { /* non-fatal — settings remain null */ });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth.status]);
-
-  // v1.5 — Load fee rates on login, hub change, or fee-character change.
-  // feeToken resolves to primary or a selected alt's token.
-  useEffect(() => {
-    if (auth.status !== 'authed' || !feeToken) return;
-    apiGet<FeeRates>(
-      `/api/character-fee-rates?sellRegionId=${selectedMarket.id}`,
-      feeToken
-    )
-      .then(setFeeRates)
-      .catch(() => { /* non-fatal — falls back to precomputed figures */ });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auth.status, selectedMarket.id, feeToken]);
 
   // v1.5 — Re-POST combined session to server whenever the in-scope character set changes.
   // This keeps /api/top-profitable-by-skills skill-filtering and have/needed checks

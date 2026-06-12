@@ -49,21 +49,28 @@ interface ColDef {
   /** Null means column is not sortable */
   field: SortField | null;
   align?: 'right' | 'center';
+  /** Hover hint shown on the column header */
+  hint?: string;
 }
+
+// Shared explanation of the "Est." figures so every header tells the same story.
+const EST_HINT =
+  'Estimated spread — gross, before your fees, with an unresearched blueprint. ' +
+  'A comparison baseline (same value the AI quotes). Open an item to see your all-in True Profit.';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const ICON_BASE = 'https://images.evetech.net/types';
 
 const BASE_COLUMNS: ColDef[] = [
-  { label: '#',          field: 'rank',            align: 'center' },
-  { label: 'Item',       field: null                               },
-  { label: 'Profit/Run', field: 'profitPerRun',    align: 'right'  },
-  { label: 'Margin',     field: 'margin',           align: 'right'  },
-  { label: 'ISK/hr',     field: 'iskPerHour',       align: 'right'  },
-  { label: 'Build Time', field: 'buildTimeMinutes', align: 'right'  },
-  { label: 'Owned',      field: null,               align: 'center' },
-  { label: 'Action',     field: null,               align: 'center' },
+  { label: '#',            field: 'rank',            align: 'center' },
+  { label: 'Item',         field: null                               },
+  { label: 'Est. Profit',  field: 'profitPerRun',    align: 'right', hint: EST_HINT },
+  { label: 'Margin',       field: 'margin',           align: 'right', hint: EST_HINT },
+  { label: 'Est. ISK/hr',  field: 'iskPerHour',       align: 'right', hint: EST_HINT },
+  { label: 'Build Time',   field: 'buildTimeMinutes', align: 'right'  },
+  { label: 'Owned',        field: null,               align: 'center' },
+  { label: 'Action',       field: null,               align: 'center' },
 ];
 
 const HAUL_COLUMN: ColDef = { label: 'Haul/unit', field: null, align: 'right' };
@@ -110,6 +117,7 @@ const ItemTable: FC<ItemTableProps> = ({
                 key={col.label}
                 className={alignClass}
                 aria-sort={ariaSort}
+                title={col.hint}
                 onClick={col.field ? () => onSort(col.field!) : undefined}
                 style={col.field ? undefined : { cursor: 'default' }}
                 scope="col"

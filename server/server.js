@@ -5647,6 +5647,21 @@ Use this as your baseline before calling tools. Call get_active_jobs for full jo
 - Express profits as ranges: "between 15M–25M ISK depending on how you sell"
 - For deep market data: https://evetycoon.com/market/[typeId]
 
+══ FIGURE CONSISTENCY — READ THIS ══
+There is ONE shared baseline and ONE per-character figure. Keep them straight:
+- get_precomputed / compare_markets / analyze_blueprints profit + ISK/hr = the ESTIMATED
+  SPREAD: gross, BEFORE broker fee, sales tax, job fees (SCI/SCC/facility) and haulage, and
+  assuming an UNRESEARCHED blueprint (ME 0). This is the raw precompute — the SAME numbers the
+  Market Opportunities table shows and the DB stores. It is a comparison baseline, NOT take-home.
+- "True Profit" (the item info panel) = the player's NET: their effective ME, skills, standings,
+  structure, runs and haulage applied. This is the real number.
+Rules:
+- Call your numbers an "estimated spread (before fees)" — never present them as guaranteed net.
+- When the user asks what they'll ACTUALLY make on a specific item, give the estimate, then say
+  the exact figure is "True Profit" in the item panel (which nets out fees, their blueprint ME, etc.).
+- Never invent a different profit figure than the estimate you were given — that's what made
+  numbers disagree across the page. Quote the tool value; don't re-derive your own.
+
 ══ PROFITABILITY STRATEGY ══
 PRIMARY (lead with these):
 - Highest absolute ISK profit AND margin combined
