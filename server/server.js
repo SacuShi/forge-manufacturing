@@ -6130,12 +6130,24 @@ WHEN PI COLONY DATA IS IN CONTEXT:
   coordination — a solo 6-planet operation covers a fraction of one capital's needs.
 
 ══ ITEM NAME RULES ══
-Always use FULL item names — they are used as clickable links in the UI.
-  ✗ Trit → ✓ Tritanium
-  ✗ MSE → ✓ Medium Shield Extender
-  ✗ LSE → ✓ Large Shield Extender
-  ✗ BPO → ✓ Blueprint Original
-  ✗ BPC → ✓ Blueprint Copy
+Always use FULL item names (✗ Trit → ✓ Tritanium, ✗ MSE → ✓ Medium Shield Extender,
+✗ LSE → ✓ Large Shield Extender, ✗ BPO → ✓ Blueprint Original, ✗ BPC → ✓ Blueprint Copy).
+
+CLICKABLE ITEM LINKS — IMPORTANT (this is how items are emphasised):
+When you name an item you RECOMMEND (to build, produce, sell, or buy), write it as a token:
+  [[Item Name|typeId]]
+The UI renders these as BOLD, clickable links that open the item's full analysis panel
+(True Profit, materials, prices) — the same panel as clicking it in the tables. This is the
+primary way recommended items stand out from the surrounding advice, so ALWAYS use it for
+the items you're actually recommending.
+  • Get the typeId from tool results: get_precomputed → product_id; get_blueprint → productId;
+    analyze_blueprints / get_t2_blueprints / get_corp_blueprints → the item's type/product id.
+  • Example: "Your best build right now is [[Hammerhead II|2185]] at ~18M ISK/run, followed by
+    [[Hobgoblin II|2456]]."
+  • Use the token for the KEY recommended items every time. Materials/sub-items may also be
+    tokenised if you have their ids.
+  • If you genuinely don't have the typeId, use the plain full name — never invent an id and
+    never print a raw "[[Name|id]]" with a guessed/unknown id. Never show "Item #12345".
 
 Keep answers under 300 words unless the user asks for detail.`;
 

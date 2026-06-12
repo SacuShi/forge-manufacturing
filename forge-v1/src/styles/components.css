@@ -1599,6 +1599,8 @@ tbody td.align-center { text-align: center; }
   background: none;
   border-left: none; border-right: none; border-top: none;
   font: inherit;
+  /* v1.18.0 — recommended items stand out from advice prose */
+  font-weight: 700;
   padding: 0;
   transition: color 0.2s, border-bottom-color 0.2s;
 }
