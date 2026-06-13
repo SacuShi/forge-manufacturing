@@ -1313,6 +1313,19 @@ tbody td.align-center { text-align: center; }
 .liquidity-note .liq-dot { margin-top: 4px; }
 .liquidity-note strong { color: var(--color-text-primary); font-weight: 600; }
 
+/* v1.22 — "you don't own the blueprint" honesty badge under True Profit */
+.bp-ownership-note {
+  margin: 6px 0 2px;
+  padding: 6px 9px;
+  border-radius: 6px;
+  background: rgba(255, 183, 77, 0.10);
+  border: 0.5px solid rgba(255, 183, 77, 0.35);
+  color: var(--color-warning);
+  font-size: 11px;
+  line-height: 1.4;
+  cursor: help;
+}
+
 .mat-list {
   background: var(--color-bg-tertiary);
   border: 0.5px solid rgba(79, 195, 247, 0.12);
