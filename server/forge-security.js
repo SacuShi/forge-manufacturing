@@ -332,6 +332,7 @@ module.exports = {
   adminLimiter,
   aiLimiter,
   verifyEveToken,
+  extractCharacterFromToken,
   verifyCharacterOwnership,
   validateAiChatInput,
   validateChatMessage,

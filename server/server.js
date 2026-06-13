@@ -55,7 +55,7 @@ app.use(cors({
   origin: ['https://forge-ukc.com', 'http://localhost:3000'],
   credentials: true,
   methods: ['GET', 'POST', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Viewer-Token']
 }));
 
 app.use(express.json({ limit: '5mb' })); // Allows session data upload (assets/blueprints)
@@ -3702,18 +3702,39 @@ app.post('/api/ai-chat',
               break;
 
             case "get_corp_blueprints": {
-              // Corp hangar blueprints — requires the chat character to be a Director/CEO.
+              // Corp hangar blueprints — requires a Director/CEO.
+              // v1.23 — FIX: corp access follows the SELECTED view character (sidebar chip),
+              // mirroring the Corp tab — NOT the primary chat character. The frontend sends
+              // that character's token in X-Viewer-Token; it may be a Director ALT even when
+              // the primary (chat) login is a non-Director. Resolve access against THAT
+              // character + token (the token authorises ESI calls for its own characterId,
+              // so both must come from the same character). Falls back to the chat token
+              // when the header is absent (primary IS the director → unchanged behaviour).
               const authH = req.headers.authorization || '';
               const chatToken = authH.startsWith('Bearer ') ? authH.slice(7) : '';
-              const access = chatToken ? await resolveViewerCorpAccess(characterId, chatToken) : { isDirector: false, corpId: null };
+              const viewerToken = String(req.headers['x-viewer-token'] || chatToken || '').trim();
+
+              let viewerCharId = characterId; // chat (primary) character by default
+              if (viewerToken && viewerToken !== chatToken) {
+                try {
+                  const v = await security.extractCharacterFromToken(`Bearer ${viewerToken}`);
+                  viewerCharId = v.characterId;
+                } catch (_) {
+                  viewerCharId = null; // bad/expired viewer token → deny below
+                }
+              }
+
+              const access = (viewerToken && viewerCharId)
+                ? await resolveViewerCorpAccess(viewerCharId, viewerToken)
+                : { isDirector: false, corpId: null };
               if (!access.isDirector || !access.corpId) {
                 toolResult = {
                   error: 'not_director',
-                  message: "This character does not hold the Director (or CEO) role, so corp blueprints aren't accessible. Corp data is viewable when a Director is the selected character.",
+                  message: "The selected character doesn't hold the Director (or CEO) role, so corp blueprints aren't accessible. Corp data is viewable when a Director is the selected character (the view chip in the sidebar) — switch to your Director character, or log that character in.",
                 };
                 break;
               }
-              await ensureCorpDataFresh(access.corpId, chatToken);
+              await ensureCorpDataFresh(access.corpId, viewerToken);
               const cbSearch = String(toolUse.input.search || '').replace(/[^a-zA-Z0-9 '\-]/g, '').trim();
               const cbType   = toolUse.input.type || 'all';
               const cbLimit  = Math.min(toolUse.input.limit || 50, 200);

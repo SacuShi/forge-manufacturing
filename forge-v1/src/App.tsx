@@ -753,6 +753,11 @@ const App: FC = () => {
         headers: {
           'Content-Type':  'application/json',
           'Authorization': `Bearer ${auth.token ?? ''}`,
+          // v1.23 — corp access in the AI follows the selected view character (the
+          // sidebar chip), mirroring the Corp tab. corpToken is a Director alt's token
+          // when one is selected, else the primary's. Lets the AI see corp blueprints
+          // whenever the Corp tab can.
+          'X-Viewer-Token': corpToken ?? '',
         },
         body: JSON.stringify({ messages: history }),
       });
@@ -799,7 +804,7 @@ const App: FC = () => {
     }
 
     setThinking(false);
-  }, [auth.token, auth.character, chatMessages]);
+  }, [auth.token, auth.character, chatMessages, corpToken]);
 
   const handleClearHistory = useCallback(async () => {
     if (!auth.character || !auth.token) return;
