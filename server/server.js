@@ -1109,6 +1109,242 @@ Object.defineProperty(global, 'jitaPricesCache', {
   configurable: true
 });
 
+// ════════════════════════════════════════════════════════════════════════════
+// STATION-TRADING HOT-HUB POLLER (v1.21) — Jita 4-4 order book, kept ~5 min fresh.
+//
+// COMPLETELY SEPARATE from regionPriceCache (manufacturing). Day/station trading
+// needs ORDER-BOOK DEPTH (spread, competition, order sizes) that the manufacturing
+// collapse throws away, and it needs the freshest data ESI will give.
+//
+// Design (see FORGE_MEMORY §Trading):
+//  • CCP hard-caches market orders ~300s server-side — that's the freshness floor
+//    for everyone (incl. the in-game client). We ALIGN polling to the Expires
+//    header so data is always ≤~5 min old at the MINIMUM request cost; polling
+//    faster just returns identical bytes.
+//  • Conditional requests: each region-orders page is fetched with If-None-Match
+//    from its stored ETag. A 304 is near-free and does NOT consume the per-IP
+//    error budget. INVARIANT: we retain each page's station-filtered orders next
+//    to its ETag; a 304 with no retained slice falls back to an unconditional GET
+//    — so the worst case is a normal full fetch, never missing data.
+//  • Memory-bounded: per page we keep ONLY Jita-4-4 orders with ONLY the 4 fields
+//    the book needs — not the whole region book.
+//  • LAZY: the loop runs only while trading endpoints are in use. It starts on the
+//    first request and self-stops after TRADE_IDLE_STOP_MS idle, so we add ZERO
+//    continuous ESI load while nobody is trading.
+//  • Market orders are PUBLIC — no token; multiple logins give no benefit (the
+//    limiter is the per-IP error budget, not a per-token rate).
+// ════════════════════════════════════════════════════════════════════════════
+const TRADE_REGION_ID        = 10000002;        // The Forge
+const TRADE_STATION_ID        = 60003760;        // Jita IV - Moon 4 - Caldari Navy Assembly Plant
+const TRADE_POLL_FALLBACK_MS = 300 * 1000;      // when no Expires header is present
+const TRADE_IDLE_STOP_MS     = 30 * 60 * 1000;  // stop polling after 30 min of no requests
+const TRADE_MIN_ERROR_BUDGET = 20;              // back off if X-ESI-Error-Limit-Remain drops below this
+
+// Per-page conditional cache: pageUrl -> { etag, orders:[{type_id,price,is_buy_order,volume_remain}] }
+const tradePageCache = new Map();
+
+// Rebuilt station book: type_id -> { sell, buy, spread, spreadPct, sellOrders, buyOrders, sellQtyTop, buyQtyTop }
+let jitaBook = new Map();
+let jitaBookMeta = { updatedAt: 0, expiresAt: 0, fetching: false, lastError: null, types: 0 };
+
+let tradePollTimer = null;
+let tradePollRunning = false;
+let lastTradingRequestAt = 0;
+
+/** Keep only Jita-4-4 orders, only the fields the book needs (memory-bounded). */
+function filterStationOrders(data) {
+  if (!Array.isArray(data)) return [];
+  const out = [];
+  for (const o of data) {
+    if (o.location_id !== TRADE_STATION_ID) continue;
+    out.push({ type_id: o.type_id, price: o.price, is_buy_order: o.is_buy_order, volume_remain: o.volume_remain });
+  }
+  return out;
+}
+
+/** Fetch one region-orders page conditionally. Returns { orders, expires, xPages, errorRemain, status, error? }. */
+async function fetchTradePage(orderType, page) {
+  const url = `https://esi.evetech.net/latest/markets/${TRADE_REGION_ID}/orders/` +
+              `?datasource=tranquility&order_type=${orderType}&page=${page}`;
+  const cached = tradePageCache.get(url);
+  const headers = {};
+  if (cached && cached.etag) headers['If-None-Match'] = cached.etag;
+
+  const res = await esiFetch(url, { headers });
+  const errorRemain = parseInt(res.headers.get('x-esi-error-limit-remain') || '100', 10);
+  const xPages = parseInt(res.headers.get('x-pages') || '1', 10);
+  const expires = res.headers.get('expires');
+
+  if (res.status === 304) {
+    // INVARIANT: reuse retained slice; if (somehow) absent, fall back to an unconditional GET.
+    if (cached && cached.orders) {
+      return { orders: cached.orders, expires, xPages, errorRemain, status: 304 };
+    }
+    const fresh = await esiFetch(url); // no If-None-Match → guaranteed body
+    const data = await fresh.json();
+    const slice = filterStationOrders(data);
+    tradePageCache.set(url, { etag: fresh.headers.get('etag'), orders: slice });
+    return {
+      orders: slice,
+      expires: fresh.headers.get('expires') || expires,
+      xPages: parseInt(fresh.headers.get('x-pages') || String(xPages), 10),
+      errorRemain, status: 200,
+    };
+  }
+
+  if (!res.ok) {
+    // Don't poison the cache — reuse last good slice if we have one.
+    return { orders: cached?.orders || [], expires, xPages, errorRemain, status: res.status, error: true };
+  }
+
+  const data = await res.json();
+  const slice = filterStationOrders(data);
+  tradePageCache.set(url, { etag: res.headers.get('etag'), orders: slice });
+  return { orders: slice, expires, xPages, errorRemain, status: 200 };
+}
+
+/** One full poll cycle: page buy+sell, rebuild jitaBook, schedule the next cycle aligned to Expires. */
+async function pollJitaBook() {
+  if (jitaBookMeta.fetching) return;
+  jitaBookMeta.fetching = true;
+  const started = Date.now();
+  let latestExpires = 0;
+  let backoff = false;
+
+  try {
+    const agg = new Map(); // type_id -> { sells:[], buys:[] }
+
+    for (const orderType of ['sell', 'buy']) {
+      let page = 1, pages = 1;
+      do {
+        const r = await fetchTradePage(orderType, page);
+        if (r.expires) { const t = Date.parse(r.expires); if (t > latestExpires) latestExpires = t; }
+        pages = r.xPages || 1;
+        // ESI unhappy (420 error-limited / 5xx) or budget low → stop this cycle and back off.
+        if (r.errorRemain < TRADE_MIN_ERROR_BUDGET || r.status === 420 || r.status >= 500) { backoff = true; break; }
+        for (const o of r.orders) {
+          let e = agg.get(o.type_id);
+          if (!e) { e = { sells: [], buys: [] }; agg.set(o.type_id, e); }
+          (o.is_buy_order ? e.buys : e.sells).push(o);
+        }
+        page++;
+        await new Promise(res => setTimeout(res, 100)); // gentle inter-page pacing
+      } while (page <= pages);
+      if (backoff) break;
+    }
+
+    if (!backoff) {
+      const book = new Map();
+      for (const [typeId, e] of agg) {
+        let bestSell = Infinity, bestBuy = 0;
+        for (const o of e.sells) if (o.price < bestSell) bestSell = o.price;
+        for (const o of e.buys)  if (o.price > bestBuy)  bestBuy  = o.price;
+        if (bestSell === Infinity) bestSell = 0;
+        let sellQtyTop = 0, buyQtyTop = 0;
+        if (bestSell) for (const o of e.sells) if (o.price === bestSell) sellQtyTop += o.volume_remain;
+        if (bestBuy)  for (const o of e.buys)  if (o.price === bestBuy)  buyQtyTop  += o.volume_remain;
+        const spread    = (bestSell && bestBuy) ? bestSell - bestBuy : 0;
+        const spreadPct = (bestSell && bestBuy) ? (spread / bestSell) * 100 : 0;
+        book.set(typeId, {
+          sell: bestSell, buy: bestBuy, spread, spreadPct,
+          sellOrders: e.sells.length, buyOrders: e.buys.length,
+          sellQtyTop, buyQtyTop,
+        });
+      }
+      jitaBook = book;
+      jitaBookMeta = {
+        updatedAt: Date.now(),
+        expiresAt: latestExpires || (Date.now() + TRADE_POLL_FALLBACK_MS),
+        fetching: false, lastError: null, types: book.size,
+      };
+      console.log(`⟳ Jita book refreshed — ${book.size} types in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+    } else {
+      jitaBookMeta.fetching = false;
+      jitaBookMeta.lastError = 'error-budget-backoff';
+      console.warn('⚠ Jita book poll backed off (low ESI error budget) — keeping last good book');
+    }
+  } catch (err) {
+    jitaBookMeta.fetching = false;
+    jitaBookMeta.lastError = err.message;
+    console.error('⚠ Jita book poll failed:', err.message);
+  }
+
+  scheduleNextJitaPoll(backoff || !!jitaBookMeta.lastError);
+}
+
+function scheduleNextJitaPoll(backoff) {
+  if (tradePollTimer) { clearTimeout(tradePollTimer); tradePollTimer = null; }
+  if (Date.now() - lastTradingRequestAt > TRADE_IDLE_STOP_MS) {
+    tradePollRunning = false;
+    console.log('⏸ Jita book poller idle — pausing until the next trading request');
+    return;
+  }
+  let delay = (jitaBookMeta.expiresAt || (Date.now() + TRADE_POLL_FALLBACK_MS)) - Date.now() + 5000; // +5s past cache roll
+  if (backoff) delay = Math.max(delay, 60_000);                 // ESI unhappy → wait ≥1 min
+  delay = Math.min(Math.max(delay, 15_000), 15 * 60_000);       // clamp 15s..15min
+  tradePollTimer = setTimeout(pollJitaBook, delay);
+}
+
+/** Start the poller if not already running. Called lazily by the trading endpoints. */
+function ensureJitaPollerRunning() {
+  lastTradingRequestAt = Date.now();
+  if (process.env.DISABLE_TRADING_POLLER === '1') return;
+  if (tradePollRunning) return;
+  tradePollRunning = true;
+  console.log('▶ Jita book poller starting (lazy — first trading request received)');
+  pollJitaBook();
+}
+
+/** Freshness/status snapshot for the trading endpoints. */
+function tradingMeta() {
+  const now = Date.now();
+  return {
+    station:      'Jita IV-4',
+    stationId:    TRADE_STATION_ID,
+    regionId:     TRADE_REGION_ID,
+    updatedAt:    jitaBookMeta.updatedAt || null,
+    ageSec:       jitaBookMeta.updatedAt ? Math.round((now - jitaBookMeta.updatedAt) / 1000) : null,
+    expiresInSec: jitaBookMeta.expiresAt ? Math.max(0, Math.round((jitaBookMeta.expiresAt - now) / 1000)) : null,
+    types:        jitaBookMeta.types,
+    warming:      jitaBookMeta.updatedAt === 0,
+    lastError:    jitaBookMeta.lastError,
+  };
+}
+
+/** Shape one type's book entry for the API (adds the daily-volume liquidity signal we already have). */
+function tradingEntry(typeId) {
+  const b = jitaBook.get(typeId);
+  if (!b) return { typeId, sell: 0, buy: 0, spread: 0, spreadPct: 0, sellOrders: 0, buyOrders: 0, sellQtyTop: 0, buyQtyTop: 0, found: false };
+  return { typeId, ...b, found: true };
+}
+
+// ── Trading API (lazy-starts the poller) ──────────────────────────────────────
+app.get('/api/trading/meta', (req, res) => {
+  ensureJitaPollerRunning();
+  res.json(tradingMeta());
+});
+
+app.get('/api/trading/jita', (req, res) => {
+  ensureJitaPollerRunning();
+  const raw = String(req.query.types || '').trim();
+  if (raw) {
+    const ids = raw.split(',')
+      .map(s => parseInt(s, 10))
+      .filter(n => Number.isInteger(n) && n > 0)
+      .slice(0, 200); // cap watchlist size
+    return res.json({ meta: tradingMeta(), results: ids.map(tradingEntry) });
+  }
+  // No types → return meta + count only (don't serialize the whole book by default).
+  res.json({ meta: tradingMeta(), count: jitaBook.size });
+});
+
+app.get('/api/trading/jita/:typeId', (req, res) => {
+  ensureJitaPollerRunning();
+  const typeId = parseInt(req.params.typeId, 10);
+  if (!Number.isInteger(typeId) || typeId <= 0) return res.status(400).json({ error: 'invalid typeId' });
+  res.json({ meta: tradingMeta(), ...tradingEntry(typeId) });
+});
+
 // SKILL CHECKING HELPER
 /**
  * Check if a character can build a blueprint given their trained skills.
