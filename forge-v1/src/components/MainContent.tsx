@@ -10,10 +10,14 @@ import type {
   ActiveJob,
   CorpStatus,
   CorpAccessStatus,
+  QueueCharacter,
+  PiCharacter,
 } from '../types';
 import ItemTable    from './ItemTable';
 import CorpTab      from './CorpTab';
 import ResearchTab  from './ResearchTab';
+import PiTab           from './PiTab';
+import QueuePlannerTab from './QueuePlannerTab';
 import { formatISK, formatMargin } from '../utils/format';
 
 // Per-blueprint profitability (from /api/blueprint-profits — same data as Market Opps)
@@ -62,6 +66,12 @@ interface MainContentProps {
 
   // v1.4.0 — Corp tab props
   token:            string | null;
+  /** All logged-in characters for the PI tab, pre-filtered by the selected character view */
+  piCharacters?: PiCharacter[];
+  /** Per-character slot summaries for Queue Planner, pre-filtered by the selected character view */
+  queueCharacters?: QueueCharacter[];
+  /** Always the primary character's auth token — used by Queue Planner regardless of which character is selected */
+  primaryToken?: string | null;
   corpStatus:       CorpStatus | null;
   accessStatus:     CorpAccessStatus | null;
   corpDataLoading?: boolean;
@@ -79,10 +89,12 @@ const EMPTY_BP_OWNER_MAP = new Map<number, string>();
 const TABS = [
   { key: 'market',     label: '◈ Market Opportunities' },
   { key: 'blueprints', label: '◈ Your blueprints' },
-  { key: 'research',   label: '🔬 Research ROI' },   // v1.11.0
+  { key: 'research',   label: '🔬 Research ROI' },
   { key: 'assets',     label: '◉ Assets' },
   { key: 'jobs',       label: '⚙ Jobs' },
-  { key: 'corp',       label: '🏭 Corp' },      // v1.4.0
+  { key: 'queue',      label: '📋 Queue Planner' },
+  { key: 'pi',         label: '🌍 PI Colonies' },
+  { key: 'corp',       label: '🏭 Corp' },
 ];
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -113,6 +125,9 @@ const MainContent: FC<MainContentProps> = ({
   accessStatus,
   corpDataLoading,
   blueprintOwnerMap = EMPTY_BP_OWNER_MAP,
+  piCharacters      = [],
+  queueCharacters   = [],
+  primaryToken      = null,
 }) => {
   const [sortField, setSortField] = useState<SortField>('rank');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
@@ -795,6 +810,21 @@ const MainContent: FC<MainContentProps> = ({
         />
       )}
 
+      {/* Queue Planner tab */}
+      {activeTab === 'queue' && (
+        <QueuePlannerTab
+          queueCharacters={queueCharacters}
+          primaryToken={primaryToken}
+          regionId={regionId}
+          onSelectItem={onSelectItem}
+        />
+      )}
+
+      {/* v1.25.0 — PI Colonies tab */}
+      {activeTab === 'pi' && (
+        <PiTab piCharacters={piCharacters} />
+      )}
+
       {/* v1.4.0 — Corp tab */}
       {activeTab === 'corp' && (
         <CorpTab
@@ -802,6 +832,8 @@ const MainContent: FC<MainContentProps> = ({
           corpStatus={corpStatus}
           accessStatus={accessStatus}
           corpDataLoading={corpDataLoading}
+          regionId={regionId}
+          onSelectItem={onSelectItem}
         />
       )}
 

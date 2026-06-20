@@ -11,6 +11,8 @@ import type {
   IndustrySettings,
   EsiBlueprint,
   EsiAsset,
+  QueueCharacter,
+  PiCharacter,
 } from './types';
 import { MARKETS } from './components/MarketSelector';
 import { useAuth }       from './hooks/useAuth';
@@ -273,6 +275,70 @@ const App: FC = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth.status, itemNamesLoading, combinedAssets, allBlueprints]);
 
+  // ── PI: all characters with their tokens (always all, not filtered by isolation) ──
+  // PI is best viewed combined — each colony card shows who owns it.
+  const piCharacters = useMemo<PiCharacter[]>(() => {
+    const all: PiCharacter[] = [];
+    if (auth.character && auth.token) {
+      all.push({ characterId: auth.character.characterId, name: auth.character.name, token: auth.token });
+    }
+    auth.altCharacters.filter(a => !a.loading && !a.error).forEach(alt => {
+      all.push({ characterId: alt.characterId, name: alt.name, token: alt.token });
+    });
+    // When "All" is selected (null), show every character's colonies combined.
+    // When a specific character is selected, show only that character's colonies.
+    if (viewCharacterId !== null) return all.filter(c => c.characterId === viewCharacterId);
+    return all;
+  }, [auth.character, auth.token, auth.altCharacters, viewCharacterId]);
+
+  // ── Queue Planner: per-character slot summary ────────────────────────────
+  // Derived from each character's skills (Mass Production + Adv Mass Production)
+  // and their current active manufacturing/reaction jobs.
+  const queueCharacters = useMemo<QueueCharacter[]>(() => {
+    const getSlots = (skills: Array<{ skill_id: number; active_skill_level: number }>) => {
+      const sm: Record<number, number> = {};
+      skills.forEach(s => { sm[s.skill_id] = s.active_skill_level; });
+      return 1 + (sm[3387] || 0) + (sm[24625] || 0); // 1 + Mass Prod + Adv Mass Prod
+    };
+    const chars: QueueCharacter[] = [];
+    const toSkillMap = (skills: Array<{ skill_id: number; active_skill_level: number }>) => {
+      const m: Record<number, number> = {};
+      skills.forEach(s => { m[s.skill_id] = s.active_skill_level; });
+      return m;
+    };
+    if (auth.character) {
+      const totalSlots = getSlots(auth.skills);
+      const busySlots  = (auth.character.activeJobs ?? []).filter(j => j.activityId === 1 || j.activityId === 9).length;
+      chars.push({
+        characterId: auth.character.characterId,
+        name:        auth.character.name,
+        token:       auth.token ?? '',
+        totalSlots,
+        freeSlots:   Math.max(0, totalSlots - busySlots),
+        activeJobs:  auth.character.activeJobs ?? [],
+        skills:      toSkillMap(auth.skills),
+      });
+    }
+    auth.altCharacters.filter(a => !a.loading && !a.error).forEach(alt => {
+      const totalSlots = getSlots(alt.skills);
+      const busySlots  = (alt.activeJobs ?? []).filter(j => j.activityId === 1 || j.activityId === 9).length;
+      chars.push({
+        characterId: alt.characterId,
+        name:        alt.name,
+        token:       alt.token,
+        totalSlots,
+        freeSlots:   Math.max(0, totalSlots - busySlots),
+        activeJobs:  alt.activeJobs ?? [],
+        skills:      toSkillMap(alt.skills),
+      });
+    });
+    // When "All" is selected (null), plan across every character's slots combined.
+    // When a specific character is selected, plan only for that character's slots
+    // (still uses the primary's session for blueprint/asset data).
+    if (viewCharacterId !== null) return chars.filter(c => c.characterId === viewCharacterId);
+    return chars;
+  }, [auth.character, auth.token, auth.skills, auth.altCharacters, viewCharacterId]);
+
   // Blueprint → owner name map (item_id → character name) — for attribution badges
   const blueprintOwnerMap = useMemo(() => {
     const map = new Map<number, string>();
@@ -368,12 +434,12 @@ const App: FC = () => {
   //   itemNames.get(bp.type_id) === productName + " Blueprint"
   // BPO (quantity === -1) is preferred over any BPC when both exist.
   // v1.5: search allBlueprints so alts' blueprints are included in ME/TE resolution
-  const { selectedBlueprintME, selectedBlueprintTE } = useMemo(() => {
+  const { selectedBlueprintME, selectedBlueprintTE, selectedBp } = useMemo(() => {
     if (!selectedTypeId || !itemNames.size || !allBlueprints.length) {
-      return { selectedBlueprintME: 0, selectedBlueprintTE: 0 };
+      return { selectedBlueprintME: 0, selectedBlueprintTE: 0, selectedBp: null };
     }
     const productName = itemNames.get(selectedTypeId);
-    if (!productName) return { selectedBlueprintME: 0, selectedBlueprintTE: 0 };
+    if (!productName) return { selectedBlueprintME: 0, selectedBlueprintTE: 0, selectedBp: null };
     const bpNameTarget = (productName + ' Blueprint').toLowerCase();
 
     let best: EsiBlueprint | null = null;
@@ -386,6 +452,7 @@ const App: FC = () => {
     return {
       selectedBlueprintME: best?.material_efficiency ?? 0,
       selectedBlueprintTE: best?.time_efficiency     ?? 0,
+      selectedBp: best,
     };
   }, [selectedTypeId, allBlueprints, itemNames]);
 
@@ -759,7 +826,21 @@ const App: FC = () => {
           // whenever the Corp tab can.
           'X-Viewer-Token': corpToken ?? '',
         },
-        body: JSON.stringify({ messages: history }),
+        body: JSON.stringify({
+          messages: history,
+          // Pass the currently viewed item so the AI knows what the user is looking at
+          // and whether they own a blueprint for it — used by the server to extend builtContext.
+          ...(selectedTypeId && selectedName ? {
+            viewedItem: {
+              typeId: selectedTypeId,
+              name:   selectedName,
+              bpOwned: !!selectedBp,
+              bpType:  selectedBp ? (selectedBp.quantity === -1 ? 'BPO' : 'BPC') : null,
+              bpME:    selectedBp?.material_efficiency ?? null,
+              bpTE:    selectedBp?.time_efficiency     ?? null,
+            },
+          } : {}),
+        }),
       });
 
       const data = await response.json() as AiChatResponse;
@@ -804,7 +885,7 @@ const App: FC = () => {
     }
 
     setThinking(false);
-  }, [auth.token, auth.character, chatMessages, corpToken]);
+  }, [auth.token, auth.character, chatMessages, corpToken, selectedTypeId, selectedName, selectedBp]);
 
   const handleClearHistory = useCallback(async () => {
     if (!auth.character || !auth.token) return;
@@ -949,6 +1030,9 @@ const App: FC = () => {
           marketHasMore={marketHasMore}
           haulConfigured={!!(industrySettings?.haul_enabled)}
           token={corpToken}
+          primaryToken={auth.token}
+          piCharacters={piCharacters}
+          queueCharacters={queueCharacters}
           corpStatus={corpStatus}
           accessStatus={corpAccessStatus}
           corpDataLoading={corpDataLoading}

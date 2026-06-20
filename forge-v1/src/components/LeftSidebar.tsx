@@ -48,6 +48,8 @@ const NAV_ITEMS = [
   { key: 'blueprints',  label: '◈ My Blueprints' },
   { key: 'assets',      label: '◉ My Assets' },
   { key: 'jobs',        label: '⚙ Active Jobs' },
+  { key: 'queue',       label: '📋 Queue Planner' },
+  { key: 'pi',          label: '🌍 PI Colonies' },
   { key: 'corp',        label: '🏭 Corp' },
 ];
 

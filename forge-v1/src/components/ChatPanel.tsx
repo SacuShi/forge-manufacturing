@@ -250,6 +250,19 @@ const ChatPanel: FC<ChatPanelProps> = ({
           </div>
         )}
       </div>
+
+      {/* ── Token cost note ───────────────────────────────────────────────────── */}
+      <div className="chat-support-note">
+        This AI uses real tokens which cost real money — contributions welcome but not required.{' '}
+        <a
+          href="https://paypal.me/SacuShi"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="chat-support-link"
+        >
+          Support FORGE
+        </a>
+      </div>
     </section>
   );
 };

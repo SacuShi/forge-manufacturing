@@ -1069,17 +1069,16 @@ const RightSidebar: FC<RightSidebarProps> = ({
                 free). When the user owns neither a BPO nor a BPC for this item, that's a silent
                 flatter — flag that the acquisition cost isn't in the figure. (Phase 0 of the
                 BPC-cost feature; full per-run BPC pricing is a later phase.) */}
-            {!isBlueprintClick && (
+            {!isBlueprintClick && apiDetail?.buildInfo && !apiDetail.buildInfo.blueprintOwned && (
               <div
                 className="bp-ownership-note"
                 title={
-                  "You don't own a BPO or BPC for this item, so True Profit assumes a blueprint you " +
-                  "already own (at ME 0 here) and does NOT include the cost of acquiring one. " +
-                  "For T1, that's a one-time BPO from the market (amortises to ~nothing over unlimited runs). " +
-                  "For T2/T3, you'd buy a BPC from contracts or invent one — a real per-run cost not shown here."
+                  "You don't own a BPO or BPC for this item. True Profit does NOT include the cost of obtaining one. " +
+                  "For T1 items, buy a BPO from the market (one-time cost, unlimited runs). " +
+                  "For T2/T3, buy a BPC from contracts or invent one — this is a real per-run cost not reflected here."
                 }
               >
-                ⚠ Assumes you own the blueprint — acquisition cost not included.
+                ⚠ You don't own a blueprint for this item — obtain a BPC or BPO before manufacturing. Acquisition cost not included in True Profit.
               </div>
             )}
 

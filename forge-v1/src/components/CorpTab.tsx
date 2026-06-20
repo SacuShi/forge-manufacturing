@@ -1,20 +1,13 @@
 /**
- * FORGE v1.4.0 — CorpTab component
+ * FORGE — CorpTab component
  *
- * Renders the Corp section of the main content area.
- * Manages its own sub-tab state: Blueprints | Assets | Jobs.
- *
- * Handles three top-level states:
- *   1. Corp data loading → spinner
- *   2. Corp not configured → "Not set up" placeholder
- *   3. Corp configured, no Director/CEO access → access-denied placeholder
- *   4. Corp configured, access granted → sub-tab data views
- *
- * Data fetching is lazy — loads when the sub-tab becomes active,
- * with a manual Refresh button to pull fresh ESI data.
+ * Corp Blueprints, Assets, and Jobs — same visual treatment as personal tabs:
+ *   • Blueprints: card layout with ISK/hr, Margin, Total ISK metrics + sort controls
+ *   • Assets:     searchable table with Jita value column + click-to-open sidebar
+ *   • Jobs:       same columns as personal Jobs tab, colour-coded by urgency
  */
 
-import { useState, useEffect, useCallback, useRef, type FC } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, type FC } from 'react';
 import type {
   CorpStatus,
   CorpAccessStatus,
@@ -23,119 +16,173 @@ import type {
   CorpJob,
 } from '../types';
 import { apiGet, apiPost } from '../api/client';
-import { formatBuildTime } from '../utils/format';
+import { formatISK, formatMargin, formatBuildTime } from '../utils/format';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
 type CorpSubTab = 'blueprints' | 'assets' | 'jobs';
+type BpSortField = 'iskPerHour' | 'margin' | 'profit' | 'name';
+
+interface BlueprintProfit {
+  profit:        number;
+  margin:        number;
+  iskPerHour:    number;
+  sellPrice?:    number;
+  materialCost?: number;
+  buildTime?:    number;
+  liquidityRisk?: string;
+}
 
 interface CorpTabProps {
   token:            string | null;
   corpStatus:       CorpStatus | null;
   accessStatus:     CorpAccessStatus | null;
-  /** True while useCorpData is fetching status + access on first tab activation */
   corpDataLoading?: boolean;
+  regionId:         number;
+  onSelectItem:     (typeId: number, name: string) => void;
 }
 
-// ── Activity label map ───────────────────────────────────────────────────────
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
 const ACTIVITY_LABELS: Record<number, string> = {
-  1:  'Manufacturing',
-  3:  'TE Research',
-  4:  'ME Research',
-  5:  'Copying',
-  8:  'Invention',
-  9:  'Reaction',
-  11: 'Rev. Engineering',
+  1:  'Manufacturing', 3: 'TE Research', 4: 'ME Research',
+  5:  'Copying',       8: 'Invention',   9: 'Reaction',   11: 'Rev. Engineering',
 };
 
-// ── Sub-tab: Blueprints ──────────────────────────────────────────────────────
+function timeRemaining(endDate: string | null): string {
+  if (!endDate) return '—';
+  const diff = new Date(endDate).getTime() - Date.now();
+  if (diff <= 0) return 'Complete';
+  return formatBuildTime(Math.floor(diff / 1000));
+}
 
-interface CorpBlueprintsProps { token: string | null }
+// Strip " Blueprint" suffix to get the product name, used for EVE icon URL
+function productName(bpName: string): string {
+  return bpName.replace(/ Blueprint$/i, '');
+}
 
-const CorpBlueprintsView: FC<CorpBlueprintsProps> = ({ token }) => {
-  const [blueprints, setBlueprints] = useState<CorpBlueprint[]>([]);
-  const [loading,    setLoading]    = useState(false);
-  const [error,      setError]      = useState<string | null>(null);
-  const [search,     setSearch]     = useState('');
-  // debouncedSearch is what actually drives the API call — updated 300 ms after typing stops
+// ── Corp Blueprints sub-tab ──────────────────────────────────────────────────
+
+interface CorpBlueprintsProps {
+  token:        string | null;
+  regionId:     number;
+  onSelectItem: (typeId: number, name: string) => void;
+}
+
+const CorpBlueprintsView: FC<CorpBlueprintsProps> = ({ token, regionId, onSelectItem }) => {
+  const [blueprints,  setBlueprints]  = useState<CorpBlueprint[]>([]);
+  const [bpProfits,   setBpProfits]   = useState<Record<number, BlueprintProfit>>({});
+  const [loading,     setLoading]     = useState(false);
+  const [error,       setError]       = useState<string | null>(null);
+  const [search,      setSearch]      = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
-  const [typeFilter, setTypeFilter] = useState<'all' | 'BPO' | 'BPC'>('all');
-  const [total,      setTotal]      = useState(0);
+  const [typeFilter,  setTypeFilter]  = useState<'all' | 'BPO' | 'BPC'>('all');
+  const [total,       setTotal]       = useState(0);
   const [lastRefresh, setLastRefresh] = useState<string | null>(null);
-  const [sortField,   setSortField]   = useState<'name' | 'me' | 'te' | 'runs'>('name');
-  const [sortDir,     setSortDir]     = useState<'asc' | 'desc'>('asc');
+  const [bpSort,      setBpSort]      = useState<BpSortField>('iskPerHour');
+  const [bpSortDir,   setBpSortDir]   = useState<'asc' | 'desc'>('desc');
 
-  // Debounce: only update debouncedSearch 300 ms after the user stops typing
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const debounceRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const loadIdRef    = useRef(0);
   const handleSearchChange = (value: string) => {
     setSearch(value);
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => setDebouncedSearch(value), 300);
   };
-  // Clean up on unmount
   useEffect(() => () => { if (debounceRef.current) clearTimeout(debounceRef.current); }, []);
 
   const load = useCallback(async () => {
     if (!token) return;
+    const myId = ++loadIdRef.current;
     setLoading(true);
     setError(null);
     try {
       const params = new URLSearchParams({
-        limit:  '200',
-        offset: '0',
-        type:   typeFilter,
+        limit: '500', offset: '0', type: typeFilter,
         ...(debouncedSearch ? { search: debouncedSearch } : {}),
       });
       const data = await apiGet<{
         blueprints: CorpBlueprint[];
         meta: { total: number; last_refresh_at: string | null };
       }>(`/api/corp/blueprints?${params}`, token);
+      if (myId !== loadIdRef.current) return; // stale — a newer request is in flight
       setBlueprints(data.blueprints);
       setTotal(data.meta.total);
       setLastRefresh(data.meta.last_refresh_at);
     } catch (e) {
+      if (myId !== loadIdRef.current) return;
       setError((e as Error).message);
     } finally {
+      if (myId !== loadIdRef.current) return;
       setLoading(false);
     }
   }, [token, typeFilter, debouncedSearch]);
 
   useEffect(() => { load(); }, [load]);
 
+  // Fetch profitability for all loaded blueprint type_ids
+  useEffect(() => {
+    if (blueprints.length === 0) { setBpProfits({}); return; }
+    const typeIds = [...new Set(blueprints.map(b => b.type_id))];
+    let cancelled = false;
+    apiPost<Record<number, BlueprintProfit>>(
+      '/api/blueprint-profits',
+      { blueprintTypeIds: typeIds, regionId },
+    )
+      .then(data => { if (!cancelled) setBpProfits(data || {}); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [blueprints, regionId]);
+
   const handleRefresh = async () => {
     if (!token) return;
-    setError(null); // clear any stale error before refresh
+    setError(null);
     try {
       await apiPost('/api/corp/refresh', {}, token);
-      setTimeout(load, 1500); // brief delay to let server-side ESI refresh complete
-    } catch (e) {
-      setError((e as Error).message);
-    }
+      setTimeout(load, 1500);
+    } catch (e) { setError((e as Error).message); }
   };
 
-  const handleSort = (field: typeof sortField) => {
-    if (field === sortField) {
-      setSortDir(d => d === 'asc' ? 'desc' : 'asc');
-    } else {
-      setSortField(field);
-      setSortDir('asc');
-    }
+  const handleBpSort = (field: BpSortField) => {
+    if (field === bpSort) setBpSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setBpSort(field); setBpSortDir(field === 'name' ? 'asc' : 'desc'); }
   };
 
-  const sorted = [...blueprints].sort((a, b) => {
-    let cmp = 0;
-    if (sortField === 'name') cmp = a.name.localeCompare(b.name);
-    else if (sortField === 'me')   cmp = a.me   - b.me;
-    else if (sortField === 'te')   cmp = a.te   - b.te;
-    else if (sortField === 'runs') cmp = a.runs - b.runs;
-    return sortDir === 'asc' ? cmp : -cmp;
-  });
+  // Group blueprints by type_id (same ME wins; most runs wins for BPCs)
+  const grouped = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const groups = new Map<number, CorpBlueprint[]>();
+    blueprints.forEach(bp => {
+      const arr = groups.get(bp.type_id);
+      if (arr) arr.push(bp);
+      else groups.set(bp.type_id, [bp]);
+    });
 
-  const SortArrow: FC<{ field: typeof sortField }> = ({ field }) =>
-    field === sortField ? (
-      <span className="sort-arrow">{sortDir === 'asc' ? '↑' : '↓'}</span>
-    ) : null;
+    const entries = Array.from(groups.entries()).filter(([, copies]) => {
+      if (typeFilter === 'BPO') return copies.some(c => c.bp_type === 'BPO');
+      if (typeFilter === 'BPC') return copies.some(c => c.bp_type === 'BPC');
+      return true;
+    }).filter(([, copies]) => {
+      if (!q) return true;
+      return copies[0].name.toLowerCase().includes(q);
+    });
+
+    const dir = bpSortDir === 'asc' ? 1 : -1;
+    const metric = (typeId: number): number | null => {
+      const p = bpProfits[typeId];
+      if (!p) return null;
+      return bpSort === 'margin' ? p.margin : bpSort === 'profit' ? p.profit : p.iskPerHour;
+    };
+    entries.sort(([a, ac], [b, bc]) => {
+      if (bpSort === 'name') return ac[0].name.localeCompare(bc[0].name);
+      const va = metric(a), vb = metric(b);
+      if (va == null && vb == null) return ac[0].name.localeCompare(bc[0].name);
+      if (va == null) return 1;
+      if (vb == null) return -1;
+      return (va - vb) * dir;
+    });
+    return entries;
+  }, [blueprints, search, typeFilter, bpProfits, bpSort, bpSortDir]);
 
   return (
     <div className="corp-sub-content">
@@ -151,116 +198,142 @@ const CorpBlueprintsView: FC<CorpBlueprintsProps> = ({ token }) => {
         />
         <div className="pill-filter-group">
           {(['all', 'BPO', 'BPC'] as const).map(t => (
-            <button
-              key={t}
-              type="button"
+            <button key={t} type="button"
               className={`pill-filter${typeFilter === t ? ' active' : ''}`}
-              onClick={() => setTypeFilter(t)}
-            >
+              onClick={() => setTypeFilter(t)}>
               {t === 'all' ? 'All' : t}
             </button>
           ))}
         </div>
-        <button
-          type="button"
-          className="btn corp-refresh-btn"
-          onClick={handleRefresh}
-          disabled={loading}
-          title="Fetch fresh data from ESI"
-          aria-label="Refresh corp blueprint data from ESI"
-        >
+        <button type="button" className="btn corp-refresh-btn"
+          onClick={handleRefresh} disabled={loading}
+          title="Fetch fresh data from ESI" aria-label="Refresh corp blueprints">
           ⟳ Refresh
         </button>
         <span className="corp-meta-text">
-          {total} blueprints
-          {lastRefresh
-            ? ` · Updated ${new Date(lastRefresh).toLocaleTimeString()}`
-            : ''}
+          {total} blueprints{lastRefresh && !isNaN(new Date(lastRefresh).getTime()) ? ` · Updated ${new Date(lastRefresh).toLocaleTimeString()}` : ''}
         </span>
+      </div>
+
+      {/* Sort controls — same as personal Blueprints tab */}
+      <div style={{ display: 'flex', gap: 4, marginBottom: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 10, color: 'var(--color-text-tertiary)', letterSpacing: 0.5, marginRight: 2 }}>
+          SORT
+        </span>
+        {([
+          ['iskPerHour', 'ISK/hr'],
+          ['margin',     'Margin'],
+          ['profit',     'Total ISK'],
+          ['name',       'Name'],
+        ] as [BpSortField, string][]).map(([key, label]) => (
+          <button key={key} type="button"
+            className={`pill-filter${bpSort === key ? ' active' : ''}`}
+            onClick={() => handleBpSort(key)} aria-pressed={bpSort === key}>
+            {label}{bpSort === key ? (bpSortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+          </button>
+        ))}
       </div>
 
       {error && <div className="corp-error" role="alert">⚠ {error}</div>}
       {loading && <div className="corp-loading">Loading corp blueprints…</div>}
 
-      {!loading && !error && sorted.length === 0 && (
+      {!loading && !error && grouped.length === 0 && (
         <div className="corp-empty">
-          No blueprints found.
-          {search ? ' Try clearing your search filter.' : ''}
+          No blueprints found.{search ? ' Try clearing your search.' : ''}
         </div>
       )}
 
-      {!loading && sorted.length > 0 && (
-        <div className="corp-table-wrap">
-          <table className="corp-table" aria-label="Corp blueprints">
-            <thead>
-              <tr>
-                <th
-                  className="corp-th corp-th-sortable"
-                  onClick={() => handleSort('name')}
-                  aria-sort={sortField === 'name' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
-                >
-                  Name <SortArrow field="name" />
-                </th>
-                <th className="corp-th corp-th-center">Type</th>
-                <th
-                  className="corp-th corp-th-center corp-th-sortable"
-                  onClick={() => handleSort('me')}
-                  title="Material Efficiency"
-                  aria-sort={sortField === 'me' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
-                >
-                  ME <SortArrow field="me" />
-                </th>
-                <th
-                  className="corp-th corp-th-center corp-th-sortable"
-                  onClick={() => handleSort('te')}
-                  title="Time Efficiency"
-                  aria-sort={sortField === 'te' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
-                >
-                  TE <SortArrow field="te" />
-                </th>
-                <th
-                  className="corp-th corp-th-center corp-th-sortable"
-                  onClick={() => handleSort('runs')}
-                  title="Runs remaining (BPC only)"
-                  aria-sort={sortField === 'runs' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
-                >
-                  Runs <SortArrow field="runs" />
-                </th>
-                <th className="corp-th">Location</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sorted.map(bp => (
-                <tr key={bp.item_id} className="corp-row">
-                  <td className="corp-td corp-td-name">{bp.name}</td>
-                  <td className="corp-td corp-td-center">
-                    <span className={`corp-bp-badge corp-bp-badge-${bp.bp_type.toLowerCase()}`}>
-                      {bp.bp_type}
+      {/* Card list — matches personal Blueprints tab layout */}
+      {!loading && grouped.length > 0 && (
+        <div className="bp-list">
+          {grouped.map(([typeId, copies]) => {
+            const bp    = copies[0]; // representative copy
+            const isBpo = bp.bp_type === 'BPO';
+            const pName = productName(bp.name);
+            const p     = bpProfits[typeId];
+
+            return (
+              <div
+                key={typeId}
+                className="bp-card"
+                role="button"
+                tabIndex={0}
+                onClick={() => onSelectItem(typeId, pName)}
+                onKeyDown={e => e.key === 'Enter' && onSelectItem(typeId, pName)}
+              >
+                {/* Icon */}
+                <div className={`bp-icon ${isBpo ? 'bp-icon-bpo' : 'bp-icon-bpc'}`}>
+                  <img
+                    src={`https://images.evetech.net/types/${typeId}/icon?size=32`}
+                    alt={bp.name}
+                    width={32} height={32}
+                    crossOrigin="anonymous"
+                    onError={e => {
+                      (e.currentTarget as HTMLImageElement).style.display = 'none';
+                      const sib = (e.currentTarget as HTMLImageElement).nextSibling as HTMLElement | null;
+                      if (sib) sib.style.display = 'inline';
+                    }}
+                  />
+                  <span style={{ fontSize: 18, fontWeight: 700, display: 'none' }}>◇</span>
+                </div>
+
+                {/* Name + badges */}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <span className="bp-name">{bp.name}</span>
+                  <div className="bp-badges">
+                    <span className={isBpo ? 'badge-bpo' : 'badge-bpc'}>
+                      {isBpo ? 'BPO' : `BPC${copies.length > 1 ? ` ×${copies.length}` : ''}`}
                     </span>
-                  </td>
-                  <td className="corp-td corp-td-center">{bp.me}</td>
-                  <td className="corp-td corp-td-center">{bp.te}</td>
-                  <td className="corp-td corp-td-center">
-                    {bp.runs === -1 ? '∞' : bp.runs}
-                  </td>
-                  <td className="corp-td corp-td-location" title={bp.location_flag ?? ''}>
-                    {bp.location_flag ?? '—'}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                    <span className="badge-me">ME{bp.me}</span>
+                    <span className="badge-te">TE{bp.te}</span>
+                    {bp.runs !== -1 && (
+                      <span style={{ fontSize: 10, color: 'var(--color-text-tertiary)' }}>
+                        {`${bp.runs} runs`}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Profitability metrics */}
+                {p ? (
+                  <div className="bp-metrics">
+                    <div className={`bp-metric${bpSort === 'iskPerHour' ? ' active' : ''}`}>
+                      <span className="bp-metric-label">ISK/hr</span>
+                      <span className="bp-metric-val" style={{ color: p.iskPerHour > 0 ? 'var(--color-success)' : 'var(--color-danger)' }}>
+                        {formatISK(p.iskPerHour)}
+                      </span>
+                    </div>
+                    <div className={`bp-metric${bpSort === 'margin' ? ' active' : ''}`}>
+                      <span className="bp-metric-label">Margin</span>
+                      <span className="bp-metric-val">{formatMargin(p.margin)}</span>
+                    </div>
+                    <div className={`bp-metric${bpSort === 'profit' ? ' active' : ''}`}>
+                      <span className="bp-metric-label">Total ISK</span>
+                      <span className="bp-metric-val" style={{ color: p.profit > 0 ? 'var(--color-success)' : 'var(--color-danger)' }}>
+                        {formatISK(p.profit)}
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="bp-metrics bp-metrics-empty">no market<br/>data</div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
   );
 };
 
-// ── Sub-tab: Assets ──────────────────────────────────────────────────────────
+// ── Corp Assets sub-tab ──────────────────────────────────────────────────────
 
-interface CorpAssetsProps { token: string | null }
+interface CorpAssetsProps {
+  token:        string | null;
+  onSelectItem: (typeId: number, name: string) => void;
+}
 
-const CorpAssetsView: FC<CorpAssetsProps> = ({ token }) => {
+const CorpAssetsView: FC<CorpAssetsProps> = ({ token, onSelectItem }) => {
   const [assets,          setAssets]          = useState<CorpAsset[]>([]);
   const [loading,         setLoading]         = useState(false);
   const [error,           setError]           = useState<string | null>(null);
@@ -279,8 +352,7 @@ const CorpAssetsView: FC<CorpAssetsProps> = ({ token }) => {
 
   const load = useCallback(async () => {
     if (!token) return;
-    setLoading(true);
-    setError(null);
+    setLoading(true); setError(null);
     try {
       const params = new URLSearchParams({
         limit: '500',
@@ -303,42 +375,27 @@ const CorpAssetsView: FC<CorpAssetsProps> = ({ token }) => {
   useEffect(() => { load(); }, [load]);
 
   const handleRefresh = async () => {
-    if (!token) return;
-    setError(null); // clear any stale error before refresh
+    if (!token) return; setError(null);
     try {
       await apiPost('/api/corp/refresh', {}, token);
       setTimeout(load, 1500);
-    } catch (e) {
-      setError((e as Error).message);
-    }
+    } catch (e) { setError((e as Error).message); }
   };
 
   return (
     <div className="corp-sub-content">
       <div className="corp-toolbar">
-        <input
-          type="search"
-          className="corp-search"
-          placeholder="Search assets…"
-          value={search}
+        <input type="search" className="corp-search"
+          placeholder="Search assets…" value={search}
           onChange={e => handleSearchChange(e.target.value)}
-          aria-label="Search corp assets"
-        />
-        <button
-          type="button"
-          className="btn corp-refresh-btn"
-          onClick={handleRefresh}
-          disabled={loading}
-          title="Fetch fresh data from ESI"
-          aria-label="Refresh corp asset data from ESI"
-        >
+          aria-label="Search corp assets" />
+        <button type="button" className="btn corp-refresh-btn"
+          onClick={handleRefresh} disabled={loading}
+          title="Fetch fresh data from ESI" aria-label="Refresh corp assets">
           ⟳ Refresh
         </button>
         <span className="corp-meta-text">
-          {total} asset types
-          {lastRefresh
-            ? ` · Updated ${new Date(lastRefresh).toLocaleTimeString()}`
-            : ''}
+          {total} asset types{lastRefresh && !isNaN(new Date(lastRefresh).getTime()) ? ` · Updated ${new Date(lastRefresh).toLocaleTimeString()}` : ''}
         </span>
       </div>
 
@@ -346,9 +403,7 @@ const CorpAssetsView: FC<CorpAssetsProps> = ({ token }) => {
       {loading && <div className="corp-loading">Loading corp assets…</div>}
 
       {!loading && !error && assets.length === 0 && (
-        <div className="corp-empty">
-          No assets found.{search ? ' Try clearing your search filter.' : ''}
-        </div>
+        <div className="corp-empty">No assets found.{search ? ' Try clearing your search.' : ''}</div>
       )}
 
       {!loading && assets.length > 0 && (
@@ -362,11 +417,12 @@ const CorpAssetsView: FC<CorpAssetsProps> = ({ token }) => {
             </thead>
             <tbody>
               {assets.map(a => (
-                <tr key={a.type_id} className="corp-row">
+                <tr key={a.type_id} className="corp-row corp-row-clickable"
+                  onClick={() => onSelectItem(a.type_id, a.name)}
+                  role="button" tabIndex={0}
+                  onKeyDown={e => e.key === 'Enter' && onSelectItem(a.type_id, a.name)}>
                   <td className="corp-td corp-td-name">{a.name}</td>
-                  <td className="corp-td corp-td-right">
-                    {a.total_quantity.toLocaleString()}
-                  </td>
+                  <td className="corp-td corp-td-right">{a.total_quantity.toLocaleString()}</td>
                 </tr>
               ))}
             </tbody>
@@ -377,7 +433,7 @@ const CorpAssetsView: FC<CorpAssetsProps> = ({ token }) => {
   );
 };
 
-// ── Sub-tab: Jobs ────────────────────────────────────────────────────────────
+// ── Corp Jobs sub-tab ────────────────────────────────────────────────────────
 
 interface CorpJobsProps { token: string | null }
 
@@ -389,8 +445,7 @@ const CorpJobsView: FC<CorpJobsProps> = ({ token }) => {
 
   const load = useCallback(async () => {
     if (!token) return;
-    setLoading(true);
-    setError(null);
+    setLoading(true); setError(null);
     try {
       const data = await apiGet<{
         jobs: CorpJob[];
@@ -408,41 +463,23 @@ const CorpJobsView: FC<CorpJobsProps> = ({ token }) => {
   useEffect(() => { load(); }, [load]);
 
   const handleRefresh = async () => {
-    if (!token) return;
-    setError(null); // clear any stale error before refresh
+    if (!token) return; setError(null);
     try {
       await apiPost('/api/corp/refresh', {}, token);
       setTimeout(load, 1500);
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  };
-
-  const timeRemaining = (endDate: string | null): string => {
-    if (!endDate) return '—';
-    const diff = new Date(endDate).getTime() - Date.now();
-    if (diff <= 0) return 'Complete';
-    return formatBuildTime(Math.floor(diff / 1000));
+    } catch (e) { setError((e as Error).message); }
   };
 
   return (
     <div className="corp-sub-content">
       <div className="corp-toolbar">
-        <button
-          type="button"
-          className="btn corp-refresh-btn"
-          onClick={handleRefresh}
-          disabled={loading}
-          title="Fetch fresh data from ESI"
-          aria-label="Refresh corp job data from ESI"
-        >
+        <button type="button" className="btn corp-refresh-btn"
+          onClick={handleRefresh} disabled={loading}
+          title="Fetch fresh data from ESI" aria-label="Refresh corp jobs">
           ⟳ Refresh
         </button>
         <span className="corp-meta-text">
-          {jobs.length} active jobs
-          {lastRefresh
-            ? ` · Updated ${new Date(lastRefresh).toLocaleTimeString()}`
-            : ''}
+          {jobs.length} active jobs{lastRefresh && !isNaN(new Date(lastRefresh).getTime()) ? ` · Updated ${new Date(lastRefresh).toLocaleTimeString()}` : ''}
         </span>
       </div>
 
@@ -463,26 +500,28 @@ const CorpJobsView: FC<CorpJobsProps> = ({ token }) => {
                 <th className="corp-th corp-th-center">Runs</th>
                 <th className="corp-th">Installer</th>
                 <th className="corp-th">Status</th>
-                <th className="corp-th corp-th-right">Time Left</th>
+                <th className="corp-th corp-th-right">Time Remaining</th>
               </tr>
             </thead>
             <tbody>
               {jobs.map(job => {
-                const done     = job.status === 'delivered' || timeRemaining(job.end_date) === 'Complete';
-                const activity = ACTIVITY_LABELS[job.activity_id ?? -1] ?? `Activity ${job.activity_id}`;
+                const remaining = timeRemaining(job.end_date);
+                const done      = job.status === 'delivered' || remaining === 'Complete';
+                const activity  = ACTIVITY_LABELS[job.activity_id ?? -1] ?? `Activity ${job.activity_id}`;
+                const statusKey = (job.status || 'unknown').toLowerCase();
                 return (
                   <tr key={job.job_id} className={`corp-row${done ? ' corp-row-done' : ''}`}>
-                    <td className="corp-td corp-td-name">{job.product_name}</td>
+                    <td className="corp-td corp-td-name">{job.product_name || job.blueprint_name}</td>
                     <td className="corp-td">{activity}</td>
                     <td className="corp-td corp-td-center">{job.runs ?? '—'}</td>
-                    <td className="corp-td">{job.installer_name}</td>
+                    <td className="corp-td">{job.installer_name || '—'}</td>
                     <td className="corp-td">
-                      <span className={`corp-job-status corp-job-status-${(job.status || 'unknown').toLowerCase()}`}>
+                      <span className={`corp-job-status corp-job-status-${statusKey}`}>
                         {job.status ?? '—'}
                       </span>
                     </td>
-                    <td className="corp-td corp-td-right">
-                      {timeRemaining(job.end_date)}
+                    <td className="corp-td corp-td-right" style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>
+                      {remaining}
                     </td>
                   </tr>
                 );
@@ -497,11 +536,11 @@ const CorpJobsView: FC<CorpJobsProps> = ({ token }) => {
 
 // ── Main CorpTab component ────────────────────────────────────────────────────
 
-const CorpTab: FC<CorpTabProps> = ({ token, corpStatus, accessStatus, corpDataLoading }) => {
+const CorpTab: FC<CorpTabProps> = ({
+  token, corpStatus, accessStatus, corpDataLoading, regionId, onSelectItem,
+}) => {
   const [activeSubTab, setActiveSubTab] = useState<CorpSubTab>('blueprints');
 
-  // Still fetching corp status, or re-checking access after a character switch —
-  // show a spinner so we don't flash "Not Configured" or a stale access decision.
   if (corpDataLoading && (corpStatus === null || accessStatus === null)) {
     return (
       <div className="corp-not-configured">
@@ -511,7 +550,6 @@ const CorpTab: FC<CorpTabProps> = ({ token, corpStatus, accessStatus, corpDataLo
     );
   }
 
-  // Corp not configured
   if (!corpStatus?.configured) {
     return (
       <div className="corp-not-configured">
@@ -527,7 +565,6 @@ const CorpTab: FC<CorpTabProps> = ({ token, corpStatus, accessStatus, corpDataLo
     );
   }
 
-  // Corp configured, but character is not a Director
   if (!accessStatus?.hasAccess) {
     return (
       <div className="corp-not-configured">
@@ -544,20 +581,15 @@ const CorpTab: FC<CorpTabProps> = ({ token, corpStatus, accessStatus, corpDataLo
     );
   }
 
-  // Access granted — render sub-tabs
   return (
     <div className="corp-content">
       {/* Sub-tab nav */}
       <div className="corp-sub-tabs" role="tablist" aria-label="Corp data sections">
         {(['blueprints', 'assets', 'jobs'] as CorpSubTab[]).map(tab => (
-          <button
-            key={tab}
-            type="button"
-            role="tab"
+          <button key={tab} type="button" role="tab"
             aria-selected={activeSubTab === tab}
             className={`corp-sub-tab${activeSubTab === tab ? ' active' : ''}`}
-            onClick={() => setActiveSubTab(tab)}
-          >
+            onClick={() => setActiveSubTab(tab)}>
             {tab === 'blueprints' && '📋 '}
             {tab === 'assets'     && '📦 '}
             {tab === 'jobs'       && '⚙ '}
@@ -565,13 +597,18 @@ const CorpTab: FC<CorpTabProps> = ({ token, corpStatus, accessStatus, corpDataLo
           </button>
         ))}
         <div className="corp-sub-tab-spacer" />
-        <span className="corp-corp-name-badge">{corpStatus.corp_name}</span>
+        <span className="corp-corp-name-badge">{corpStatus.corp_name ?? 'Corp'}</span>
       </div>
 
-      {/* Sub-tab panels */}
-      {activeSubTab === 'blueprints' && <CorpBlueprintsView token={token} />}
-      {activeSubTab === 'assets'     && <CorpAssetsView     token={token} />}
-      {activeSubTab === 'jobs'       && <CorpJobsView       token={token} />}
+      {activeSubTab === 'blueprints' && (
+        <CorpBlueprintsView token={token} regionId={regionId} onSelectItem={onSelectItem} />
+      )}
+      {activeSubTab === 'assets' && (
+        <CorpAssetsView token={token} onSelectItem={onSelectItem} />
+      )}
+      {activeSubTab === 'jobs' && (
+        <CorpJobsView token={token} />
+      )}
     </div>
   );
 };

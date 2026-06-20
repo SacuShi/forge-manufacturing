@@ -389,6 +389,25 @@ export interface AltCharacter {
   error:             string | null;
 }
 
+/** Minimal per-character identity needed for PI fetching */
+export interface PiCharacter {
+  characterId: number;
+  name:        string;
+  token:       string;
+}
+
+/** Per-character slot summary passed to the Queue Planner */
+export interface QueueCharacter {
+  characterId: number;
+  name:        string;
+  token:       string;
+  totalSlots:  number;
+  freeSlots:   number;
+  activeJobs:  ActiveJob[];
+  /** skill_id → trained level, used for per-character blueprint skill checks */
+  skills:      Record<number, number>;
+}
+
 // ══════════════════════════════════════════════════════════════════════════
 // 5. v1.2.0 — TRUE PROFIT TYPES
 // ══════════════════════════════════════════════════════════════════════════
