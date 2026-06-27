@@ -1154,6 +1154,9 @@ const TRADE_MIN_ERROR_BUDGET = 20;              // back off if X-ESI-Error-Limit
 // Per-page conditional cache: pageUrl -> { etag, orders:[{type_id,price,is_buy_order,volume_remain}] }
 const tradePageCache = new Map();
 
+// PI colony detail cache: characterId -> { data, fetchedAt } — 10-minute TTL
+const piDetailCache = new Map();
+
 // Rebuilt station book: type_id -> { sell, buy, spread, spreadPct, sellOrders, buyOrders, sellQtyTop, buyQtyTop }
 let jitaBook = new Map();
 let jitaBookMeta = { updatedAt: 0, expiresAt: 0, fetching: false, lastError: null, types: 0 };
@@ -1387,13 +1390,10 @@ app.post('/api/trading/scan', security.apiLimiter, security.verifyEveToken, asyn
 
     const characterId = req.characterId;
 
-    // Character's actual fee rates (fall back to typical defaults)
-    const settings = await dbGet(
-      'SELECT broker_fee_rate, transaction_tax_rate FROM character_industry_settings WHERE character_id = ?',
-      [characterId]
-    );
-    const brokerFeeRate      = settings?.broker_fee_rate      ?? 0.03;
-    const transactionTaxRate = settings?.transaction_tax_rate ?? 0.036;
+    // Character's actual fee rates — derived from skills + standings (same as /api/character-fee-rates)
+    const { skillMap, standings } = getCharacterSession(characterId);
+    const { brokerFeeRate, transactionTaxRate } =
+      calcSalesFeeRates(skillMap, standings, HUB_STANDINGS[10000002]); // Jita standings
 
     // Volume and name data from the precomputed table (best source we have)
     const [volumeRows, nameRows] = await Promise.all([
