@@ -100,6 +100,95 @@ export interface ActiveJob {
   done: boolean;
   /** ESI activity_id: 1=Mfg, 3=TE Research, 4=ME Research, 5=Copy, 8=Invention, 9=Reactions, 11=Rev.Eng */
   activityId?: number;
+  /** Raw ISO end_date from ESI — used by TickerBar for live countdown */
+  endDate?: string;
+}
+
+// ── Ticker pin system ─────────────────────────────────────────────────────────
+
+export interface TickerGroup {
+  id: string;
+  name: string;
+  color: string; // hex accent for the group label
+}
+
+export type TickerPinType =
+  | 'price_sell'       // item sell price at hub
+  | 'price_buy'        // item buy price at hub
+  | 'price_spread'     // sell/buy spread % at hub
+  | 'mfg_profit'       // manufacturing profit/run at hub
+  | 'mfg_margin'       // manufacturing margin % at hub
+  | 'mfg_isk_hour'     // manufacturing ISK/hr at hub
+  | 'mfg_top_hub'      // top manufacturing opportunity at hub (no item needed)
+  | 'trade_spread'     // station trading spread for item at hub
+  | 'trade_top_hub'    // top station trading opportunity at hub (no item needed)
+  | 'wallet'           // character wallet total
+  | 'jobs_count'       // active job count
+  | 'jobs_next'        // next completing job + countdown
+  | 'jobs_free_slots'  // free manufacturing slots
+  | 'pi_extractor'     // PI ECU expiry countdown (snapshot — re-pin to update)
+  | 'pi_colony_isk';   // PI colony estimated ISK/day (snapshot)
+
+export interface TickerPin {
+  id: string;
+  type: TickerPinType;
+  label: string;          // user-visible name
+  groupId: string;        // which layout group this pin belongs to
+  regionId?: number;      // for hub-specific pins
+  hubName?: string;       // cached hub display name
+  typeId?: number;        // for item-specific pins
+  itemName?: string;      // cached item name
+  baseline?: number;      // value at pin time (for direction arrows)
+  baselineDate?: number;  // unix ms when baseline was set (refresh daily)
+  expiryTime?: string;    // ISO date — for pi_extractor countdown
+  snapshotValue?: number; // stored value at pin time — for pi_colony_isk etc.
+  addedAt: number;
+  order: number;
+}
+
+export interface NewPinConfig {
+  type: TickerPinType;
+  label?: string;          // auto-generated if omitted
+  groupId?: string;        // defaults to active group if omitted
+  regionId?: number;
+  hubName?: string;
+  typeId?: number;
+  itemName?: string;
+  expiryTime?: string;     // pi_extractor
+  snapshotValue?: number;  // pi_colony_isk
+}
+
+export type TickerColorClass = 'green' | 'red' | 'amber' | 'cyan' | 'neutral';
+export type TickerAnimClass  = 'pulse-slow' | 'flash-fast' | 'glow-once' | 'none';
+
+export interface TickerSlotData {
+  pinId: string;
+  primaryText: string;
+  secondaryText?: string;
+  direction: 'up' | 'down' | 'stable' | null;
+  changePct: number | null;
+  colorClass: TickerColorClass;
+  animClass: TickerAnimClass;
+  flashKey: number;   // increment on value change to restart one-shot CSS animation
+  loading: boolean;
+}
+
+export interface TickerBroadcastPayload {
+  pins: TickerPin[];
+  slots: Record<string, TickerSlotData>;
+}
+
+/** Legacy — kept for backward compatibility with existing TickerBar pop-out code */
+export interface TickerData {
+  walletISK:      number;
+  jobCount:       number;
+  nextJobName:    string | null;
+  nextJobEndDate: string | null;
+  topItemName:    string | null;
+  topItemProfit:  number | null;
+  topItemMargin:  number | null;
+  marketName:     string;
+  updatedAt:      number;
 }
 
 export interface CharacterInfo {
@@ -616,6 +705,8 @@ export interface TrueCostResponse {
   true_margin:  number;
   region_id:    number;
   prices_warm:  boolean;
+  /** True when the lowest sell order is >3× median — profit calculated using median instead. */
+  sell_price_anomaly?: boolean;
   setup_configured: boolean;
 
   /** v1.17.0 — effective build time + ISK/hr (incl. TE, Industry skills, structure TE, implant) */
@@ -646,3 +737,92 @@ export interface TrueCostResponse {
     effective_me?:       number;
   };
 }
+
+// ── 7. STATION TRADING TYPES (v1.27.0) ──────────────────────────────────────
+
+export interface TradingDepthLevel {
+  price: number;
+  qty:   number;
+}
+
+export interface TradingScanItem {
+  typeId:        number;
+  name:          string;
+  sell:          number;
+  buy:           number;
+  netProfit:     number;
+  netMarginPct:  number;
+  brokerFeeBuy:  number;
+  brokerFeeSell: number;
+  transTax:      number;
+  sellOrders:    number;
+  buyOrders:     number;
+  sellQtyTop:    number;
+  buyQtyTop:     number;
+  avgDailyVol:   number;
+  sampleDays:    number;
+  iskPerDay:     number;
+  sellDepth:     TradingDepthLevel[];
+  buyDepth:      TradingDepthLevel[];
+}
+
+export interface TradeHub {
+  id:    string;
+  name:  string;
+  label: string;
+}
+
+export interface TradingMeta {
+  hubId:        string;
+  station:      string;
+  stationLabel: string;
+  stationId:    number;
+  regionId:     number;
+  updatedAt:    number | null;
+  ageSec:       number | null;
+  expiresInSec: number | null;
+  types:        number;
+  warming:      boolean;
+  lastError:    string | null;
+}
+
+export interface TradingScanResponse {
+  results:            TradingScanItem[];
+  total:              number;
+  totalMatched:       number;   // before 500-result cap
+  jitaBookSize:       number;
+  coveredWithVolume:  number;
+  hubVolumeEnriched?: boolean;
+  brokerFeeRate:      number;
+  transactionTaxRate: number;
+  sessionCached?:     boolean;  // false = session not yet pushed, fees are defaults
+  meta:               TradingMeta;
+}
+
+export interface TradingWatchlistEntry {
+  typeId: number;
+  name:   string;
+}
+
+export interface CharacterOrder {
+  order_id:      number;
+  type_id:       number;
+  name:          string;
+  price:         number;
+  volume_remain: number;
+  volume_total:  number;
+  is_buy_order:  boolean;
+  duration:      number;
+  issued:        string;
+  location_id:   number;
+  range:         string;
+  isUndercut:    boolean;
+  undercutBy:    number;
+  bookBest:      number | null;
+}
+
+export interface CharacterOrdersResponse {
+  orders: CharacterOrder[];
+  meta:   TradingMeta;
+}
+

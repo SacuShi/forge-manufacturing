@@ -31,7 +31,12 @@ import ChatPanel             from './components/ChatPanel';
 import LoginScreen           from './components/LoginScreen';
 import LoadingScreen         from './components/LoadingScreen';
 import IndustrySettingsModal from './components/IndustrySettings';
-import { useCorpData }       from './hooks/useCorpData';
+import TradingStandalone     from './components/TradingStandalone';
+import TickerBar             from './components/TickerBar';
+import TickerIntro, { shouldShowTickerIntro } from './components/TickerIntro';
+import { useTickerPins, TickerContext } from './hooks/useTickerPins';
+import { useCorpData }            from './hooks/useCorpData';
+import { usePushNotifications }  from './hooks/usePushNotifications';
 
 /**
  * Maps raw precomputed results to MarketItem display rows.
@@ -118,7 +123,7 @@ function toItemDetail(
   };
 }
 
-const App: FC = () => {
+const AppShell: FC = () => {
   const auth = useAuth();
   const { names: itemNames, loading: itemNamesLoading, resolveUnknown } = useItemNames();
 
@@ -138,6 +143,7 @@ const App: FC = () => {
   const [panelHistory, setPanelHistory] = useState<Array<{ typeId: number; name: string }>>([]);
 
   const [sessionExpired,    setSessionExpired]    = useState(false);
+  const [showTickerIntro,   setShowTickerIntro]   = useState(shouldShowTickerIntro);
   const [chatMessages,      setChatMessages]      = useState<ChatMessage[]>([]);
   const [rawResults,        setRawResults]        = useState<TopProfitableResponse['results']>([]);
   const [marketLoading,     setMarketLoading]     = useState(false);
@@ -167,7 +173,14 @@ const App: FC = () => {
 
   const [marketHasMore,     setMarketHasMore]     = useState(true);
   const [marketError,       setMarketError]       = useState<string | null>(null);
-  const [selectedMarket,    setSelectedMarket]    = useState<Market>(MARKETS[0]);
+  const [selectedMarket, setSelectedMarket] = useState<Market>(() => {
+    const saved = localStorage.getItem('forge-sell-market');
+    if (saved) {
+      const found = MARKETS.find((m) => m.id === parseInt(saved, 10));
+      if (found) return found;
+    }
+    return MARKETS[0]; // default: Jita
+  });
   // v1.3.0 — Source hub: where materials are purchased. Persisted across sessions.
   const [selectedSourceMarket, setSelectedSourceMarket] = useState<Market>(() => {
     const saved = localStorage.getItem('forge-source-market');
@@ -379,6 +392,10 @@ const App: FC = () => {
     activeTab === 'corp' && auth.status === 'authed',
   );
 
+  const { state: pushState, enable: pushEnable, disable: pushDisable } = usePushNotifications(
+    auth.status === 'authed' ? auth.token : null
+  );
+
   // Derive marketItems from rawResults (paginated list) or marketSearchResults (search).
   // When feeRates are loaded, profit/margin/ISK-hr are recalculated with the same
   // formula as True Profit so both panels show consistent figures.
@@ -529,6 +546,15 @@ const App: FC = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth.status, auth.token, combinedDataVersion]);
 
+  // Relay token to localStorage so the standalone trading window can read it.
+  useEffect(() => {
+    if (auth.status === 'authed' && auth.token) {
+      localStorage.setItem('forge_trading_token', auth.token);
+    } else if (auth.status === 'idle') {
+      localStorage.removeItem('forge_trading_token');
+    }
+  }, [auth.status, auth.token]);
+
   useEffect(() => {
     if (auth.status !== 'authed') return;
 
@@ -598,6 +624,20 @@ const App: FC = () => {
       })
       .catch(() => { /* history unavailable — not a fatal error */ });
   }, [auth.status, auth.character, auth.token, historyLoaded]);
+
+  // ── Ticker ────────────────────────────────────────────────────────────────
+  const totalFreeSlots = useMemo(() =>
+    queueCharacters.reduce((sum, c) => sum + c.freeSlots, 0),
+  [queueCharacters]);
+
+  const ticker = useTickerPins({
+    token:       auth.token,
+    characterId: auth.character?.characterId ?? null,
+    walletISK:   totalWalletISK,
+    activeJobs:  allActiveJobs,
+    freeSlots:   totalFreeSlots,
+    itemNames,
+  });
 
   const selectedDetail: ItemDetail | null = (() => {
     if (!selectedTypeId) return null;
@@ -738,6 +778,7 @@ const App: FC = () => {
 
   const handleMarketChange = useCallback(async (market: Market) => {
     setSelectedMarket(market);
+    localStorage.setItem('forge-sell-market', String(market.id));
     setRawResults([]);
     setMarketSearchResults(null);
     setMarketSearchQuery('');
@@ -755,6 +796,7 @@ const App: FC = () => {
       console.error('Failed to load market for region:', e);
       setMarketError((e as Error).message);
       setSelectedMarket(MARKETS[0]);
+      localStorage.setItem('forge-sell-market', String(MARKETS[0].id));
     } finally {
       setMarketLoading(false);
     }
@@ -921,7 +963,15 @@ const App: FC = () => {
 
   const character = auth.character!;
 
+  const tickerCtx = {
+    addPin:    ticker.addPin,
+    removePin: ticker.removePin,
+    isPinned:  ticker.isPinned,
+    pins:      ticker.displayPins, // active group's pins — what ⊕ buttons check
+  };
+
   return (
+    <TickerContext.Provider value={tickerCtx}>
     <div className="app" data-theme={theme}>
       <Header
         character={character}
@@ -956,11 +1006,9 @@ const App: FC = () => {
         className="app-body"
         ref={appBodyRef}
         style={{
-          // Desktop-only resizable widths (distinct vars so mobile/tablet media
-          // queries that use --sidebar-*-width are unaffected). Right panel
-          // collapses to 0 until an item is selected.
           '--left-panel-w':  `${leftWidth}px`,
           '--right-panel-w': detailOpen ? `${rightWidth}px` : '0px',
+          paddingBottom: '36px',
         } as React.CSSProperties}
         onClick={(e) => {
           if (!chatAutoOpened) return;
@@ -996,6 +1044,9 @@ const App: FC = () => {
           viewCharacterId={viewCharacterId}
           onViewChange={setViewCharacterId}
           totalWalletISK={totalWalletISK}
+          pushState={pushState}
+          onPushEnable={pushEnable}
+          onPushDisable={pushDisable}
         />
 
         {/* Drag handle: resize left sidebar (desktop only) */}
@@ -1101,6 +1152,19 @@ const App: FC = () => {
         />
       </div>
 
+      <TickerBar
+        mode="main"
+        displayPins={ticker.displayPins}
+        allPins={ticker.pins}
+        slots={ticker.slots}
+        payload={ticker.broadcastPayload}
+        groupOps={ticker.groupOps}
+        dualRow={ticker.dualRow}
+        onRemovePin={ticker.removePin}
+        onReorder={ticker.reorderPins}
+        onToggleDualRow={ticker.toggleDualRow}
+      />
+
       {/* v1.2.0 — Manufacturing Setup modal */}
       <IndustrySettingsModal
         open={settingsOpen}
@@ -1128,7 +1192,22 @@ const App: FC = () => {
       />
 
     </div>
+
+    {showTickerIntro && <TickerIntro onClose={() => setShowTickerIntro(false)} />}
+
+    </TickerContext.Provider>
   );
+};
+
+// Standalone/popout checks must live outside AppShell to avoid
+// calling hooks conditionally (Rules of Hooks).
+const App: FC = () => {
+  const params = new URLSearchParams(window.location.search);
+  const isStandalone = params.get('standalone') === '1' && window.location.pathname === '/trading';
+  const isTicker     = params.get('ticker') === '1';
+  if (isStandalone) return <TradingStandalone />;
+  if (isTicker)     return <TickerBar mode="popout" />;
+  return <AppShell />;
 };
 
 export default App;

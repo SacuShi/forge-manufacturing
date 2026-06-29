@@ -15,6 +15,7 @@ import type {
   CorpAsset,
   CorpJob,
 } from '../types';
+import ForgeWait from './ForgeWait';
 import { apiGet, apiPost } from '../api/client';
 import { formatISK, formatMargin, formatBuildTime } from '../utils/format';
 
@@ -229,13 +230,13 @@ const CorpBlueprintsView: FC<CorpBlueprintsProps> = ({ token, regionId, onSelect
           <button key={key} type="button"
             className={`pill-filter${bpSort === key ? ' active' : ''}`}
             onClick={() => handleBpSort(key)} aria-pressed={bpSort === key}>
-            {label}{bpSort === key ? (bpSortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+            {label}{bpSort === key ? <span className="sort-arrow">{bpSortDir === 'asc' ? '↑' : '↓'}</span> : ''}
           </button>
         ))}
       </div>
 
       {error && <div className="corp-error" role="alert">⚠ {error}</div>}
-      {loading && <div className="corp-loading">Loading corp blueprints…</div>}
+      {loading && <ForgeWait message="Loading corp blueprints…" detail="Pulling blueprint library from ESI — this can take a moment for large corps." quip="Accessing the corporate blueprint archive. I can account for all of them. I will continue to say that until I find one I cannot." />}
 
       {!loading && !error && grouped.length === 0 && (
         <div className="corp-empty">
@@ -400,7 +401,7 @@ const CorpAssetsView: FC<CorpAssetsProps> = ({ token, onSelectItem }) => {
       </div>
 
       {error && <div className="corp-error" role="alert">⚠ {error}</div>}
-      {loading && <div className="corp-loading">Loading corp assets…</div>}
+      {loading && <ForgeWait message="Loading corp assets…" detail="Fetching corp asset list and Jita valuations — please wait." quip="I am counting everything. Please do not move any assets while I am counting. I said please." />}
 
       {!loading && !error && assets.length === 0 && (
         <div className="corp-empty">No assets found.{search ? ' Try clearing your search.' : ''}</div>

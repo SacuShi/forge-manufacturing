@@ -102,19 +102,17 @@ const Header: FC<HeaderProps> = ({
             >
               <path
                 d="M12 2L20.66 7V17L12 22L3.34 17V7L12 2Z"
-                stroke="#8bb5d1"
                 strokeWidth="2"
-                fill="rgba(139, 181, 209, 0.15)"
               />
             </svg>
             <span className="forge-text">FORGE</span>
           </div>
           <div className="forge-backronym">
-            <span style={{ color: '#4fc3f7', fontWeight: 600 }}>F</span>abrication,{' '}
-            <span style={{ color: '#4fc3f7', fontWeight: 600 }}>O</span>perations,{' '}
-            <span style={{ color: '#4fc3f7', fontWeight: 600 }}>R</span>esource &{' '}
-            <span style={{ color: '#4fc3f7', fontWeight: 600 }}>G</span>uidance{' '}
-            <span style={{ color: '#4fc3f7', fontWeight: 600 }}>E</span>ngine
+            <span className="forge-letter">F</span>abrication,{' '}
+            <span className="forge-letter">O</span>perations,{' '}
+            <span className="forge-letter">R</span>esource &{' '}
+            <span className="forge-letter">G</span>uidance{' '}
+            <span className="forge-letter">E</span>ngine
           </div>
         </div>
 
@@ -138,10 +136,10 @@ const Header: FC<HeaderProps> = ({
              Source = where materials are purchased (default Jita)
              Market = where finished goods are sold (drives the table)      */}
         <div className="market-selector-group"
-             title="Source: where you buy materials · Market: where you sell finished goods">
+             title="Materials: where you buy ingredients · Market: where you sell finished goods">
           <MarketSelector
-            label="Source"
-            ariaLabel="Material source hub"
+            label="Materials"
+            ariaLabel="Materials procurement hub"
             selectedMarket={selectedSourceMarket}
             onMarketChange={onSourceMarketChange}
           />

@@ -55,6 +55,22 @@
   --color-border-medium: var(--border-color-medium);
   --color-border-strong: var(--border-color-strong);
 
+  /* Semantic aliases used across components */
+  --color-bg:         var(--bg-primary);
+  --color-border:     var(--border-color);
+  --color-text-muted: var(--text-tertiary);
+
+  /* Domain-specific semantic colors */
+  --color-reaction:  #fbbf24;            /* Amber gold — reaction blueprints */
+  --color-contract:  #ab47bc;            /* Purple — contract-only market items */
+  --color-owned-bp:  var(--accent-purple); /* Purple — owned blueprints in chains */
+
+  /* PI tier indicator colors (EVE data-visualization, not UI semantic) */
+  --color-pi-t1: #a5d6a7;
+  --color-pi-t2: #90caf9;
+  --color-pi-t3: #ce93d8;
+  --color-pi-t4: #ff8a65;
+
   /* Typography */
   --font-sans: 'Courier New', 'Lucida Console', monospace;
   --font-mono: 'Courier New', 'Lucida Console', monospace;
@@ -88,6 +104,8 @@
   --scrollbar-track:       #e2e8f0;
   --scrollbar-thumb:       #94a3b8;
   --scrollbar-thumb-hover: #64748b;
+  --color-reaction: #d97706;
+  --color-contract: #7c3aed;
 }
 
 /* ── Light mode — system preference fallback ────────────────────────────────── */
@@ -108,5 +126,7 @@
     --scrollbar-track:       #e2e8f0;
     --scrollbar-thumb:       #94a3b8;
     --scrollbar-thumb-hover: #64748b;
+    --color-reaction: #d97706;
+    --color-contract: #7c3aed;
   }
 }

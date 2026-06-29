@@ -23,6 +23,7 @@
 
 import type { FC } from 'react';
 import type { MarketItem, SortField, SortDirection } from '../types';
+import TickerPinButton from './TickerPinButton';
 import {
   formatISK,
   formatISKPerHour,
@@ -42,8 +43,10 @@ interface ItemTableProps {
   sortDirection: SortDirection;
   onSort: (field: SortField) => void;
   onSelect: (typeId: number) => void;
-  /** v1.7 — show Haul/unit column when haulage is configured */
   showHaulColumn?: boolean;
+  /** regionId of the currently selected market hub (for ticker pin context) */
+  regionId?: number;
+  hubName?: string;
 }
 
 interface ColDef {
@@ -103,6 +106,8 @@ const ItemTable: FC<ItemTableProps> = ({
   onSort,
   onSelect,
   showHaulColumn = false,
+  regionId,
+  hubName,
 }) => {
   // Insert Haul/unit before 'Owned' when enabled
   const columns = showHaulColumn
@@ -119,23 +124,27 @@ const ItemTable: FC<ItemTableProps> = ({
             const ariaSort  = isSorted
               ? (sortDirection === 'asc' ? 'ascending' : 'descending')
               : undefined;
-            const alignClass = col.align ? `align-${col.align}` : '';
+            const alignClass = col.align && !col.field ? `align-${col.align}` : '';
 
             return (
               <th
                 key={col.label}
                 className={alignClass}
                 aria-sort={ariaSort}
-                title={col.hint}
-                onClick={col.field ? () => onSort(col.field!) : undefined}
-                style={col.field ? undefined : { cursor: 'default' }}
                 scope="col"
               >
-                {col.label}
-                {isSorted && (
-                  <span aria-hidden="true">
-                    {' '}{sortDirection === 'asc' ? '↑' : '↓'}
-                  </span>
+                {col.field ? (
+                  <button
+                    type="button"
+                    className={`col-sort-btn${isSorted ? ' col-sort-active' : ''}`}
+                    onClick={() => onSort(col.field!)}
+                    title={col.hint}
+                    aria-pressed={isSorted}
+                  >
+                    {col.label}{isSorted && <span className="sort-arrow">{sortDirection === 'asc' ? '↑' : '↓'}</span>}
+                  </button>
+                ) : (
+                  <span title={col.hint}>{col.label}</span>
                 )}
               </th>
             );
@@ -257,21 +266,30 @@ const ItemTable: FC<ItemTableProps> = ({
 
               {/* Row action button */}
               <td className="align-center">
-                <button
-                  type="button"
-                  className={`row-action${item.canBuild ? '' : ' skip'}`}
-                  onClick={(e) => {
-                    e.stopPropagation(); /* Prevent row click from also firing */
-                    onSelect(item.typeId);
-                  }}
-                  aria-label={
-                    item.canBuild
-                      ? `Start build for ${item.name}`
-                      : `${item.name} — cannot build`
-                  }
-                >
-                  {item.canBuild ? 'Build' : 'Skip'}
-                </button>
+                <div className="row-action-cell">
+                  <button
+                    type="button"
+                    className={`row-action${item.canBuild ? '' : ' skip'}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onSelect(item.typeId);
+                    }}
+                    aria-label={item.canBuild ? `Start build for ${item.name}` : `${item.name} — cannot build`}
+                  >
+                    {item.canBuild ? 'Build' : 'Skip'}
+                  </button>
+                  {regionId && (
+                    <TickerPinButton
+                      options={[
+                        { type: 'mfg_profit',   label: `${item.name} profit` },
+                        { type: 'mfg_margin',   label: `${item.name} margin` },
+                        { type: 'mfg_isk_hour', label: `${item.name} ISK/hr` },
+                        { type: 'price_sell',   label: `${item.name} sell price` },
+                      ]}
+                      baseConfig={{ typeId: item.typeId, itemName: item.name, regionId, hubName }}
+                    />
+                  )}
+                </div>
               </td>
             </tr>
           );

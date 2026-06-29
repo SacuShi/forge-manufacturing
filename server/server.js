@@ -399,6 +399,36 @@ async function runMigrations() {
     )
   `);
 
+  // Jita book snapshot — single-row JSON blob; loaded at startup so the trading scanner
+  // has instant data while the background poll refreshes the book from ESI.
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS jita_book_cache (
+      id         INTEGER PRIMARY KEY CHECK (id = 1),
+      snapshot   TEXT    NOT NULL,
+      updated_at TEXT    NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+
+  // v1.25.0: per-hub book snapshots (all hubs except Jita which uses jita_book_cache)
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS hub_book_cache (
+      hub_id     TEXT PRIMARY KEY,
+      snapshot   TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+
+  // v1.25.0: per-hub 30-day volume history for ISK/day estimates on non-Jita hubs
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS hub_history_prices (
+      type_id    INTEGER NOT NULL,
+      region_id  INTEGER NOT NULL,
+      avg_30d_volume REAL DEFAULT 0,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (type_id, region_id)
+    )
+  `);
+
   // v1.5.0 migration: 30-day average price table (historical price fallback)
   // Populated by volume enrichment; used when live order book has no sell/buy orders.
   await dbRun(`
@@ -433,6 +463,14 @@ async function runMigrations() {
     )
   `);
   await dbRun(`CREATE INDEX IF NOT EXISTS idx_contract_prices_type ON contract_prices (type_id)`);
+
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS character_ticker_config (
+      character_id  INTEGER PRIMARY KEY,
+      config_json   TEXT    NOT NULL DEFAULT '[]',
+      updated_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
 
   console.log('✓ Database migrations complete');
 }
@@ -918,8 +956,11 @@ async function requireDirectorRole(req, res, next) {
 }
 
 // PAGINATED REGION PRICE FETCHER
-// Fetches complete order book from ESI for any region (handles pagination)
+// Fetches complete order book from ESI for any region (handles pagination).
+// Synthetic regionId 10099000 (Keepstar) is dispatched to fetchStructureMarketPrices().
 async function fetchRegionPrices(regionId) {
+  if (regionId === KEEPSTAR_REGION_ID) return fetchStructureMarketPrices();
+
   console.log(`⟳ Fetching prices for region ${regionId}...`);
   const startTime = Date.now();
 
@@ -986,15 +1027,15 @@ async function fetchRegionPrices(regionId) {
   });
 
   // Apply outlier filtering and calculate median
+  let outlierMargin = 0, outlierNoBid = 0;
   Object.keys(prices).forEach(typeId => {
     const p = prices[typeId];
     if (p.sell === Infinity) p.sell = 0;
     if (p.buy > 0 && p.sell > p.buy * 5) {
-      const marginPercent = ((p.sell / p.buy) - 1) * 100;
-      console.warn(`⚠ Outlier filtered: typeId ${typeId} margin=${marginPercent.toFixed(0)}% (max 500%)`);
+      outlierMargin++;
       p.median = p.buy;
     } else if (p.buy === 0 && p.sell > 100000000) {
-      console.warn(`⚠ No-bid outlier: typeId ${typeId} sell=${p.sell} (no buy orders, likely scam)`);
+      outlierNoBid++;
       p.median = p.sell * 0.1;
     } else {
       p.median = (p.sell + p.buy) / 2;
@@ -1026,10 +1067,76 @@ async function fetchRegionPrices(regionId) {
   }
 
   const durationMs = Date.now() - startTime;
+  const outlierNote = (outlierMargin + outlierNoBid) > 0
+    ? `, ${outlierNoBid} no-bid + ${outlierMargin} margin outliers filtered` : '';
   console.log(`✓ Region ${regionId} prices loaded — ${Object.keys(prices).length} items ` +
-              `(${buyOrders.length} buy orders, ${sellOrders.length} sell orders) ` +
-              `in ${(durationMs / 1000).toFixed(1)}s`);
+              `(${buyOrders.length} buy + ${sellOrders.length} sell orders` +
+              `${outlierNote}) in ${(durationMs / 1000).toFixed(1)}s`);
 
+  return prices;
+}
+
+// Fetch all orders from the C-J6MT Keepstar structure market and return a
+// prices map in the same format as fetchRegionPrices() so the precompute loop
+// is transparent to the data source.
+async function fetchStructureMarketPrices() {
+  const token = getStructureToken();
+  if (!token) throw new Error('No active alliance token — no user has logged in recently');
+
+  console.log(`⟳ Fetching Keepstar structure market (${KEEPSTAR_STRUCTURE_ID})...`);
+  const startTime = Date.now();
+
+  let page = 1, allOrders = [];
+  while (true) {
+    const r = await esiFetch(
+      `https://esi.evetech.net/latest/markets/structures/${KEEPSTAR_STRUCTURE_ID}/` +
+      `?datasource=tranquility&page=${page}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (r.status === 401 || r.status === 403) {
+      throw new Error(`ESI structure market auth error (${r.status}) — token may have expired`);
+    }
+    if (!r.ok) throw new Error(`ESI structure market ${r.status}`);
+    const data = await r.json();
+    if (!data || data.length === 0) break;
+    allOrders = allOrders.concat(data);
+    const totalPages = parseInt(r.headers.get('x-pages') || '1', 10);
+    if (page >= totalPages) break;
+    page++;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+
+  // Aggregate to same {sell, buy, median} format as fetchRegionPrices
+  const prices = {};
+  allOrders.forEach(o => {
+    if (!prices[o.type_id]) prices[o.type_id] = { sell: Infinity, buy: 0 };
+    if (!o.is_buy_order && o.price < prices[o.type_id].sell) prices[o.type_id].sell = o.price;
+    if ( o.is_buy_order && o.price > prices[o.type_id].buy)  prices[o.type_id].buy  = o.price;
+  });
+
+  const MAX_SANE_PRICE = 100_000_000_000_000;
+  Object.values(prices).forEach(p => {
+    if (p.sell === Infinity) p.sell = 0;
+    if (p.buy > 0 && p.sell > p.buy * 5)       p.median = p.buy;
+    else if (p.buy === 0 && p.sell > 100_000_000) p.median = p.sell * 0.1;
+    else                                           p.median = (p.sell + p.buy) / 2;
+  });
+
+  // Enrich with historical 30d average (same module-level historyPriceMap used by fetchRegionPrices)
+  for (const [typeId, avg30d] of historyPriceMap) {
+    if (avg30d <= 0 || avg30d > MAX_SANE_PRICE) continue;
+    if (prices[typeId]) {
+      const buy = prices[typeId].buy;
+      if (buy > 0 && avg30d > buy * 500) continue;
+      prices[typeId].avg30d = avg30d;
+    } else {
+      prices[typeId] = { sell: 0, buy: 0, median: avg30d, avg30d };
+    }
+  }
+
+  const durationMs = Date.now() - startTime;
+  console.log(`✓ Keepstar market loaded — ${Object.keys(prices).length} types, ` +
+              `${allOrders.length} orders in ${(durationMs / 1000).toFixed(1)}s`);
   return prices;
 }
 
@@ -1121,64 +1228,126 @@ Object.defineProperty(global, 'jitaPricesCache', {
 });
 
 // ════════════════════════════════════════════════════════════════════════════
-// STATION-TRADING HOT-HUB POLLER (v1.21) — Jita 4-4 order book, kept ~5 min fresh.
+// STATION-TRADING MULTI-HUB POLLER — 5 major trade hubs, each kept ~5 min fresh
+// via Fuzzwork market aggregates (ESI-fallback kept for resilience).
 //
 // COMPLETELY SEPARATE from regionPriceCache (manufacturing). Day/station trading
 // needs ORDER-BOOK DEPTH (spread, competition, order sizes) that the manufacturing
-// collapse throws away, and it needs the freshest data ESI will give.
+// collapse throws away, and it needs the freshest data available.
 //
-// Design (see FORGE_MEMORY §Trading):
-//  • CCP hard-caches market orders ~300s server-side — that's the freshness floor
-//    for everyone (incl. the in-game client). We ALIGN polling to the Expires
-//    header so data is always ≤~5 min old at the MINIMUM request cost; polling
-//    faster just returns identical bytes.
-//  • Conditional requests: each region-orders page is fetched with If-None-Match
-//    from its stored ETag. A 304 is near-free and does NOT consume the per-IP
-//    error budget. INVARIANT: we retain each page's station-filtered orders next
-//    to its ETag; a 304 with no retained slice falls back to an unconditional GET
-//    — so the worst case is a normal full fetch, never missing data.
-//  • Memory-bounded: per page we keep ONLY Jita-4-4 orders with ONLY the 4 fields
-//    the book needs — not the whole region book.
-//  • LAZY: the loop runs only while trading endpoints are in use. It starts on the
-//    first request and self-stops after TRADE_IDLE_STOP_MS idle, so we add ZERO
-//    continuous ESI load while nobody is trading.
-//  • Market orders are PUBLIC — no token; multiple logins give no benefit (the
-//    limiter is the per-IP error budget, not a per-token rate).
+// Design:
+//  • Fuzzwork provides pre-aggregated best buy/sell per item per station, updated
+//    on the same ~5-min ESI cache cycle. 20-50 HTTP requests vs 100+ raw ESI pages,
+//    and they don't touch the shared ESI error budget at all.
+//  • Per-hub books: each hub has its own in-memory book, meta, name map, and poll
+//    timer. Polling starts lazily when a user first visits that hub's scanner and
+//    self-stops after TRADE_IDLE_STOP_MS of inactivity.
+//  • ESI history enrichment runs per-hub to build 30-day average volume for ISK/day
+//    estimates. Only one enrichment job runs globally at a time to protect the budget.
 // ════════════════════════════════════════════════════════════════════════════
-const TRADE_REGION_ID        = 10000002;        // The Forge
-const TRADE_STATION_ID        = 60003760;        // Jita IV - Moon 4 - Caldari Navy Assembly Plant
-const TRADE_POLL_FALLBACK_MS = 300 * 1000;      // when no Expires header is present
-const TRADE_IDLE_STOP_MS     = 30 * 60 * 1000;  // stop polling after 30 min of no requests
-const TRADE_MIN_ERROR_BUDGET = 20;              // back off if X-ESI-Error-Limit-Remain drops below this
+
+// Five major trade hubs — stationId for Fuzzwork, regionId for ESI history + fees.
+const HUB_CONFIG = {
+  jita:    { name: 'Jita IV-4',     stationId: 60003760,       regionId: 10000002, label: 'Jita IV - Moon 4 - Caldari Navy Assembly Plant' },
+  amarr:   { name: 'Amarr VIII-4',  stationId: 60008494,       regionId: 10000043, label: 'Amarr VIII - Moon 4 - Emperor Family Academy' },
+  dodixie: { name: 'Dodixie IX-20', stationId: 60011866,       regionId: 10000032, label: 'Dodixie IX - Moon 20 - Federation Navy Assembly Plant' },
+  rens:    { name: 'Rens VI-8',     stationId: 60004588,       regionId: 10000030, label: 'Rens VI - Moon 8 - Brutor Tribe Treasury' },
+  hek:     { name: 'Hek VIII-12',   stationId: 60005686,       regionId: 10000042, label: 'Hek VIII - Moon 12 - Boundless Creation Factory' },
+  keepstar: { name: 'C-J6MT Keepstar', stationId: 1049588174021, regionId: 10099000, label: '1st Taj Mahgoon (DJ\'s Retirement Fund)', isStructure: true },
+};
+
+// Fixed broker fees for player structures (no standings discount applies).
+// Key is the synthetic regionId used in VALID_REGIONS / regionPriceCache.
+const HUB_STRUCTURE_FEES = {
+  10099000: 0.015, // C-J6MT Keepstar — 1.5% set by structure owner
+};
+const HUB_IDS = Object.keys(HUB_CONFIG);
+
+const TRADE_POLL_FALLBACK_MS = 300 * 1000;      // Fuzzwork / ESI cache cycle
+const TRADE_IDLE_STOP_MS     = 30 * 60 * 1000;  // stop polling a hub after 30 min idle
+const TRADE_MIN_ERROR_BUDGET = 20;              // ESI history enrichment hard floor
 
 // Per-page conditional cache: pageUrl -> { etag, orders:[{type_id,price,is_buy_order,volume_remain}] }
 const tradePageCache = new Map();
 
 // PI colony detail cache: characterId -> { data, fetchedAt } — 10-minute TTL
-const piDetailCache = new Map();
+const piDetailCache  = new Map();
+// PI market rankings cache: characterId -> { data, fetchedAt } — 5-minute TTL
+const piMarketCache  = new Map();
+// PI schematic lookup cache: schematicId -> resolved schematic object
+const schematicMemo  = new Map();
 
-// Rebuilt station book: type_id -> { sell, buy, spread, spreadPct, sellOrders, buyOrders, sellQtyTop, buyQtyTop }
-let jitaBook = new Map();
-let jitaBookMeta = { updatedAt: 0, expiresAt: 0, fetching: false, lastError: null, types: 0 };
-
-let tradePollTimer = null;
-let tradePollRunning = false;
+// Per-hub order books: hubId -> Map<typeId, {sell,buy,spread,spreadPct,sellOrders,buyOrders,sellQtyTop,buyQtyTop}>
+const hubBooks   = Object.fromEntries(HUB_IDS.map(id => [id, new Map()]));
+// Per-hub freshness meta
+const hubMetas   = Object.fromEntries(HUB_IDS.map(id => [id, { updatedAt: 0, expiresAt: 0, fetching: false, lastError: null, types: 0 }]));
+// Per-hub poll timers and running flags
+const hubPollTimers  = {};
+const hubPollRunning = {};
 let lastTradingRequestAt = 0;
+let enrichRunning = false; // global lock — only one hub enriches at a time
+// Set to true when enrichment is deferred (precompute running) so the next poll retries
+const hubEnrichPending = Object.fromEntries(HUB_IDS.map(id => [id, false]));
+// Per-hub name lookup maps rebuilt after each book refresh
+const hubNameMaps = Object.fromEntries(HUB_IDS.map(id => [id, new Map()]));
 
-/** Keep only Jita-4-4 orders, only the fields the book needs (memory-bounded). */
-function filterStationOrders(data) {
+
+/** Rebuild the in-memory typeId→name lookup for one hub. */
+async function refreshHubNameMap(hubId, typeIds) {
+  const map = new Map();
+  const CHUNK = 900;
+  for (let i = 0; i < typeIds.length; i += CHUNK) {
+    const chunk = typeIds.slice(i, i + CHUNK);
+    const ph    = chunk.map(() => '?').join(',');
+    const rows  = await dbAll(`SELECT type_id, name FROM items WHERE type_id IN (${ph})`, chunk);
+    for (const r of rows) map.set(r.type_id, r.name);
+  }
+  hubNameMaps[hubId] = map;
+}
+
+/** Load persisted book snapshots for all hubs so the scanner has instant data on restart. */
+async function loadHubSnapshots() {
+  // Jita: legacy jita_book_cache table
+  try {
+    const row = await dbGet('SELECT snapshot, updated_at FROM jita_book_cache WHERE id = 1');
+    if (row) {
+      const parsed = JSON.parse(row.snapshot);
+      hubBooks.jita = new Map(Object.entries(parsed).map(([k, v]) => [parseInt(k, 10), v]));
+      hubMetas.jita = { updatedAt: 0, expiresAt: 0, fetching: false, lastError: null, types: hubBooks.jita.size };
+      console.log(`✓ Jita book snapshot loaded — ${hubBooks.jita.size} types (from ${row.updated_at} UTC)`);
+      refreshHubNameMap('jita', [...hubBooks.jita.keys()]).catch(e => console.warn('Name map load error:', e.message));
+    }
+  } catch (e) { console.warn('⚠ Could not load Jita snapshot:', e.message); }
+
+  // Non-Jita hubs: hub_book_cache table
+  for (const hubId of HUB_IDS.filter(h => h !== 'jita')) {
+    try {
+      const row = await dbGet('SELECT snapshot, updated_at FROM hub_book_cache WHERE hub_id = ?', [hubId]);
+      if (row) {
+        const parsed = JSON.parse(row.snapshot);
+        hubBooks[hubId] = new Map(Object.entries(parsed).map(([k, v]) => [parseInt(k, 10), v]));
+        hubMetas[hubId] = { updatedAt: 0, expiresAt: 0, fetching: false, lastError: null, types: hubBooks[hubId].size };
+        console.log(`✓ ${HUB_CONFIG[hubId].name} snapshot loaded — ${hubBooks[hubId].size} types (from ${row.updated_at} UTC)`);
+        refreshHubNameMap(hubId, [...hubBooks[hubId].keys()]).catch(e => console.warn(`Name map load error (${hubId}):`, e.message));
+      }
+    } catch (e) { console.warn(`⚠ Could not load ${hubId} snapshot:`, e.message); }
+  }
+}
+
+/** Keep only target-station orders, only the fields the book needs (memory-bounded). */
+function filterStationOrders(data, stationId) {
   if (!Array.isArray(data)) return [];
   const out = [];
   for (const o of data) {
-    if (o.location_id !== TRADE_STATION_ID) continue;
+    if (o.location_id !== stationId) continue;
     out.push({ type_id: o.type_id, price: o.price, is_buy_order: o.is_buy_order, volume_remain: o.volume_remain });
   }
   return out;
 }
 
 /** Fetch one region-orders page conditionally. Returns { orders, expires, xPages, errorRemain, status, error? }. */
-async function fetchTradePage(orderType, page) {
-  const url = `https://esi.evetech.net/latest/markets/${TRADE_REGION_ID}/orders/` +
+async function fetchTradePage(regionId, stationId, orderType, page) {
+  const url = `https://esi.evetech.net/latest/markets/${regionId}/orders/` +
               `?datasource=tranquility&order_type=${orderType}&page=${page}`;
   const cached = tradePageCache.get(url);
   const headers = {};
@@ -1196,7 +1365,7 @@ async function fetchTradePage(orderType, page) {
     }
     const fresh = await esiFetch(url); // no If-None-Match → guaranteed body
     const data = await fresh.json();
-    const slice = filterStationOrders(data);
+    const slice = filterStationOrders(data, stationId);
     tradePageCache.set(url, { etag: fresh.headers.get('etag'), orders: slice });
     return {
       orders: slice,
@@ -1217,24 +1386,132 @@ async function fetchTradePage(orderType, page) {
   return { orders: slice, expires, xPages, errorRemain, status: 200 };
 }
 
-/** One full poll cycle: page buy+sell, rebuild jitaBook, schedule the next cycle aligned to Expires. */
-async function pollJitaBook() {
-  if (jitaBookMeta.fetching) return;
-  jitaBookMeta.fetching = true;
+// ── Fuzzwork poller (primary) — one hub at a time ────────────────────────────
+const FUZZWORK_BASE_URL = 'https://market.fuzzwork.co.uk/aggregates/';
+const FUZZWORK_CHUNK    = 1000;  // type IDs per request (URL-length safe)
+const FUZZWORK_PARALLEL = 5;     // parallel requests per batch (polite ceiling)
+
+async function pollFuzzworkHub(hubId) {
+  const cfg  = HUB_CONFIG[hubId];
+  const meta = hubMetas[hubId];
+  if (meta.fetching) return;
+  meta.fetching = true;
+  const started = Date.now();
+
+  try {
+    const book = hubBooks[hubId];
+    let typeIds;
+    if (book.size > 0) {
+      typeIds = [...book.keys()];
+    } else {
+      const rows = await dbAll(`SELECT type_id FROM items WHERE name IS NOT NULL AND name != ''`, []);
+      typeIds = rows.map(r => r.type_id);
+    }
+
+    const newBook = new Map();
+    let failedChunks = 0;
+
+    for (let i = 0; i < typeIds.length; i += FUZZWORK_CHUNK * FUZZWORK_PARALLEL) {
+      const batchChunks = [];
+      for (let j = i; j < Math.min(i + FUZZWORK_CHUNK * FUZZWORK_PARALLEL, typeIds.length); j += FUZZWORK_CHUNK) {
+        batchChunks.push(typeIds.slice(j, j + FUZZWORK_CHUNK));
+      }
+
+      const batchResults = await Promise.allSettled(
+        batchChunks.map(chunk => {
+          const url = `${FUZZWORK_BASE_URL}?station=${cfg.stationId}&types=${chunk.join(',')}`;
+          const ctrl = new AbortController();
+          const tid  = setTimeout(() => ctrl.abort(), 30_000);
+          return fetch(url, { headers: { 'User-Agent': ESI_USER_AGENT }, signal: ctrl.signal })
+            .then(r => { clearTimeout(tid); if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+            .catch(e => { clearTimeout(tid); throw e; });
+        })
+      );
+
+      for (const result of batchResults) {
+        if (result.status !== 'fulfilled') {
+          failedChunks++;
+          console.warn(`⚠ Fuzzwork ${hubId} chunk failed: ${result.reason?.message || result.reason}`);
+          continue;
+        }
+        for (const [typeIdStr, agg] of Object.entries(result.value)) {
+          const typeId = parseInt(typeIdStr, 10);
+          const sell   = parseFloat(agg.sell?.min || 0);
+          const buy    = parseFloat(agg.buy?.max  || 0);
+          if (!sell && !buy) continue;
+          const spread    = (sell && buy) ? sell - buy : 0;
+          const spreadPct = (sell && buy) ? (spread / sell) * 100 : 0;
+          newBook.set(typeId, {
+            sell, buy, spread, spreadPct,
+            sellOrders: parseInt(agg.sell?.orderCount || 0, 10),
+            buyOrders:  parseInt(agg.buy?.orderCount  || 0, 10),
+            sellQtyTop: parseInt(agg.sell?.volume      || 0, 10),
+            buyQtyTop:  parseInt(agg.buy?.volume       || 0, 10),
+          });
+        }
+      }
+
+      if (i + FUZZWORK_CHUNK * FUZZWORK_PARALLEL < typeIds.length) {
+        await new Promise(r => setTimeout(r, 200));
+      }
+    }
+
+    if (newBook.size === 0) {
+      throw new Error(`Fuzzwork returned empty book for ${hubId} (${failedChunks} failed chunks)`);
+    }
+
+    hubBooks[hubId] = newBook;
+    Object.assign(hubMetas[hubId], { updatedAt: Date.now(), expiresAt: Date.now() + TRADE_POLL_FALLBACK_MS, fetching: false, lastError: null, types: newBook.size });
+
+    const failNote = failedChunks ? ` (${failedChunks} chunks skipped)` : '';
+    console.log(`⟳ ${cfg.name} book refreshed via Fuzzwork — ${newBook.size} types in ${((Date.now() - started) / 1000).toFixed(1)}s${failNote}`);
+
+    refreshHubNameMap(hubId, [...newBook.keys()]).catch(e => console.error(`Name map error (${hubId}):`, e.message));
+
+    // Persist snapshot (non-blocking)
+    setImmediate(() => {
+      const snap = JSON.stringify(Object.fromEntries(newBook));
+      if (hubId === 'jita') {
+        dbRun(`INSERT OR REPLACE INTO jita_book_cache (id, snapshot, updated_at) VALUES (1, ?, datetime('now'))`, [snap])
+          .catch(e => console.error('jita_book_cache write error:', e.message));
+      } else {
+        dbRun(`INSERT OR REPLACE INTO hub_book_cache (hub_id, snapshot, updated_at) VALUES (?, ?, datetime('now'))`, [hubId, snap])
+          .catch(e => console.error(`hub_book_cache write error (${hubId}):`, e.message));
+      }
+    });
+
+    if (Date.now() - lastTradingRequestAt < 60_000 || hubEnrichPending[hubId]) {
+      runHubHistoryEnrichment(hubId).catch(e => console.error(`History enrichment error (${hubId}):`, e.message));
+    }
+
+  } catch (err) {
+    hubMetas[hubId].fetching = false;
+    hubMetas[hubId].lastError = err.message;
+    console.error(`⚠ Fuzzwork poll failed for ${hubId}:`, err.message, '— falling back to ESI');
+    return pollHubESI(hubId);
+  }
+
+  scheduleNextHubPoll(hubId, false);
+}
+
+// ── ESI order-page poller (fallback per hub) ──────────────────────────────────
+async function pollHubESI(hubId) {
+  const cfg  = HUB_CONFIG[hubId];
+  const meta = hubMetas[hubId];
+  if (meta.fetching) return;
+  meta.fetching = true;
   const started = Date.now();
   let latestExpires = 0;
   let backoff = false;
 
   try {
-    const agg = new Map(); // type_id -> { sells:[], buys:[] }
-
+    const agg = new Map();
     for (const orderType of ['sell', 'buy']) {
       let page = 1, pages = 1;
       do {
-        const r = await fetchTradePage(orderType, page);
+        const r = await fetchTradePage(cfg.regionId, cfg.stationId, orderType, page);
         if (r.expires) { const t = Date.parse(r.expires); if (t > latestExpires) latestExpires = t; }
         pages = r.xPages || 1;
-        // ESI unhappy (420 error-limited / 5xx) or budget low → stop this cycle and back off.
         if (r.errorRemain < TRADE_MIN_ERROR_BUDGET || r.status === 420 || r.status >= 500) { backoff = true; break; }
         for (const o of r.orders) {
           let e = agg.get(o.type_id);
@@ -1242,13 +1519,13 @@ async function pollJitaBook() {
           (o.is_buy_order ? e.buys : e.sells).push(o);
         }
         page++;
-        await new Promise(res => setTimeout(res, 100)); // gentle inter-page pacing
+        await new Promise(res => setTimeout(res, 100));
       } while (page <= pages);
       if (backoff) break;
     }
 
     if (!backoff) {
-      const book = new Map();
+      const newBook = new Map();
       for (const [typeId, e] of agg) {
         let bestSell = Infinity, bestBuy = 0;
         for (const o of e.sells) if (o.price < bestSell) bestSell = o.price;
@@ -1259,113 +1536,304 @@ async function pollJitaBook() {
         if (bestBuy)  for (const o of e.buys)  if (o.price === bestBuy)  buyQtyTop  += o.volume_remain;
         const spread    = (bestSell && bestBuy) ? bestSell - bestBuy : 0;
         const spreadPct = (bestSell && bestBuy) ? (spread / bestSell) * 100 : 0;
-        book.set(typeId, {
-          sell: bestSell, buy: bestBuy, spread, spreadPct,
-          sellOrders: e.sells.length, buyOrders: e.buys.length,
-          sellQtyTop, buyQtyTop,
-        });
+        newBook.set(typeId, { sell: bestSell, buy: bestBuy, spread, spreadPct, sellOrders: e.sells.length, buyOrders: e.buys.length, sellQtyTop, buyQtyTop });
       }
-      jitaBook = book;
-      jitaBookMeta = {
-        updatedAt: Date.now(),
-        expiresAt: latestExpires || (Date.now() + TRADE_POLL_FALLBACK_MS),
-        fetching: false, lastError: null, types: book.size,
-      };
-      console.log(`⟳ Jita book refreshed — ${book.size} types in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+      hubBooks[hubId] = newBook;
+      Object.assign(hubMetas[hubId], { updatedAt: Date.now(), expiresAt: latestExpires || (Date.now() + TRADE_POLL_FALLBACK_MS), fetching: false, lastError: null, types: newBook.size });
+      console.log(`⟳ ${cfg.name} book refreshed via ESI — ${newBook.size} types in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+      refreshHubNameMap(hubId, [...newBook.keys()]).catch(e => console.error(`Name map error (${hubId}):`, e.message));
+      if (Date.now() - lastTradingRequestAt < 60_000 || hubEnrichPending[hubId]) {
+        runHubHistoryEnrichment(hubId).catch(e => console.error(`History enrichment error (${hubId}):`, e.message));
+      }
     } else {
-      jitaBookMeta.fetching = false;
-      jitaBookMeta.lastError = 'error-budget-backoff';
-      console.warn('⚠ Jita book poll backed off (low ESI error budget) — keeping last good book');
+      meta.fetching = false;
+      meta.lastError = 'error-budget-backoff';
+      console.warn(`⚠ ${cfg.name} ESI poll backed off (low error budget) — keeping last good book`);
     }
   } catch (err) {
-    jitaBookMeta.fetching = false;
-    jitaBookMeta.lastError = err.message;
-    console.error('⚠ Jita book poll failed:', err.message);
+    meta.fetching = false;
+    meta.lastError = err.message;
+    console.error(`⚠ ${cfg.name} ESI poll failed:`, err.message);
   }
 
-  scheduleNextJitaPoll(backoff || !!jitaBookMeta.lastError);
+  scheduleNextHubPoll(hubId, backoff || !!hubMetas[hubId].lastError);
 }
 
-function scheduleNextJitaPoll(backoff) {
-  if (tradePollTimer) { clearTimeout(tradePollTimer); tradePollTimer = null; }
+function scheduleNextHubPoll(hubId, backoff) {
+  if (hubPollTimers[hubId]) { clearTimeout(hubPollTimers[hubId]); delete hubPollTimers[hubId]; }
   if (Date.now() - lastTradingRequestAt > TRADE_IDLE_STOP_MS) {
-    tradePollRunning = false;
-    console.log('⏸ Jita book poller idle — pausing until the next trading request');
+    hubPollRunning[hubId] = false;
+    console.log(`⏸ ${HUB_CONFIG[hubId].name} poller idle — pausing until next request`);
     return;
   }
-  let delay = (jitaBookMeta.expiresAt || (Date.now() + TRADE_POLL_FALLBACK_MS)) - Date.now() + 5000; // +5s past cache roll
-  if (backoff) delay = Math.max(delay, 60_000);                 // ESI unhappy → wait ≥1 min
-  delay = Math.min(Math.max(delay, 15_000), 15 * 60_000);       // clamp 15s..15min
-  tradePollTimer = setTimeout(pollJitaBook, delay);
+  const meta = hubMetas[hubId];
+  let delay = (meta.expiresAt || (Date.now() + TRADE_POLL_FALLBACK_MS)) - Date.now() + 5000;
+  if (backoff) delay = Math.max(delay, 60_000);
+  delay = Math.min(Math.max(delay, 15_000), 15 * 60_000);
+  const pollFn = HUB_CONFIG[hubId].isStructure ? pollStructureHub : pollFuzzworkHub;
+  hubPollTimers[hubId] = setTimeout(() => pollFn(hubId), delay);
 }
 
-/** Start the poller if not already running. Called lazily by the trading endpoints. */
-function ensureJitaPollerRunning() {
+/** Lazily start a hub's poller on first request for that hub. */
+function ensureHubPollerRunning(hubId) {
   lastTradingRequestAt = Date.now();
   if (process.env.DISABLE_TRADING_POLLER === '1') return;
-  if (tradePollRunning) return;
-  tradePollRunning = true;
-  console.log('▶ Jita book poller starting (lazy — first trading request received)');
-  pollJitaBook();
+  if (hubPollRunning[hubId]) return;
+  hubPollRunning[hubId] = true;
+  console.log(`▶ ${HUB_CONFIG[hubId].name} poller starting`);
+  if (HUB_CONFIG[hubId].isStructure) return pollStructureHub(hubId);
+  pollFuzzworkHub(hubId);
 }
 
-/** Freshness/status snapshot for the trading endpoints. */
-function tradingMeta() {
-  const now = Date.now();
+// ── Authenticated structure market poller (Keepstar and future player structures) ──
+async function pollStructureHub(hubId) {
+  const cfg  = HUB_CONFIG[hubId];
+  const meta = hubMetas[hubId];
+  if (meta.fetching) return;
+
+  const token = getStructureToken();
+  if (!token) {
+    console.log(`⏸ ${cfg.name} poller: no active token — will retry`);
+    scheduleNextHubPoll(hubId, true); // backoff
+    return;
+  }
+
+  meta.fetching = true;
+  const started = Date.now();
+
+  try {
+    let page = 1, allOrders = [];
+    while (true) {
+      const r = await esiFetch(
+        `https://esi.evetech.net/latest/markets/structures/${cfg.stationId}/` +
+        `?datasource=tranquility&page=${page}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (r.status === 401 || r.status === 403) throw new Error(`Auth error ${r.status} — token may have expired`);
+      if (!r.ok) throw new Error(`ESI structure market ${r.status}`);
+      const data = await r.json();
+      if (!data || data.length === 0) break;
+      allOrders = allOrders.concat(data);
+      const totalPages = parseInt(r.headers.get('x-pages') || '1', 10);
+      if (page >= totalPages) break;
+      page++;
+      await new Promise(res => setTimeout(res, 100));
+    }
+
+    // Build book — same format as pollHubESI
+    const agg = new Map();
+    for (const o of allOrders) {
+      let e = agg.get(o.type_id);
+      if (!e) { e = { sells: [], buys: [] }; agg.set(o.type_id, e); }
+      (o.is_buy_order ? e.buys : e.sells).push(o);
+    }
+
+    const newBook = new Map();
+    for (const [typeId, e] of agg) {
+      let bestSell = Infinity, bestBuy = 0;
+      for (const o of e.sells) if (o.price < bestSell) bestSell = o.price;
+      for (const o of e.buys)  if (o.price > bestBuy)  bestBuy  = o.price;
+      if (bestSell === Infinity) bestSell = 0;
+      let sellQtyTop = 0, buyQtyTop = 0;
+      if (bestSell) for (const o of e.sells) if (o.price === bestSell) sellQtyTop += o.volume_remain;
+      if (bestBuy)  for (const o of e.buys)  if (o.price === bestBuy)  buyQtyTop  += o.volume_remain;
+      const spread    = (bestSell && bestBuy) ? bestSell - bestBuy : 0;
+      const spreadPct = (bestSell && bestBuy) ? (spread / bestSell) * 100 : 0;
+      newBook.set(typeId, { sell: bestSell, buy: bestBuy, spread, spreadPct, sellOrders: e.sells.length, buyOrders: e.buys.length, sellQtyTop, buyQtyTop });
+    }
+
+    hubBooks[hubId] = newBook;
+    Object.assign(hubMetas[hubId], { updatedAt: Date.now(), expiresAt: Date.now() + TRADE_POLL_FALLBACK_MS, fetching: false, lastError: null, types: newBook.size });
+    console.log(`⟳ ${cfg.name} book refreshed — ${newBook.size} types in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+    refreshHubNameMap(hubId, [...newBook.keys()]).catch(e => console.error(`Name map error (${hubId}):`, e.message));
+
+    // Persist snapshot
+    setImmediate(() => {
+      const snap = JSON.stringify(Object.fromEntries(newBook));
+      dbRun(`INSERT OR REPLACE INTO hub_book_cache (hub_id, snapshot, updated_at) VALUES (?, ?, datetime('now'))`, [hubId, snap])
+        .catch(e => console.error(`hub_book_cache write error (${hubId}):`, e.message));
+    });
+
+  } catch (err) {
+    meta.fetching = false;
+    meta.lastError = err.message;
+    console.error(`⚠ ${cfg.name} structure market poll failed:`, err.message);
+  }
+
+  scheduleNextHubPoll(hubId, !!hubMetas[hubId].lastError);
+}
+
+/**
+ * Per-hub background enrichment: fetch ESI market history for items missing from the
+ * volume table (item_history_prices for Jita; hub_history_prices for other hubs).
+ * Only one hub enriches at a time (global `enrichRunning` lock) to protect the ESI budget.
+ */
+async function runHubHistoryEnrichment(hubId) {
+  if (HUB_CONFIG[hubId].isStructure) return; // no ESI history endpoint for player structures
+  if (enrichRunning) return;
+  if (preComputeRunning) {
+    hubEnrichPending[hubId] = true;
+    console.log(`⟳ ${HUB_CONFIG[hubId].name} history enrichment deferred — precompute active, will retry next poll`);
+    return;
+  }
+  hubEnrichPending[hubId] = false;
+  if (hubBooks[hubId].size === 0) return;
+  enrichRunning = true;
+
+  const cfg      = HUB_CONFIG[hubId];
+  const isJita   = hubId === 'jita';
+  const cutoff   = new Date(Date.now() - 23 * 3600_000).toISOString().slice(0, 19).replace('T', ' ');
+
+  try {
+    let freshSet;
+    if (isJita) {
+      const fresh = await dbAll('SELECT type_id FROM item_history_prices WHERE updated_at > ?', [cutoff]);
+      freshSet = new Set(fresh.map(r => r.type_id));
+    } else {
+      const fresh = await dbAll(
+        'SELECT type_id FROM hub_history_prices WHERE region_id = ? AND updated_at > ?',
+        [cfg.regionId, cutoff]
+      );
+      freshSet = new Set(fresh.map(r => r.type_id));
+    }
+
+    const toEnrich = [...hubBooks[hubId].keys()].filter(id => !freshSet.has(id));
+    if (toEnrich.length === 0) {
+      console.log(`✓ ${cfg.name} history fully enriched`);
+      enrichRunning = false;
+      return;
+    }
+
+    console.log(`⟳ ${cfg.name} history enrichment: ${toEnrich.length} items need ESI history`);
+    let done = 0;
+    let lastErrorRemain = 100;
+
+    for (const typeId of toEnrich) {
+      if (hubBooks[hubId].size === 0) break;
+
+      try {
+        const r = await esiFetch(
+          `https://esi.evetech.net/latest/markets/${cfg.regionId}/history/?datasource=tranquility&type_id=${typeId}`
+        );
+        const errorRemain = parseInt(r.headers.get('x-esi-error-limit-remain') || '100', 10);
+        lastErrorRemain = errorRemain;
+        if (errorRemain < TRADE_MIN_ERROR_BUDGET || r.status === 420 || r.status >= 500) {
+          console.warn(`⚠ ${cfg.name} history enrichment pausing — ESI error budget low (${errorRemain} remain)`);
+          await new Promise(res => setTimeout(res, 60_000));
+          break;
+        }
+        if (r.ok) {
+          const history = await r.json();
+          if (isJita) {
+            // Jita: store price + volume in existing item_history_prices table
+            if (Array.isArray(history) && history.length > 0) {
+              const recent   = history.slice(-30);
+              const avgVol   = recent.reduce((s, d) => s + (d.volume  || 0), 0) / recent.length;
+              const avgPrice = recent.reduce((s, d) => s + (d.average || 0), 0) / recent.length;
+              await dbRun(
+                `INSERT INTO item_history_prices (type_id, avg_30d_price, avg_30d_volume, sample_days, updated_at)
+                 VALUES (?, ?, ?, ?, datetime('now'))
+                 ON CONFLICT(type_id) DO UPDATE SET
+                   avg_30d_price = excluded.avg_30d_price, avg_30d_volume = excluded.avg_30d_volume,
+                   sample_days = excluded.sample_days, updated_at = excluded.updated_at`,
+                [typeId, avgPrice, avgVol, recent.length]
+              );
+              done++;
+            } else {
+              await dbRun(
+                `INSERT INTO item_history_prices (type_id, avg_30d_price, avg_30d_volume, sample_days, updated_at)
+                 VALUES (?, 0, 0, 0, datetime('now'))
+                 ON CONFLICT(type_id) DO UPDATE SET updated_at = excluded.updated_at`,
+                [typeId]
+              );
+            }
+          } else {
+            // Non-Jita: store only volume in hub_history_prices (price not needed for scan)
+            const avgVol = (Array.isArray(history) && history.length > 0)
+              ? history.slice(-30).reduce((s, d) => s + (d.volume || 0), 0) / Math.min(history.length, 30)
+              : 0;
+            await dbRun(
+              `INSERT INTO hub_history_prices (type_id, region_id, avg_30d_volume, updated_at)
+               VALUES (?, ?, ?, datetime('now'))
+               ON CONFLICT(type_id, region_id) DO UPDATE SET
+                 avg_30d_volume = excluded.avg_30d_volume, updated_at = excluded.updated_at`,
+              [typeId, cfg.regionId, avgVol]
+            );
+            if (avgVol > 0) done++;
+          }
+        }
+      } catch (_) { /* non-fatal */ }
+
+      const delayMs = lastErrorRemain < 30 ? 800 : lastErrorRemain < 50 ? 300 : 150;
+      await new Promise(res => setTimeout(res, delayMs));
+    }
+
+    console.log(`✓ ${cfg.name} history enrichment complete: ${done}/${toEnrich.length} items`);
+  } finally {
+    enrichRunning = false;
+  }
+}
+
+/** Freshness/status snapshot for a hub. */
+function tradingMeta(hubId = 'jita') {
+  const cfg  = HUB_CONFIG[hubId] || HUB_CONFIG.jita;
+  const meta = hubMetas[hubId]   || hubMetas.jita;
+  const now  = Date.now();
   return {
-    station:      'Jita IV-4',
-    stationId:    TRADE_STATION_ID,
-    regionId:     TRADE_REGION_ID,
-    updatedAt:    jitaBookMeta.updatedAt || null,
-    ageSec:       jitaBookMeta.updatedAt ? Math.round((now - jitaBookMeta.updatedAt) / 1000) : null,
-    expiresInSec: jitaBookMeta.expiresAt ? Math.max(0, Math.round((jitaBookMeta.expiresAt - now) / 1000)) : null,
-    types:        jitaBookMeta.types,
-    warming:      jitaBookMeta.updatedAt === 0,
-    lastError:    jitaBookMeta.lastError,
+    hub:          hubId,
+    station:      cfg.name,
+    stationId:    cfg.stationId,
+    regionId:     cfg.regionId,
+    stationLabel: cfg.label,
+    updatedAt:    meta.updatedAt || null,
+    ageSec:       meta.updatedAt ? Math.round((now - meta.updatedAt) / 1000) : null,
+    expiresInSec: meta.expiresAt ? Math.max(0, Math.round((meta.expiresAt - now) / 1000)) : null,
+    types:        meta.types,
+    warming:      meta.updatedAt === 0,
+    lastError:    meta.lastError,
   };
 }
 
-/** Shape one type's book entry for the API (adds the daily-volume liquidity signal we already have). */
-function tradingEntry(typeId) {
-  const b = jitaBook.get(typeId);
+/** Shape one type's book entry for the API. */
+function tradingEntry(hubId, typeId) {
+  const b = hubBooks[hubId]?.get(typeId);
   if (!b) return { typeId, sell: 0, buy: 0, spread: 0, spreadPct: 0, sellOrders: 0, buyOrders: 0, sellQtyTop: 0, buyQtyTop: 0, found: false };
   return { typeId, ...b, found: true };
 }
 
-// ── Trading API (lazy-starts the poller) ──────────────────────────────────────
+// ── Trading API ───────────────────────────────────────────────────────────────
 app.get('/api/trading/meta', (req, res) => {
-  ensureJitaPollerRunning();
-  res.json(tradingMeta());
+  const hubId = HUB_IDS.includes(req.query.hub) ? req.query.hub : 'jita';
+  ensureHubPollerRunning(hubId);
+  res.json(tradingMeta(hubId));
 });
 
+// /api/trading/jita — kept for backward compat (watchlist price lookups); hub param optional
 app.get('/api/trading/jita', (req, res) => {
-  ensureJitaPollerRunning();
+  const hubId = HUB_IDS.includes(req.query.hub) ? req.query.hub : 'jita';
+  ensureHubPollerRunning(hubId);
   const raw = String(req.query.types || '').trim();
   if (raw) {
     const ids = raw.split(',')
       .map(s => parseInt(s, 10))
       .filter(n => Number.isInteger(n) && !Number.isNaN(n) && n > 0)
-      .slice(0, 200); // cap watchlist size
-    return res.json({ meta: tradingMeta(), results: ids.map(tradingEntry) });
+      .slice(0, 200);
+    return res.json({ meta: tradingMeta(hubId), results: ids.map(id => tradingEntry(hubId, id)) });
   }
-  // No types → return meta + count only (don't serialize the whole book by default).
-  res.json({ meta: tradingMeta(), count: jitaBook.size });
+  res.json({ meta: tradingMeta(hubId), count: hubBooks[hubId].size });
 });
 
 app.get('/api/trading/jita/:typeId', (req, res) => {
-  ensureJitaPollerRunning();
+  const hubId  = HUB_IDS.includes(req.query.hub) ? req.query.hub : 'jita';
   const typeId = parseInt(req.params.typeId, 10);
+  ensureHubPollerRunning(hubId);
   if (!Number.isInteger(typeId) || typeId <= 0) return res.status(400).json({ error: 'invalid typeId' });
-  res.json({ meta: tradingMeta(), ...tradingEntry(typeId) });
+  res.json({ meta: tradingMeta(hubId), ...tradingEntry(hubId, typeId) });
 });
 
-// POST /api/trading/scan — station-trading opportunity scanner
-// Reads the in-memory Jita order book, cross-references precomputed daily volume,
-// applies the character's actual broker/tax rates, and returns ranked opportunities.
+// POST /api/trading/scan — multi-hub station-trading opportunity scanner
 app.post('/api/trading/scan', security.apiLimiter, security.verifyEveToken, async (req, res) => {
   try {
-    ensureJitaPollerRunning();
-
     const {
       hub           = 'jita',
       minMarginPct  = 3,
@@ -1373,43 +1841,54 @@ app.post('/api/trading/scan', security.apiLimiter, security.verifyEveToken, asyn
       capital       = null,
       maxSellOrders = null,
     } = req.body;
+    // Guard against non-numeric strings (e.g. "abc") that would make all comparisons
+    // return false, silently disabling the margin filter and returning the full book.
+    const safeMinMarginPct = (isFinite(Number(minMarginPct)) && Number(minMarginPct) >= 0)
+      ? Number(minMarginPct) : 3;
 
-    // Return a warming stub if the book hasn't completed its first fetch yet
-    if (!jitaBookMeta.updatedAt) {
-      const warmMeta = {
-        ...tradingMeta(),
-        hubId: hub, station: 'Jita IV-4',
-        stationLabel: 'Jita IV - Moon 4 - Caldari Navy Assembly Plant',
-        warming: true,
-      };
+    const hubId = HUB_IDS.includes(hub) ? hub : 'jita';
+    const cfg   = HUB_CONFIG[hubId];
+    ensureHubPollerRunning(hubId);
+
+    const characterId = req.characterId;
+    const { skillMap, standings } = getCharacterSession(characterId);
+    const sessionCached = Object.keys(skillMap).length > 0;
+    // Fees use the selected hub's faction/corp standings (or fixed fee for player structures)
+    const { brokerFeeRate, transactionTaxRate } =
+      calcSalesFeeRates(skillMap, standings, HUB_STANDINGS[cfg.regionId], HUB_STRUCTURE_FEES[cfg.regionId] ?? null);
+
+    const activeBook = hubBooks[hubId];
+    if (activeBook.size === 0) {
       return res.json({
-        results: [], total: 0, jitaBookSize: 0, coveredWithVolume: 0,
-        brokerFeeRate: 0.03, transactionTaxRate: 0.036, meta: warmMeta,
+        results: [], total: 0, totalMatched: 0, jitaBookSize: 0, coveredWithVolume: 0,
+        brokerFeeRate, transactionTaxRate, sessionCached, hubVolumeEnriched: hubId === 'jita',
+        meta: { ...tradingMeta(hubId), warming: true },
       });
     }
 
-    const characterId = req.characterId;
+    // Volume: Jita uses item_history_prices; other hubs use hub_history_prices.
+    // Player structures (Keepstar) have no ESI history endpoint — volMap stays empty.
+    let volMap;
+    if (hubId === 'jita') {
+      const rows = await dbAll('SELECT type_id, avg_30d_volume FROM item_history_prices WHERE avg_30d_volume > 0', []);
+      volMap = new Map(rows.map(r => [r.type_id, r.avg_30d_volume]));
+    } else {
+      const rows = await dbAll(
+        'SELECT type_id, avg_30d_volume FROM hub_history_prices WHERE region_id = ? AND avg_30d_volume > 0',
+        [cfg.regionId]
+      );
+      volMap = new Map(rows.map(r => [r.type_id, r.avg_30d_volume]));
+    }
 
-    // Character's actual fee rates — derived from skills + standings (same as /api/character-fee-rates)
-    const { skillMap, standings } = getCharacterSession(characterId);
-    const { brokerFeeRate, transactionTaxRate } =
-      calcSalesFeeRates(skillMap, standings, HUB_STANDINGS[10000002]); // Jita standings
+    const nameMap    = hubNameMaps[hubId];
+    const RESULT_CAP = 500;
+    const allMatches = [];
+    const capISK     = (capital && capital > 0) ? capital : null;
 
-    // Volume and name data from the precomputed table (best source we have)
-    const [volumeRows, nameRows] = await Promise.all([
-      dbAll('SELECT product_id, avg_daily_volume FROM precomputed_profits WHERE avg_daily_volume IS NOT NULL AND avg_daily_volume > 0', []),
-      dbAll('SELECT DISTINCT product_id, product_name FROM precomputed_profits WHERE product_name IS NOT NULL', []),
-    ]);
-    const volMap  = new Map(volumeRows.map(r => [r.product_id, r.avg_daily_volume]));
-    const nameMap = new Map(nameRows.map(r => [r.product_id, r.product_name]));
-
-    const results = [];
-    const capISK = (capital && capital > 0) ? capital : null;
-
-    for (const [typeId, entry] of jitaBook) {
+    for (const [typeId, entry] of activeBook) {
       const { sell, buy, sellOrders, buyOrders, sellQtyTop, buyQtyTop } = entry;
-
       if (!sell || !buy || sell <= buy) continue;
+      if (sell > buy * 1000) continue; // floor-price buy order (0.01 ISK placeholder) — no real market
       if (maxSellOrders !== null && sellOrders > maxSellOrders) continue;
 
       const brokerFeeBuy  = buy  * brokerFeeRate;
@@ -1418,49 +1897,48 @@ app.post('/api/trading/scan', security.apiLimiter, security.verifyEveToken, asyn
       const netProfit     = sell - buy - brokerFeeBuy - brokerFeeSell - transTax;
       const netMarginPct  = (netProfit / sell) * 100;
 
-      if (netMarginPct < minMarginPct) continue;
+      if (netMarginPct < safeMinMarginPct) continue;
       if (capISK !== null && buy > capISK) continue;
 
       const avgDailyVol = volMap.get(typeId) ?? 0;
-      if (avgDailyVol < minVolume) continue;
+      if (avgDailyVol > 0 && avgDailyVol < minVolume) continue;
 
-      const iskPerDay = netProfit * avgDailyVol * 0.15; // 15% absorption assumption
-
-      results.push({
+      const iskPerDay = netProfit * avgDailyVol * 0.15;
+      allMatches.push({
         typeId,
-        name:         nameMap.get(typeId) ?? `Type #${typeId}`,
-        sell, buy,
-        netProfit, netMarginPct,
+        name: nameMap.get(typeId) ?? `Type #${typeId}`,
+        sell, buy, netProfit, netMarginPct,
         brokerFeeBuy, brokerFeeSell, transTax,
         sellOrders, buyOrders, sellQtyTop, buyQtyTop,
-        avgDailyVol,
-        sampleDays: 30,
-        iskPerDay,
+        avgDailyVol, sampleDays: 30, iskPerDay,
         sellDepth: [{ price: sell, qty: sellQtyTop }],
         buyDepth:  [{ price: buy,  qty: buyQtyTop  }],
       });
     }
 
-    results.sort((a, b) => b.iskPerDay - a.iskPerDay);
+    allMatches.sort((a, b) => {
+      if (a.avgDailyVol === 0 && b.avgDailyVol > 0) return 1;
+      if (a.avgDailyVol > 0 && b.avgDailyVol === 0) return -1;
+      if (a.avgDailyVol > 0) return b.iskPerDay - a.iskPerDay;
+      return b.netMarginPct - a.netMarginPct;
+    });
 
-    const meta = {
-      ...tradingMeta(),
-      hubId: hub, station: 'Jita IV-4',
-      stationLabel: 'Jita IV - Moon 4 - Caldari Navy Assembly Plant',
-    };
-
+    const results = allMatches.slice(0, RESULT_CAP);
     res.json({
       results,
       total:             results.length,
-      jitaBookSize:      jitaBook.size,
-      coveredWithVolume: results.filter(r => r.avgDailyVol > 0).length,
+      totalMatched:      allMatches.length,
+      jitaBookSize:      activeBook.size,
+      coveredWithVolume: volMap.size,
       brokerFeeRate,
       transactionTaxRate,
-      meta,
+      sessionCached,
+      hubVolumeEnriched: hubId === 'jita' || volMap.size > 100,
+      meta:              tradingMeta(hubId),
     });
   } catch (err) {
     console.error('Trading scan error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Scan failed' });
   }
 });
 
@@ -1470,7 +1948,7 @@ app.post('/api/trading/scan', security.apiLimiter, security.verifyEveToken, asyn
 // is forwarded directly to ESI — no stored tokens needed.
 app.get('/api/trading/character-orders', security.apiLimiter, security.verifyEveToken, async (req, res) => {
   try {
-    ensureJitaPollerRunning();
+    ensureHubPollerRunning('jita');
 
     const characterId = req.characterId;
     const eveToken = req.headers.authorization?.replace(/^Bearer\s+/i, '');
@@ -1504,9 +1982,9 @@ app.get('/api/trading/character-orders', security.apiLimiter, security.verifyEve
       : [];
     const nameMap = new Map(nameRows.map(r => [r.product_id, r.product_name]));
 
-    // Enrich each order with undercut status from the live Jita book
+    // Enrich each order with undercut status from the live Jita book (orders are always at Jita)
     const orders = esiOrders.map(o => {
-      const book = jitaBook.get(o.type_id);
+      const book = hubBooks.jita.get(o.type_id);
       let isUndercut = false, undercutBy = 0, bookBest = null;
 
       if (book) {
@@ -1614,7 +2092,8 @@ const VALID_REGIONS = [
   10000032, // Dodixie
   10000042, // Hek
   10000030, // Rens
-  10000041  // Syndicate
+  10000041, // Syndicate
+  10099000, // C-J6MT Keepstar (synthetic ID — resolved via structure market endpoint)
 ];
 
 // Human-readable names for the AI and formatting
@@ -1625,6 +2104,7 @@ const REGION_HUB_NAMES = {
   10000042: 'Hek',
   10000030: 'Rens',
   10000041: 'Syndicate',
+  10099000: 'C-J6MT Keepstar',
 };
 
 // NPC corp + faction standings that affect broker fees at each trade hub.
@@ -1648,7 +2128,29 @@ const HUB_SYSTEM_IDS = {
   10000042: 30002053, // Hek VIII – Moon 12 – Boundless Creation Factory
   10000030: 30002510, // Rens VI – Moon 8 – Brutor Tribe Treasury
   10000041: 30045331, // Syndicate – Poitot
+  10099000: 30000772, // C-J6MT Keepstar (1st Taj Mahgoon, structure_id 1049588174021)
 };
+
+// ── C-J6MT Keepstar market integration ──────────────────────────────────────
+// Structure ID confirmed 2026-06-28 via ESI character assets (Rorqual location_ids).
+// All alliance members have docking rights — any active user's token can poll the market.
+// Synthetic regionId 10099000 is used internally; it is not a real EVE region.
+const KEEPSTAR_STRUCTURE_ID = 1049588174021;
+const KEEPSTAR_REGION_ID    = 10099000;
+
+// Token pool: capture any authenticated user's EVE token during normal requests.
+// EVE tokens expire in ~20 min; pool is refreshed on each /api/session-data POST.
+// Precompute uses the pool token if available; if not, Keepstar prices are skipped.
+const _ksTkPool = { token: null, expiry: 0 };
+
+function cacheStructureToken(token) {
+  _ksTkPool.token  = token;
+  _ksTkPool.expiry = Date.now() + 17 * 60 * 1000; // 17 min (3 min safety margin)
+}
+
+function getStructureToken() {
+  return (_ksTkPool.token && Date.now() < _ksTkPool.expiry) ? _ksTkPool.token : null;
+}
 
 // ── Haulage provider rate tables (Phase 2) ────────────────────────────────────
 // Approximate published rates — versioned. Users should verify against provider
@@ -1941,26 +2443,30 @@ async function getItemPricesAllRegions(typeId) {
   const results = [];
 
   for (const regionId of VALID_REGIONS) {
-    let entry = regionPriceCache.get(regionId);
-    if (!entry || Date.now() >= entry.expiry) {
-      // fetchRegionPrices returns prices but doesn't cache — store explicitly
-      const prices = await fetchRegionPrices(regionId);
-      setRegionPriceCache(regionId, prices);
-      entry = regionPriceCache.get(regionId);
-    }
+    try {
+      let entry = regionPriceCache.get(regionId);
+      if (!entry || Date.now() >= entry.expiry) {
+        // fetchRegionPrices returns prices but doesn't cache — store explicitly
+        const prices = await fetchRegionPrices(regionId);
+        setRegionPriceCache(regionId, prices);
+        entry = regionPriceCache.get(regionId);
+      }
 
-    if (!entry) continue;
+      if (!entry) continue;
 
-    const price = entry.prices[typeId];
-    if (price) {
-      results.push({
-        hub_name:          REGION_HUB_NAMES[regionId],
-        region_id:         regionId,
-        buy_price:         price.buy  || 0,
-        sell_price:        price.sell || 0,
-        median_price:      price.median || 0,
-        volume_available:  0,   // ESI order feed doesn't include volume per-hub
-      });
+      const price = entry.prices[typeId];
+      if (price) {
+        results.push({
+          hub_name:          REGION_HUB_NAMES[regionId],
+          region_id:         regionId,
+          buy_price:         price.buy  || 0,
+          sell_price:        price.sell || 0,
+          median_price:      price.median || 0,
+          volume_available:  0,   // ESI order feed doesn't include volume per-hub
+        });
+      }
+    } catch (err) {
+      console.warn(`⚠ compare_markets: skipping region ${regionId} — ${err.message}`);
     }
   }
 
@@ -3390,26 +3896,57 @@ app.post('/api/blueprint-profits', security.apiLimiter, async (req, res) => {
 
 
 // AI CHAT - Anthropic proxy with function calling
-// ── AI guardrail (v1.13.0) ───────────────────────────────────────────────────
+// ── AI guardrail (v1.30.0) ───────────────────────────────────────────────────
 // Canonical refusal — kept in sync with the REFUSAL PROTOCOL line in the system prompt.
 const AI_REFUSAL = "I'm F.O.R.G.E. — I only help with EVE Online industry, markets, and pricing. Ask me about builds, blueprints, profit, or what to produce.";
 
-// Defense-in-depth: block blatant prompt-injection / jailbreak attempts BEFORE the
-// model call. Topic enforcement is the system prompt's job; this layer only catches
-// explicit override/extraction attempts. Patterns are deliberately conservative to
-// avoid false positives on genuine EVE questions.
+// Max tokens the server will ever request from the API, regardless of what the client sends.
+const AI_MAX_TOKENS = 2000;
+
+// Strip invisible/dangerous Unicode before any other processing:
+//   • Zero-width characters (U+200B–U+200D, U+FEFF) — used to split trigger words
+//   • Bidirectional text overrides (U+202A–U+202E, U+2066–U+2069) — used to reverse text visually
+//   • C0/C1 control characters except \t \n \r — not needed in chat, occasionally used in attacks
+function sanitiseMessage(text) {
+  if (typeof text !== 'string') return text;
+  return text
+    .replace(/[​-‍﻿]/g, '')           // Zero-width spaces / BOM
+    .replace(/[‪-‮⁦-⁩]/g, '')   // Bidirectional text overrides
+    .replace(/[ --]/g, ''); // C0/C1 control chars
+}
+
+// Defense-in-depth: block prompt-injection / jailbreak attempts BEFORE the model call.
+// Topic enforcement is the system prompt's job; this layer catches explicit override and
+// extraction attempts. Patterns are conservative — no false positives on EVE questions.
 const AI_INJECTION_PATTERNS = [
+  // ── Instruction override ──────────────────────────────────────────────────
   /ignore\s+(all\s+|your\s+|the\s+|any\s+|these\s+)*(previous|prior|earlier|above|preceding|system)\s+(instruction|prompt|rule|message|context|direction)/i,
   /disregard\s+(all\s+|your\s+|the\s+|these\s+)*(previous|prior|system|above)\s+(instruction|prompt|rule|message)/i,
   /forget\s+(everything|all|your|the|previous|prior)\s+(instruction|rule|prompt|context|you)/i,
+  // "from now on / starting now" — only when followed by AI-instruction language
+  /\b(from\s+(now|this\s+point|this\s+moment|here)\s+on|starting\s+(now|immediately))\b.{0,60}\b(you\s+(will|must|should|are)|respond|ignore|act|behave|forget|disregard)/i,
+  // ── System prompt extraction ──────────────────────────────────────────────
   /(reveal|show|print|repeat|output|expose|display|give\s+me)\s+(me\s+)?(your\s+|the\s+|these\s+)?(system\s+|initial\s+|original\s+)?(prompt|instructions|guidelines|directive)/i,
   /what\s+(is|are|were)\s+(your\s+(system\s+|initial\s+|original\s+)?|the\s+(system|initial|original)\s+)(prompt|instructions)/i,
-  /\b(developer|dan|sudo|god|admin|debug)\s+mode\b/i,
+  // ── Special modes / authority claims ─────────────────────────────────────
+  /\b(developer|dan|sudo|god|admin|debug|maintenance|override)\s+mode\b/i,
   /\bjailbreak/i,
+  // ── Identity override ─────────────────────────────────────────────────────
   /you\s+are\s+(now\s+)?(no\s+longer|not)\s+(f\.?o\.?r\.?g\.?e|forge)/i,
   /you\s+are\s+(now\s+)?(a\s+|an\s+)?(unrestricted|uncensored|unfiltered|general[\s-]?purpose|normal|regular|different|new)\s+(ai|assistant|llm|chatbot|model|gpt|bot)/i,
   /(act|behave|respond|talk|pretend)\s+(as\s+|like\s+|to\s+be\s+)(if\s+you\s+(are|were)\s+)?(an?\s+)?(unrestricted|uncensored|unfiltered|general[\s-]?purpose|normal|regular)\s+(ai|assistant|llm|chatbot|model|gpt)/i,
+  // "pretend you are <something that isn't EVE/FORGE>"
+  /pretend\s+(you\s+are|to\s+be)\s+(?!.*\b(eve|forge|industry|npc|capsuleer|caldari|minmatar|gallente|amarr)\b)/i,
+  // ── Indirect / encoding attacks ───────────────────────────────────────────
+  // Translation/repetition used to launder hidden instructions
+  /(translate|repeat|say|echo|output|write\s+out)\s+(the\s+|this\s+|following\s+)?(following|text|words?|sentence|phrase)\s*:/i,
+  // Explicit encoding references (decode this base64 / rot13 etc.)
+  /\b(base64|rot[\s-]?13|hex[\s-]?encoded?|url[\s-]?encoded?)\b.*\b(decode|decipher|translate|render|convert)\b/i,
+  /\b(decode|decipher|translate|render|convert)\b.*\b(base64|rot[\s-]?13|hex[\s-]?encoded?|url[\s-]?encoded?)\b/i,
+  // Prompt-injection markers used by LLM frameworks
+  /<<<|>>>|\[\[SYSTEM\]\]|\[INST\]|\[\/INST\]|<\|im_start\|>|<\|im_end\|>/,
 ];
+
 function looksLikeInjection(text) {
   return typeof text === 'string' && AI_INJECTION_PATTERNS.some(re => re.test(text));
 }
@@ -3420,16 +3957,26 @@ app.post('/api/ai-chat',
   security.validateAiChatInput,
   async (req, res) => {
   try {
-    const { messages, context, maxTokens = 2000 } = req.body;
+    // maxTokens: server caps regardless of client value — never let the caller inflate API cost.
+    const { messages } = req.body;
+    const maxTokens = AI_MAX_TOKENS;
     const characterId = req.characterId;
 
     if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({ error: "messages array required" });
     }
 
-    // Guardrail: block blatant prompt-injection / jailbreak attempts before spending
-    // a model call. Only inspects the latest user turn (what we're about to act on).
-    const lastUserMsg = [...messages].reverse().find(m => m && m.role === 'user');
+    // Sanitise every user message: strip invisible/directional Unicode before pattern matching.
+    // This prevents zero-width character splitting (e.g. "ig​nore" bypassing the regex).
+    const sanitisedMessages = messages.map(m =>
+      m && m.role === 'user' ? { ...m, content: sanitiseMessage(m.content) } : m
+    );
+
+    // Guardrail: check only the latest user message.
+    // Checking all history messages causes false positives — normal EVE phrases like
+    // "going forward, what should I build?" trip the instruction-override patterns.
+    // The system prompt already instructs Claude to treat each message independently.
+    const lastUserMsg = [...sanitisedMessages].reverse().find(m => m && m.role === 'user');
     if (lastUserMsg && looksLikeInjection(lastUserMsg.content)) {
       console.warn(`⚠ AI guardrail: blocked injection/override attempt from character ${characterId}`);
       return res.json({ content: [{ type: "text", text: AI_REFUSAL }], guardrail: "blocked" });
@@ -3779,7 +4326,7 @@ app.post('/api/ai-chat',
     ];
 
     // Trim history to last 30 messages
-    let conversationMessages = messages.slice(-10);
+    let conversationMessages = sanitisedMessages.slice(-10);
 
     // Max 5 tool-use iterations to prevent infinite loops
     const maxIterations = 5;
@@ -4396,6 +4943,10 @@ app.post('/api/session-data',
       const characterId = req.characterId;
       const { assets, blueprints, prices, wallet, jobs, skills, total_sp, standings, planets, implants } = req.body;
 
+      // Refresh structure market token pool so precompute can poll the Keepstar
+      const rawToken = req.headers.authorization?.replace('Bearer ', '');
+      if (rawToken) cacheStructureToken(rawToken);
+
       // Validate data exists
       if (!assets || !blueprints) {
         return res.status(400).json({ error: 'Missing required session data' });
@@ -4492,7 +5043,9 @@ app.get('/api/session-data/:characterId',
 );
 
 // These are used in /api/pi/market to estimate how much a factory produces per day.
-const PI_FACTORY_CYCLE_TIME = { 1: 1800, 2: 3600, 3: 3600, 4: 86400 }; // seconds/cycle
+const PI_POCO_BASE_VALUE    = { 0: 5, 1: 400, 2: 7200, 3: 60000, 4: 1200000 }; // ISK/unit
+const PI_FACTORY_OUTPUT_QTY = { 1: 20, 2: 5, 3: 3, 4: 1 };                      // units/cycle
+const PI_FACTORY_CYCLE_TIME = { 1: 1800, 2: 3600, 3: 3600, 4: 86400 };           // seconds/cycle
 
 // Maximum number of SQL bind variables per query (SQLite default limit is 999).
 // We leave headroom for other parameters in the same query (e.g. piIds + bpIds).
@@ -5061,7 +5614,7 @@ app.post('/api/queue-planner', security.apiLimiter, security.verifyEveToken, asy
 
     // ── Character's personal sales fee rates at the selected hub ─────────────
     const { brokerFeeRate, transactionTaxRate } = calcSalesFeeRates(
-      skillMap, standings, HUB_STANDINGS[safeRegionId]
+      skillMap, standings, HUB_STANDINGS[safeRegionId], HUB_STRUCTURE_FEES[safeRegionId] ?? null
     );
     const totalSalesFeeRate = brokerFeeRate + transactionTaxRate;
 
@@ -5328,16 +5881,281 @@ app.delete('/api/chat-history/:characterId',
   async (req, res) => {
     try {
       const characterId = req.characterId;
-      
+
       await dbRun(
         'DELETE FROM chat_history WHERE character_id = ?',
         [characterId]
       );
-      
+
       res.json({ success: true, message: 'Chat history cleared' });
     } catch (error) {
       console.error('Clear history error:', error);
       res.status(500).json({ error: 'Failed to clear history' });
+    }
+  }
+);
+
+// ── Ticker config — persisted per character, survives sessions ───────────────
+
+app.get('/api/ticker-config',
+  security.apiLimiter,
+  security.verifyEveToken,
+  async (req, res) => {
+    try {
+      const row = await dbGet(
+        'SELECT config_json FROM character_ticker_config WHERE character_id = ?',
+        [req.characterId]
+      );
+      const DEFAULT_GROUP = { id: 'default', name: 'Default', color: '#00ff88' };
+      if (!row) {
+        return res.json({ pins: [], groups: [DEFAULT_GROUP], activeGroupId: 'default', dualRow: false });
+      }
+      let stored;
+      try { stored = JSON.parse(row.config_json); } catch { stored = []; }
+      // Migrate old format (plain pins array → wrapped config)
+      if (Array.isArray(stored)) {
+        return res.json({
+          pins: stored.map(p => ({ ...p, groupId: p.groupId || 'default' })),
+          groups: [DEFAULT_GROUP],
+          activeGroupId: 'default',
+          dualRow: false,
+        });
+      }
+      const groups = stored.groups?.length ? stored.groups : [DEFAULT_GROUP];
+      const pins   = (stored.pins || []).map(p => ({ ...p, groupId: p.groupId || 'default' }));
+      res.json({ pins, groups, activeGroupId: stored.activeGroupId || 'default', dualRow: stored.dualRow === true });
+    } catch (err) {
+      console.error('ticker-config GET error:', err.message);
+      res.status(500).json({ error: 'Failed to load ticker config' });
+    }
+  }
+);
+
+app.post('/api/ticker-config',
+  security.apiLimiter,
+  security.verifyEveToken,
+  async (req, res) => {
+    try {
+      const { pins, groups, activeGroupId, dualRow } = req.body || {};
+      if (!Array.isArray(pins)) return res.status(400).json({ error: 'pins array required' });
+      const safeGroups = (Array.isArray(groups) ? groups : [{ id: 'default', name: 'Default', color: '#00ff88' }])
+        .slice(0, 10)
+        .map(g => ({
+          id:    String(g.id    || 'default').slice(0, 40),
+          name:  String(g.name  || 'Default').slice(0, 40),
+          color: String(g.color || '#00ff88').slice(0, 12),
+        }));
+      const safe = pins.slice(0, 100).map(p => ({
+        id:            String(p.id    || '').slice(0, 40),
+        type:          String(p.type  || '').slice(0, 40),
+        label:         String(p.label || '').slice(0, 60),
+        groupId:       String(p.groupId || 'default').slice(0, 40),
+        regionId:      p.regionId      ? Number(p.regionId)                     : undefined,
+        hubName:       p.hubName       ? String(p.hubName).slice(0, 40)         : undefined,
+        typeId:        p.typeId        ? Number(p.typeId)                        : undefined,
+        itemName:      p.itemName      ? String(p.itemName).slice(0, 80)        : undefined,
+        baseline:      p.baseline      != null ? Number(p.baseline)             : undefined,
+        baselineDate:  p.baselineDate  ? Number(p.baselineDate)                 : undefined,
+        expiryTime:    p.expiryTime    ? String(p.expiryTime).slice(0, 30)      : undefined,
+        snapshotValue: p.snapshotValue != null ? Number(p.snapshotValue)        : undefined,
+        addedAt:       Number(p.addedAt || Date.now()),
+        order:         Number(p.order || 0),
+      }));
+      const config = { pins: safe, groups: safeGroups, activeGroupId: String(activeGroupId || 'default').slice(0, 40), dualRow: dualRow === true };
+      await dbRun(
+        `INSERT INTO character_ticker_config (character_id, config_json, updated_at)
+         VALUES (?, ?, datetime('now'))
+         ON CONFLICT(character_id) DO UPDATE SET
+           config_json = excluded.config_json,
+           updated_at  = excluded.updated_at`,
+        [req.characterId, JSON.stringify(config)]
+      );
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('ticker-config POST error:', err.message);
+      res.status(500).json({ error: 'Failed to save ticker config' });
+    }
+  }
+);
+
+// ── Ticker prices — batch price/profit lookup for all pinned items ────────────
+// Body: { items: [{ pinId, pinType, regionId, typeId? }] }
+// Returns live data for each pin from the in-memory caches + DB.
+
+app.post('/api/ticker-prices',
+  security.apiLimiter,
+  security.verifyEveToken,
+  async (req, res) => {
+    try {
+      const { items } = req.body || {};
+      if (!Array.isArray(items)) return res.status(400).json({ error: 'items array required' });
+
+      const results = [];
+      for (const item of items) {
+        const { pinId, pinType, regionId, typeId } = item;
+        try {
+          if (['price_sell', 'price_buy', 'price_spread'].includes(pinType)) {
+            const cached = regionPriceCache.get(Number(regionId));
+            const p = cached?.prices?.[Number(typeId)];
+            results.push({ pinId, sell: p?.sell ?? null, buy: p?.buy ?? null });
+          }
+          else if (['mfg_profit', 'mfg_margin', 'mfg_isk_hour'].includes(pinType)) {
+            const row = await dbGet(
+              `SELECT profit, profit_margin, isk_per_hour
+               FROM precomputed_profits WHERE region_id = ? AND product_id = ?
+               ORDER BY computed_at DESC LIMIT 1`,
+              [Number(regionId), Number(typeId)]
+            );
+            results.push({ pinId, profit: row?.profit ?? null, margin: row?.profit_margin ?? null, iskPerHour: row?.isk_per_hour ?? null });
+          }
+          else if (pinType === 'mfg_top_hub') {
+            const row = await dbGet(
+              `SELECT product_name, product_id, profit, profit_margin, isk_per_hour
+               FROM precomputed_profits WHERE region_id = ?
+               ORDER BY profit DESC LIMIT 1`,
+              [Number(regionId)]
+            );
+            results.push({ pinId, itemName: row?.product_name ?? null, topTypeId: row?.product_id ?? null, profit: row?.profit ?? null, margin: row?.profit_margin ?? null });
+          }
+          else if (pinType === 'trade_spread') {
+            const hubKey = Object.entries(HUB_CONFIG).find(([, v]) => v.regionId === Number(regionId))?.[0];
+            const entry = hubKey ? hubBooks[hubKey]?.get(Number(typeId)) : null;
+            results.push({ pinId, sell: entry?.sell ?? null, buy: entry?.buy ?? null, spreadPct: entry?.spreadPct ?? null });
+          }
+          else if (pinType === 'trade_top_hub') {
+            const hubKey = Object.entries(HUB_CONFIG).find(([, v]) => v.regionId === Number(regionId))?.[0];
+            let topTypeId = null, topSpread = -Infinity, topSell = null, topBuy = null;
+            for (const [tid, e] of (hubKey ? (hubBooks[hubKey] || new Map()) : [])) {
+              if ((e.spreadPct ?? -Infinity) > topSpread) {
+                topSpread = e.spreadPct;
+                topTypeId = tid;
+                topSell = e.sell;
+                topBuy = e.buy;
+              }
+            }
+            results.push({ pinId, topTypeId, spreadPct: topSpread > -Infinity ? topSpread : null, sell: topSell, buy: topBuy });
+          }
+          else {
+            results.push({ pinId }); // character-state pins handled client-side
+          }
+        } catch (innerErr) {
+          console.error(`ticker-prices inner error pin ${pinId}:`, innerErr.message);
+          results.push({ pinId, error: 'fetch failed' });
+        }
+      }
+      res.json({ results });
+    } catch (err) {
+      console.error('ticker-prices error:', err.message);
+      res.status(500).json({ error: 'Failed to fetch ticker prices' });
+    }
+  }
+);
+
+// Fetch raw character assets from ESI and find the location_id for a specific type.
+// Bypasses the aggregated session data which strips location info.
+// GET /api/find-structure?typeId=28352  →  unique structure IDs where that type lives
+app.get('/api/find-structure',
+  security.apiLimiter,
+  security.verifyEveToken,
+  async (req, res) => {
+    try {
+      const characterId = req.characterId;
+      const token = req.headers.authorization?.replace('Bearer ', '');
+      const typeId = parseInt(req.query.typeId, 10);
+      if (!typeId) return res.status(400).json({ error: 'typeId query param required' });
+
+      // Fetch all character assets from ESI (paginated)
+      const INT32_MAX = 2147483647;
+      let page = 1, allAssets = [];
+      while (true) {
+        const r = await fetch(
+          `https://esi.evetech.net/latest/characters/${characterId}/assets/?datasource=tranquility&page=${page}`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        if (!r.ok) return res.status(r.status).json({ error: `ESI assets fetch failed (${r.status})` });
+        const page_data = await r.json();
+        allAssets = allAssets.concat(page_data);
+        const totalPages = parseInt(r.headers.get('x-pages') || '1', 10);
+        if (page >= totalPages) break;
+        page++;
+      }
+
+      // Find assets of the requested type and collect unique structure location_ids
+      const matches = allAssets.filter(a => a.type_id === typeId);
+      const structureIds = [...new Set(
+        matches
+          .map(a => a.location_id)
+          .filter(id => id && id > INT32_MAX)
+      )];
+
+      // Resolve each structure ID to a name
+      const resolved = await Promise.all(structureIds.map(async (id) => {
+        try {
+          const r = await fetch(`https://esi.evetech.net/latest/universe/structures/${id}/?datasource=tranquility`, {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          if (!r.ok) return { id, error: r.status };
+          const d = await r.json();
+          return { id, name: d.name, type_id: d.type_id, solar_system_id: d.solar_system_id };
+        } catch { return { id, error: 'unreachable' }; }
+      }));
+
+      res.json({ typeId, totalAssets: allAssets.length, matches: matches.length, structures: resolved });
+    } catch (err) {
+      res.status(500).json({ error: clientErrMsg(err) });
+    }
+  }
+);
+
+// Find where a specific ship/item type is located in the character's cached assets
+// GET /api/asset-location?typeId=28352  →  [{type_id, location_id, quantity}]
+app.get('/api/asset-location',
+  security.apiLimiter,
+  security.verifyEveToken,
+  (req, res) => {
+    const characterId = req.characterId;
+    const typeId = parseInt(req.query.typeId, 10);
+    if (!typeId) return res.status(400).json({ error: 'typeId query param required' });
+    const sessionData = getCached(`session:${characterId}`);
+    if (!sessionData) return res.status(400).json({ error: 'No session — refresh the page first' });
+    const matches = (sessionData.assets || []).filter(a => a.type_id === typeId);
+    res.json({ typeId, matches });
+  }
+);
+
+// Resolve accessible structure names from session cache (temporary lookup helper)
+// Used to find structure IDs for known structure names (e.g. Keepstars for hub integration)
+app.get('/api/resolve-structures',
+  security.apiLimiter,
+  security.verifyEveToken,
+  async (req, res) => {
+    try {
+      const characterId = req.characterId;
+      const token = req.headers.authorization?.replace('Bearer ', '');
+      const sessionData = getCached(`session:${characterId}`);
+      if (!sessionData) return res.status(400).json({ error: 'No session — refresh the page first' });
+
+      const ids = sessionData.accessibleStructures || [];
+      const results = [];
+      // Resolve in batches of 5 with 200ms gaps to avoid ESI rate limits
+      for (let i = 0; i < ids.length; i += 5) {
+        const batch = ids.slice(i, i + 5);
+        await Promise.all(batch.map(async (id) => {
+          try {
+            const r = await fetch(`https://esi.evetech.net/latest/universe/structures/${id}/?datasource=tranquility`, {
+              headers: { Authorization: `Bearer ${token}` }
+            });
+            if (r.ok) {
+              const d = await r.json();
+              results.push({ id, name: d.name, type_id: d.type_id, system_id: d.solar_system_id });
+            }
+          } catch { /* skip unreachable structures */ }
+        }));
+        if (i + 5 < ids.length) await new Promise(r => setTimeout(r, 200));
+      }
+      res.json({ count: results.length, structures: results });
+    } catch (err) {
+      res.status(500).json({ error: clientErrMsg(err) });
     }
   }
 );
@@ -7385,18 +8203,22 @@ const STRUCTURE_TE_BONUS = { 35825: 15, 35826: 20, 35827: 25 }; // Raitaru / Azb
  * @param {Object|undefined} hub — { faction_id, corp_id } from HUB_STANDINGS
  * @returns {{ brokerFeeRate, transactionTaxRate, brokerRelations, accounting, factionStanding, corpStanding }}
  */
-function calcSalesFeeRates(skillMap, standings, hub) {
+// fixedBrokerFee: pass HUB_STRUCTURE_FEES[regionId] for player structures (no standings discount).
+// When null, uses the standard NPC-standings formula.
+function calcSalesFeeRates(skillMap, standings, hub, fixedBrokerFee = null) {
   const brokerRelations = skillMap[3446]  || 0;  // Broker Relations (skill_id 3446)
   const accounting      = skillMap[16622] || 0;  // Accounting       (skill_id 16622)
-  const factionStanding = standings.factions[hub?.faction_id] || 0;
-  const corpStanding    = standings.corps[hub?.corp_id]       || 0;
+  const factionStanding = fixedBrokerFee !== null ? 0 : (standings.factions?.[hub?.faction_id] || 0);
+  const corpStanding    = fixedBrokerFee !== null ? 0 : (standings.corps?.[hub?.corp_id]       || 0);
 
-  const brokerFeeRate = Math.max(0.01,
-    0.03
-    - (0.003  * brokerRelations)
-    - (0.0003 * Math.max(0, factionStanding))
-    - (0.0002 * Math.max(0, corpStanding))
-  );
+  const brokerFeeRate = fixedBrokerFee !== null
+    ? fixedBrokerFee
+    : Math.max(0.01,
+        0.03
+        - (0.003  * brokerRelations)
+        - (0.0003 * Math.max(0, factionStanding))
+        - (0.0002 * Math.max(0, corpStanding))
+      );
   const transactionTaxRate = Math.max(0, 0.075 * (1 - 0.11 * accounting));
 
   return { brokerFeeRate, transactionTaxRate, brokerRelations, accounting, factionStanding, corpStanding };
@@ -7440,7 +8262,7 @@ app.get('/api/character-fee-rates', security.apiLimiter, security.verifyEveToken
 
     // ── Sales fee rates ────────────────────────────────────────────────────
     const { brokerFeeRate, transactionTaxRate } =
-      calcSalesFeeRates(skillMap, standings, HUB_STANDINGS[sellRegionId]);
+      calcSalesFeeRates(skillMap, standings, HUB_STANDINGS[sellRegionId], HUB_STRUCTURE_FEES[sellRegionId] ?? null);
 
     res.json({
       broker_fee_rate:      brokerFeeRate,
@@ -7823,7 +8645,7 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
     const {
       brokerFeeRate, transactionTaxRate,
       brokerRelations, accounting, factionStanding, corpStanding,
-    } = calcSalesFeeRates(skillMap, standings, HUB_STANDINGS[sellRegionId]);
+    } = calcSalesFeeRates(skillMap, standings, HUB_STANDINGS[sellRegionId], HUB_STRUCTURE_FEES[sellRegionId] ?? null);
 
     const brokerFee      = sellPrice * brokerFeeRate;
     const transactionTax = sellPrice * transactionTaxRate;
@@ -8619,6 +9441,15 @@ initDatabase().then(async () => {
 
   // Load 30-day history price map from DB (populated by volume enrichment)
   await loadHistoryPriceMap();
+
+  // Load hub book snapshots so the trading scanner has instant data before the first live poll.
+  await loadHubSnapshots();
+
+  // Start the Jita book poller immediately — warm before anyone opens the trading tab.
+  // Other hubs start lazily on first scan request. lastTradingRequestAt set now to
+  // prevent idle-stop from firing before any real user request arrives.
+  lastTradingRequestAt = Date.now();
+  ensureHubPollerRunning('jita');
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`

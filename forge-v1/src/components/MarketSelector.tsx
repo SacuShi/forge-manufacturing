@@ -20,6 +20,7 @@ export const MARKETS: Market[] = [
   { id: 10000042, name: 'Hek',       region: 'Metropolis',  type: 'hisec'   },
   { id: 10000030, name: 'Rens',      region: 'Heimatar',    type: 'hisec'   },
   { id: 10000041, name: 'Syndicate', region: 'Syndicate',   type: 'nullsec' },
+  { id: 10099000, name: 'C-J6MT',   region: 'Keepstar',    type: 'nullsec' },
 ];
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -45,10 +46,10 @@ interface MarketSelectorProps {
  * that means practically for Source vs Market so the user isn't surprised.
  */
 function getTooltip(label: string | undefined, hubName: string): string {
-  if (label === 'Source') {
+  if (label === 'Materials') {
     return (
       `Material costs use ${hubName} sell price (lowest ask) — ` +
-      `the price you pay to buy materials immediately from sell orders. ` +
+      `the price you pay to buy ingredients immediately from sell orders. ` +
       `Using buy-order prices would be cheaper but assumes you wait for fills.`
     );
   }

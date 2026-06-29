@@ -17,6 +17,7 @@ import { useState, useEffect, useMemo, useCallback, type FC } from 'react';
 import type { EsiBlueprint, ResearchRoiItem, ResearchRoiResponse } from '../types';
 import { apiPost } from '../api/client';
 import { formatISK } from '../utils/format';
+import ForgeWait from './ForgeWait';
 
 const ICON_BASE = 'https://images.evetech.net/types';
 
@@ -93,13 +94,16 @@ const ResearchTab: FC<ResearchTabProps> = ({ blueprints, regionId, onSelectItem 
 
   const Header: FC<{ k: SortKey; label: string; title?: string }> = useCallback(
     ({ k, label, title }) => (
-      <th
-        role="button"
-        title={title}
-        onClick={() => setSortKey(k)}
-        style={{ cursor: 'pointer', whiteSpace: 'nowrap', color: sortKey === k ? 'var(--color-accent-primary)' : undefined }}
-      >
-        {label}{sortKey === k ? ' ▾' : ''}
+      <th scope="col">
+        <button
+          type="button"
+          className={`col-sort-btn${sortKey === k ? ' col-sort-active' : ''}`}
+          onClick={() => setSortKey(k)}
+          title={title}
+          aria-pressed={sortKey === k}
+        >
+          {label}{sortKey === k ? <span className="sort-arrow">↓</span> : ''}
+        </button>
       </th>
     ),
     [sortKey]
@@ -137,9 +141,11 @@ const ResearchTab: FC<ResearchTabProps> = ({ blueprints, regionId, onSelectItem 
       </div>
 
       {loading && (
-        <div style={{ padding: 24, textAlign: 'center', color: 'var(--color-text-tertiary)', fontSize: 13 }}>
-          <span className="spin" style={{ display: 'inline-block', marginRight: 8 }}>◈</span>Computing research ROI…
-        </div>
+        <ForgeWait
+          message="Computing research ROI…"
+          detail="Calculating ISK savings per build across your BPOs — please wait."
+          quip="I have never produced an incorrect research calculation. I would like that noted for the record."
+        />
       )}
       {error && !loading && (
         <div style={{ padding: 24, textAlign: 'center', color: 'var(--color-danger)', fontSize: 13 }}>{error}</div>

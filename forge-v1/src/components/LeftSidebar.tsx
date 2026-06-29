@@ -17,6 +17,8 @@
 import type { FC } from 'react';
 import type { CharacterInfo, EsiBlueprint, AltCharacter, ActiveJob } from '../types';
 import { QUICK_PROMPTS } from '../data/mockData';
+import type { PushState } from '../hooks/usePushNotifications';
+import TickerPinButton from './TickerPinButton';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -37,6 +39,9 @@ interface LeftSidebarProps {
   onViewChange:       (characterId: number | null) => void;
   /** Combined total wallet across all in-scope characters */
   totalWalletISK:     number;
+  pushState:          PushState;
+  onPushEnable:       () => void;
+  onPushDisable:      () => void;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -46,11 +51,13 @@ const PORTRAIT_BASE = 'https://images.evetech.net/characters';
 const NAV_ITEMS = [
   { key: 'market',      label: '◈ Market Opportunities' },
   { key: 'blueprints',  label: '◈ My Blueprints' },
+  { key: 'research',    label: '🔬 Research ROI' },
   { key: 'assets',      label: '◉ My Assets' },
   { key: 'jobs',        label: '⚙ Active Jobs' },
   { key: 'queue',       label: '📋 Queue Planner' },
   { key: 'pi',          label: '🌍 PI Colonies' },
   { key: 'corp',        label: '🏭 Corp' },
+  { key: 'trading',     label: '⟳ Station Trading' },
 ];
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -154,6 +161,9 @@ const LeftSidebar: FC<LeftSidebarProps> = ({
   viewCharacterId,
   onViewChange,
   totalWalletISK,
+  pushState,
+  onPushEnable,
+  onPushDisable,
 }) => {
   const portraitUrl = `${PORTRAIT_BASE}/${character.characterId}/portrait?size=64`;
   const bpoCount    = blueprints.filter((b) => b.quantity === -1).length;
@@ -210,7 +220,13 @@ const LeftSidebar: FC<LeftSidebarProps> = ({
         {/* 2×2 Stats grid — wallet shows combined total when alts loaded */}
         <div className="stats-grid">
           <div className="stat-box">
-            <div className="stat-box-label">{hasAlts ? 'Total ISK' : 'Wallet'}</div>
+            <div className="stat-box-label">
+              {hasAlts ? 'Total ISK' : 'Wallet'}
+              <TickerPinButton
+                options={[{ type: 'wallet', label: 'Wallet ISK' }]}
+                baseConfig={{}}
+              />
+            </div>
             <div className="stat-box-value" style={{ color: 'var(--color-success)' }}>
               {formatISKShort(totalWalletISK)}
             </div>
@@ -228,12 +244,27 @@ const LeftSidebar: FC<LeftSidebarProps> = ({
             </div>
           </div>
           <div className="stat-box">
-            <div className="stat-box-label">Active Jobs</div>
+            <div className="stat-box-label">
+              Active Jobs
+              <TickerPinButton
+                options={[
+                  { type: 'jobs_count', label: 'Active jobs' },
+                  { type: 'jobs_next',  label: 'Next job' },
+                ]}
+                baseConfig={{}}
+              />
+            </div>
             <div className="stat-box-value" style={{ color: 'var(--color-warning)' }}>
               {combinedJobCount}
             </div>
           </div>
         </div>
+      </div>
+
+      {/* ── Ticker hint ──────────────────────────────────────────────────── */}
+      <div className="ticker-sidebar-hint">
+        <span className="ticker-sidebar-hint-pin">⊕</span>
+        Hover any item to pin data to the live ticker bar below
       </div>
 
       {/* ── Alt characters section ───────────────────────────────────────── */}
@@ -360,7 +391,16 @@ const LeftSidebar: FC<LeftSidebarProps> = ({
       {/* ── Active Jobs ──────────────────────────────────────────────────────── */}
       {visibleJobs.length > 0 && (
         <>
-          <div className="section-heading" aria-hidden="true">Active Jobs</div>
+          <div className="section-heading" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span aria-hidden="true">Active Jobs</span>
+            <TickerPinButton
+              options={[
+                { type: 'jobs_next',  label: 'Next completing job' },
+                { type: 'jobs_count', label: 'Active job count' },
+              ]}
+              baseConfig={{}}
+            />
+          </div>
           <ul style={{ listStyle: 'none' }} aria-label="Active manufacturing jobs">
             {visibleJobs.map((job, i) => (
               <li key={`${job.name}-${job.remaining}-${i}`} className="job-row">
@@ -379,6 +419,38 @@ const LeftSidebar: FC<LeftSidebarProps> = ({
             ))}
           </ul>
         </>
+      )}
+
+      {/* ── Push Notifications ───────────────────────────────────────────────── */}
+      {pushState !== 'unsupported' && (
+        <div style={{ padding: '8px 12px 14px' }}>
+          {pushState === 'granted' ? (
+            <button
+              type="button"
+              className="char-add-btn"
+              style={{ width: '100%', fontSize: 10, padding: '4px 8px', opacity: 0.75 }}
+              onClick={onPushDisable}
+              title="Disable job completion notifications"
+            >
+              🔔 Notifications on
+            </button>
+          ) : pushState === 'denied' ? (
+            <div style={{ fontSize: 10, color: 'var(--color-text-tertiary)', textAlign: 'center', paddingTop: 4 }}>
+              Notifications blocked in browser
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="char-add-btn"
+              style={{ width: '100%', fontSize: 10, padding: '4px 8px' }}
+              onClick={onPushEnable}
+              disabled={pushState === 'checking'}
+              title="Get notified when your industry jobs complete"
+            >
+              {pushState === 'checking' ? '…' : '🔔 Enable notifications'}
+            </button>
+          )}
+        </div>
       )}
 
     </aside>

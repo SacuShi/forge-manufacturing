@@ -18,6 +18,8 @@ import CorpTab      from './CorpTab';
 import ResearchTab  from './ResearchTab';
 import PiTab           from './PiTab';
 import QueuePlannerTab from './QueuePlannerTab';
+import TradingTab      from './TradingTab';
+import ForgeWait       from './ForgeWait';
 import { formatISK, formatMargin } from '../utils/format';
 
 // Per-blueprint profitability (from /api/blueprint-profits — same data as Market Opps)
@@ -95,6 +97,7 @@ const TABS = [
   { key: 'queue',      label: '📋 Queue Planner' },
   { key: 'pi',         label: '🌍 PI Colonies' },
   { key: 'corp',       label: '🏭 Corp' },
+  { key: 'trading',    label: '⟳ Station Trading' },
 ];
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -410,11 +413,11 @@ const MainContent: FC<MainContentProps> = ({
           </div>
 
           {marketLoading && (
-            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
-              color: 'var(--color-text-tertiary)', fontSize: 13 }}>
-              <div className="loading-spinner" style={{ width: 24, height: 24, marginRight: 10 }} />
-              Loading market data…
-            </div>
+            <ForgeWait
+              message="Loading market opportunities…"
+              detail="Fetching your blueprints and calculating profitability against live Jita prices — please wait."
+              quip="I am cross-referencing 47,000 market orders. I want you to know I find this deeply satisfying."
+            />
           )}
           {marketError && !marketLoading && (
             <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -432,6 +435,7 @@ const MainContent: FC<MainContentProps> = ({
                 onSort={handleSort}
                 onSelect={onMarketSelect}
                 showHaulColumn={haulConfigured}
+                regionId={regionId}
               />
               {!marketSearchQuery && (marketHasMore || marketLoadingMore) && (
                 <div style={{
@@ -509,7 +513,7 @@ const MainContent: FC<MainContentProps> = ({
                 onClick={() => handleBpSort(key)}
                 aria-pressed={bpSort === key}
               >
-                {label}{bpSort === key ? (bpSortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+                {label}{bpSort === key ? <span className="sort-arrow">{bpSortDir === 'asc' ? '↑' : '↓'}</span> : ''}
               </button>
             ))}
           </div>
@@ -835,6 +839,11 @@ const MainContent: FC<MainContentProps> = ({
           regionId={regionId}
           onSelectItem={onSelectItem}
         />
+      )}
+
+      {/* v1.27.0 — Station Trading tab */}
+      {activeTab === 'trading' && (
+        <TradingTab token={token} />
       )}
 
     </main>

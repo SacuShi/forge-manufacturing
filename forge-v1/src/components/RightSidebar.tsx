@@ -209,7 +209,7 @@ const ChainRow: FC<ChainRowProps> = ({ mat, regionId, ownedBlueprints, depth, on
             onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}
             onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); setOpen(o => !o); } }}
             style={{
-              color: isReaction ? '#fbbf24' : 'var(--color-accent-primary)',
+              color: isReaction ? 'var(--color-reaction)' : 'var(--color-accent-primary)',
               cursor: 'pointer', width: 12, flexShrink: 0, fontSize: 10,
             }}
           >
@@ -231,13 +231,13 @@ const ChainRow: FC<ChainRowProps> = ({ mat, regionId, ownedBlueprints, depth, on
           {mat.canManufacture && (
             <span style={{
               marginLeft: 4, fontSize: 8,
-              color: isReaction ? '#fbbf24' : (mat.blueprintOwned ? '#c084fc' : 'var(--color-accent-primary)'),
+              color: isReaction ? 'var(--color-reaction)' : (mat.blueprintOwned ? 'var(--color-owned-bp)' : 'var(--color-accent-primary)'),
             }}>
               {isReaction ? '⚗ react' : (mat.blueprintOwned ? '⛓ owned' : '⛓ build')}
             </span>
           )}
           {mat.piTier && (
-            <span style={{ marginLeft: 4, fontSize: 8, color: '#fbbf24' }}>PI·P{mat.piTier}</span>
+            <span style={{ marginLeft: 4, fontSize: 8, color: 'var(--color-reaction)' }}>PI·P{mat.piTier}</span>
           )}
         </span>
 
@@ -534,11 +534,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
               // No blueprint owned
               return (
                 <div style={{ marginTop: 4 }}>
-                  <span className="badge badge-none" style={{
-                    background: 'rgba(244, 67, 54, 0.12)',
-                    color: 'var(--color-danger)',
-                    border: '0.5px solid rgba(244, 67, 54, 0.3)',
-                  }}>
+                  <span className="badge badge-no-bp">
                     ✗ No Blueprint
                   </span>
                 </div>
@@ -830,36 +826,12 @@ const RightSidebar: FC<RightSidebarProps> = ({
                               title={isExpanded ? 'Collapse production chain' : 'Expand production chain'}
                               onClick={(e) => { e.stopPropagation(); toggleChain(mat.materialId); }}
                               onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); toggleChain(mat.materialId); } }}
-                              style={{
-                                marginLeft: 5,
-                                fontSize: 9,
-                                background: isOwned
-                                  ? 'rgba(192, 132, 252, 0.2)'
-                                  : 'rgba(79, 195, 247, 0.12)',
-                                color: isOwned ? '#c084fc' : 'var(--color-accent-primary)',
-                                border: `0.5px solid ${isOwned
-                                  ? 'rgba(192, 132, 252, 0.35)'
-                                  : 'rgba(79, 195, 247, 0.3)'}`,
-                                borderRadius: 2,
-                                padding: '1px 4px',
-                                verticalAlign: 'middle',
-                                cursor: 'pointer',
-                              }}>
+                              className={`mat-badge ${isOwned ? 'mat-badge-own' : 'mat-badge-chain'}`}>
                               {isExpanded ? '▾' : '▸'} ⛓ {isOwned ? 'owned' : 'chain'}
                             </span>
                           )}
                           {mat.piTier && (
-                            <span style={{
-                              marginLeft: 4,
-                              fontSize: 9,
-                              background: 'rgba(251, 191, 36, 0.12)',
-                              color: '#fbbf24',
-                              border: '0.5px solid rgba(251, 191, 36, 0.3)',
-                              borderRadius: 2,
-                              padding: '1px 4px',
-                              verticalAlign: 'middle',
-                              flexShrink: 0,
-                            }}>
+                            <span className="mat-badge mat-badge-pi">
                               PI·P{mat.piTier}
                             </span>
                           )}
@@ -1151,6 +1123,14 @@ const RightSidebar: FC<RightSidebarProps> = ({
                             display: 'flex', alignItems: 'center', gap: 5 }}>
                 <span style={{ color: 'var(--color-accent-primary)' }}>⟳</span>
                 Using cached estimates — live prices updating in background.
+              </div>
+            )}
+
+            {trueCostData && !trueCostLoading && trueCostData.sell_price_anomaly && (
+              <div style={{ fontSize: 11, color: 'var(--color-warning, #e8a838)', padding: '4px 0 2px',
+                            display: 'flex', alignItems: 'center', gap: 5 }}>
+                <span>⚠</span>
+                Outlier sell order — profit uses median price, not lowest ask.
               </div>
             )}
 

@@ -67,7 +67,11 @@ const SCOPES =
   'esi-assets.read_corporation_assets.v1 ' +
   'esi-industry.read_corporation_jobs.v1 ' +
   // v1.17.0 — active implants (industry hardwirings affect build time / ISK-hr).
-  'esi-clones.read_implants.v1';
+  'esi-clones.read_implants.v1 ' +
+  // v1.27.0 — active market orders (station trading My Orders panel + undercut alerts).
+  'esi-markets.read_character_orders.v1 ' +
+  // v1.28.0 — C-J6MT Keepstar structure market (alliance trade hub).
+  'esi-markets.structure_markets.v1';
 
 const SESSION_TOKEN_KEY = 'forge_token';
 const SESSION_STATE_KEY = 'forge_oauth_state';
@@ -303,6 +307,7 @@ export function useAuth(): AuthState & {
             remaining:  label,
             done,
             activityId: job.activity_id,
+            endDate:    job.end_date,
           };
         });
         addLog('Industry Jobs', 'ok', `${activeJobs.length} active`);
@@ -546,6 +551,7 @@ export function useAuth(): AuthState & {
           remaining:  label,
           done,
           activityId: job.activity_id,
+          endDate:    job.end_date,
         };
       });
 
