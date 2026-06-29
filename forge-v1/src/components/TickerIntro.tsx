@@ -1,4 +1,4 @@
-import { type FC } from 'react';
+import { useState, type FC } from 'react';
 
 const STORAGE_KEY = 'forge-ticker-intro-v1';
 
@@ -7,11 +7,12 @@ interface TickerIntroProps {
 }
 
 const TickerIntro: FC<TickerIntroProps> = ({ onClose }) => {
-  // Always persist dismissal — any close action means "I've seen it".
-  // Without this, the intro re-appeared on every page load if the user
-  // closed it without ticking the "Don't show again" checkbox.
+  // Default to true so "Got it!" always suppresses the popup unless the user
+  // explicitly unchecks the box. This prevents the popup reappearing every session.
+  const [dontShow, setDontShow] = useState(true);
+
   const handleClose = () => {
-    localStorage.setItem(STORAGE_KEY, '1');
+    if (dontShow) localStorage.setItem(STORAGE_KEY, '1');
     onClose();
   };
 
@@ -89,6 +90,14 @@ const TickerIntro: FC<TickerIntroProps> = ({ onClose }) => {
         </div>
 
         <div className="ticker-intro-footer">
+          <label className="ticker-intro-check">
+            <input
+              type="checkbox"
+              checked={dontShow}
+              onChange={e => setDontShow(e.target.checked)}
+            />
+            Don't show this again
+          </label>
           <button type="button" className="ticker-intro-ok" onClick={handleClose}>
             Got it!
           </button>
