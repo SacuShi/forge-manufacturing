@@ -256,7 +256,7 @@ const Calculator: FC<{ scanItems: TradingScanItem[]; brokerFeeRate: number; tran
             <span>Days to flip batch</span>   <span className="td-cr-val">{calc.cycles ?? '—'}</span>
             <span>Est. ISK/day</span>         <span className="td-cr-val td-pos">{calc.iskPerDay ? formatISK(calc.iskPerDay) : '—'}</span>
             <span>Capital needed</span>       <span className="td-cr-val">{formatISK(item.buy * calc.units)}</span>
-            <span>Trade profit</span>         <span className="td-cr-val">{item.netMarginPct.toFixed(1)}%</span>
+            <span>Spread profit</span>         <span className="td-cr-val">{item.netMarginPct.toFixed(1)}%</span>
             <span>Broker rate</span>          <span className="td-cr-val">{(brokerFeeRate * 100).toFixed(2)}% × 2 sides</span>
             <span>Transaction tax</span>      <span className="td-cr-val">{(transactionTaxRate * 100).toFixed(2)}%</span>
           </div>
@@ -666,7 +666,7 @@ const TradingTab: FC<TradingTabProps> = ({ token }) => {
             {/* Sort control bar — above the table, same pattern as My Blueprints */}
             <div className="td-sort-bar">
               <span className="td-sort-label">SORT</span>
-              <SortBtn col="netMarginPct" label="Trade profit" />
+              <SortBtn col="netMarginPct" label="Spread profit" />
               <SortBtn col="iskPerDay"    label="ISK/day est." />
               <SortBtn col="avgDailyVol"  label="Vol/day" />
               <SortBtn col="sellOrders"   label="Competition" />
@@ -677,7 +677,7 @@ const TradingTab: FC<TradingTabProps> = ({ token }) => {
             <div className="td-head">
               <span className="td-col-rank">#</span>
               <span className="td-col-name">Item</span>
-              <span className="td-col-margin">Trade profit</span>
+              <span className="td-col-margin">Spread profit</span>
               <span className="td-col-iskday">ISK/day est.</span>
               <span className="td-col-vol">Vol/day</span>
               <span className="td-col-sell">Sell</span>
@@ -777,7 +777,7 @@ const TradingTab: FC<TradingTabProps> = ({ token }) => {
               <div className="td-head">
                 <span className="td-col-rank">#</span>
                 <span className="td-col-name">Item</span>
-                <span className="td-col-margin">Trade profit</span>
+                <span className="td-col-margin">Spread profit</span>
                 <span className="td-col-iskday">ISK/day est.</span>
                 <span className="td-col-vol">Vol/day</span>
                 <span className="td-col-sell">Sell</span>

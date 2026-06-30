@@ -22,7 +22,7 @@ const PIN_TYPE_LABELS: Record<string, string> = {
   mfg_margin:      'Mfg margin %',
   mfg_isk_hour:    'Mfg ISK/hr',
   mfg_top_hub:     'Top mfg opp',
-  trade_spread:    'Trade profit %',
+  trade_spread:    'Spread profit %',
   trade_top_hub:   'Top trade opp',
   wallet:          'Wallet ISK',
   jobs_count:      'Active jobs',
