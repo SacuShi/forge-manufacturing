@@ -392,9 +392,17 @@ const AppShell: FC = () => {
     activeTab === 'corp' && auth.status === 'authed',
   );
 
-  const { state: pushState, enable: pushEnable, disable: pushDisable } = usePushNotifications(
+  const { state: pushState, enable: pushEnable, disable: pushDisable, syncJobs } = usePushNotifications(
     auth.status === 'authed' ? auth.token : null
   );
+
+  useEffect(() => {
+    if (pushState !== 'granted') return;
+    const jobs = allActiveJobs
+      .filter(j => !j.done && j.endDate)
+      .map(j => ({ key: `${j.typeId}:${j.endDate}`, productName: j.name, endDate: j.endDate! }));
+    if (jobs.length) syncJobs(jobs);
+  }, [allActiveJobs, pushState, syncJobs]);
 
   // Derive marketItems from rawResults (paginated list) or marketSearchResults (search).
   // When feeRates are loaded, profit/margin/ISK-hr are recalculated with the same

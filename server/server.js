@@ -11,6 +11,26 @@ const path = require('path');
 const helmet = require('helmet');
 const crypto = require('crypto');  // built-in — AES-256-GCM token encryption
 const security = require('./forge-security');
+
+// ── Push notifications (web-push) ─────────────────────────────────────────────
+// Loaded once at startup; null when web-push is not installed or VAPID keys are absent.
+// All push endpoints degrade gracefully when this is null.
+let webpush = null;
+try {
+  webpush = require('web-push');
+  if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
+    webpush.setVapidDetails(
+      'mailto:admin@forge-ukc.com',
+      process.env.VAPID_PUBLIC_KEY,
+      process.env.VAPID_PRIVATE_KEY
+    );
+    console.log('✓ Push notifications: VAPID configured');
+  } else {
+    console.warn('⚠ Push notifications: VAPID keys not set in .env — push disabled');
+    webpush = null;
+  }
+} catch { console.warn('⚠ Push notifications: web-push not installed — push disabled'); }
+
 // ── PATH-SENSITIVE LINES — DO NOT CHANGE TO RELATIVE PATHS ──────────────────
 // PM2's cwd is unreliable. These three lines MUST use __dirname.
 // Using bare relative paths causes a silent outage: server starts and responds
@@ -469,6 +489,28 @@ async function runMigrations() {
       character_id  INTEGER PRIMARY KEY,
       config_json   TEXT    NOT NULL DEFAULT '[]',
       updated_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+
+  // v1.31.0: push notification tables
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS push_subscriptions (
+      character_id INTEGER NOT NULL,
+      endpoint     TEXT PRIMARY KEY,
+      p256dh       TEXT NOT NULL,
+      auth         TEXT NOT NULL,
+      created_at   TEXT DEFAULT (datetime('now'))
+    )
+  `);
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS push_job_watch (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      character_id INTEGER NOT NULL,
+      job_key      TEXT NOT NULL,
+      product_name TEXT NOT NULL,
+      end_date     TEXT NOT NULL,
+      notified     INTEGER DEFAULT 0,
+      UNIQUE(character_id, job_key)
     )
   `);
 
@@ -9434,6 +9476,10 @@ setInterval(async () => {
   }
 }, 4 * 60 * 60 * 1000); // every 4 hours
 
+// ── Push notification routes ──────────────────────────────────────────────────
+const pushRoutes = require('./routes/push');
+app.use(pushRoutes({ security, dbRun, dbAll, webpush }));
+
 // START SERVER
 initDatabase().then(async () => {
   // Run v0.9.0 migrations
@@ -9533,6 +9579,15 @@ initDatabase().then(async () => {
         .then(r => console.log('✓ Weekly contract ingest:', r.status))
         .catch(err => console.error('⚠ Weekly contract ingest failed:', err.message));
     }, ONE_WEEK).unref();
+
+    // Push job completion checker — polls every 5 minutes for finished industry jobs
+    if (webpush) {
+      setInterval(() => {
+        pushRoutes.checkJobCompletions({ dbRun, dbAll, webpush })
+          .catch(err => console.error('⚠ Push job check failed:', err.message));
+      }, 5 * 60 * 1000).unref();
+      console.log('✓ Push notification job checker: running every 5 minutes');
+    }
   });
 
   // Error handler must be after all routes
