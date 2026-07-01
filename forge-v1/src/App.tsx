@@ -130,6 +130,9 @@ const AppShell: FC = () => {
   const [theme, setTheme] = useState<string>(
     () => localStorage.getItem('forge-theme') ?? 'dark'
   );
+  const [font, setFont] = useState<string>(
+    () => localStorage.getItem('forge-font') ?? 'forge'
+  );
   const [activeTab, setActiveTab] = useState('market');
   const [chatOpen, setChatOpen] = useState(false);
   const [chatAutoOpened, setChatAutoOpened] = useState(false);
@@ -502,6 +505,11 @@ const AppShell: FC = () => {
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('forge-theme', theme);
   }, [theme]);
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-font', font);
+    localStorage.setItem('forge-font', font);
+  }, [font]);
 
   // Listen for 401 events fired by apiGet/apiPost — show expiry message on login screen
   useEffect(() => {
@@ -985,13 +993,15 @@ const AppShell: FC = () => {
         character={character}
         chatOpen={chatOpen}
         theme={theme}
+        font={font}
         selectedMarket={selectedMarket}
         selectedSourceMarket={selectedSourceMarket}
         regionLoading={marketLoading}
         mfgSystemName={industrySettings?.system_name ?? null}
         onToggleChat={handleToggleChat}
         onMenuToggle={() => setDrawerOpen((o) => !o)}
-        onThemeToggle={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
+        onThemeChange={setTheme}
+        onFontChange={setFont}
         onLogout={auth.logout}
         onMarketChange={handleMarketChange}
         onSourceMarketChange={handleSourceMarketChange}

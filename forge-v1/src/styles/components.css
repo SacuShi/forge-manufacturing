@@ -226,6 +226,16 @@
   padding: 0 12px;
 }
 
+/* Theme + font dropdowns group — mirrors market-selector-group style */
+.header-display-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-left: 1px solid rgba(79, 195, 247, 0.12);
+  border-right: 1px solid rgba(79, 195, 247, 0.12);
+  padding: 0 10px;
+}
+
 /* Short role label rendered before the ◎ icon — "Source:" / "Market:" */
 .market-selector-label {
   color: var(--color-text-tertiary);

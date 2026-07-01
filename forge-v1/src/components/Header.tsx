@@ -28,6 +28,7 @@ interface HeaderProps {
   character:             CharacterInfo;
   chatOpen:              boolean;
   theme:                 string;
+  font:                  string;
   /** Sell hub — drives Market Opportunities table and sell-price calculations */
   selectedMarket:        Market;
   regionLoading:         boolean;
@@ -41,7 +42,8 @@ interface HeaderProps {
   mfgSystemName:         string | null;
   onToggleChat:          () => void;
   onMenuToggle:          () => void;
-  onThemeToggle:         () => void;
+  onThemeChange:         (theme: string) => void;
+  onFontChange:          (font: string) => void;
   onLogout:              () => void;
   onMarketChange:        (market: Market) => void;
   onSourceMarketChange:  (market: Market) => void;
@@ -58,13 +60,15 @@ const Header: FC<HeaderProps> = ({
   character,
   chatOpen,
   theme,
+  font,
   selectedMarket,
   regionLoading,
   selectedSourceMarket,
   mfgSystemName,
   onToggleChat,
   onMenuToggle,
-  onThemeToggle,
+  onThemeChange,
+  onFontChange,
   onLogout,
   onMarketChange,
   onSourceMarketChange,
@@ -181,16 +185,32 @@ const Header: FC<HeaderProps> = ({
           ⚙ Mfg Setup
         </button>
 
-        {/* Theme toggle */}
-        <button
-          type="button"
-          className="btn"
-          aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-          onClick={onThemeToggle}
-          style={{ fontSize: 14, padding: '4px 8px' }}
-        >
-          {theme === 'dark' ? '☀️' : '🌙'}
-        </button>
+        {/* Display controls — theme + font */}
+        <div className="header-display-controls">
+          <select
+            className="market-dropdown"
+            value={theme}
+            onChange={e => onThemeChange(e.target.value)}
+            aria-label="Colour theme"
+            title="Switch colour theme"
+          >
+            <option value="dark">🌙 Dark</option>
+            <option value="light">☀️ Light</option>
+          </select>
+
+          <select
+            className="market-dropdown"
+            value={font}
+            onChange={e => onFontChange(e.target.value)}
+            aria-label="Font"
+            title="Switch font"
+          >
+            <option value="forge">FORGE (mono)</option>
+            <option value="inter">Inter</option>
+            <option value="roboto">Roboto</option>
+            <option value="lexend">Lexend (dyslexia-friendly)</option>
+          </select>
+        </div>
 
         {/* Character pill */}
         <div className="char-pill" role="status" aria-label={`Logged in as ${character.name}`}>

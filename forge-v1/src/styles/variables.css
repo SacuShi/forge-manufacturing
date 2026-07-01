@@ -74,6 +74,8 @@
   /* Typography */
   --font-sans: 'Courier New', 'Lucida Console', monospace;
   --font-mono: 'Courier New', 'Lucida Console', monospace;
+  --font-body-size: 13px;
+  --font-line-height: 1.6;
 
   /* Border radii */
   --radius-sm: 4px;
@@ -106,6 +108,25 @@
   --scrollbar-thumb-hover: #64748b;
   --color-reaction: #d97706;
   --color-contract: #7c3aed;
+}
+
+/* ── Font overrides — applied via data-font on <html> ───────────────────────── */
+/* Default (forge): Courier New monospace — the original terminal aesthetic     */
+[data-font='inter']  {
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-body-size: 13px;
+  --font-line-height: 1.55;
+}
+[data-font='roboto'] {
+  --font-sans: 'Roboto', system-ui, -apple-system, sans-serif;
+  --font-body-size: 13px;
+  --font-line-height: 1.55;
+}
+[data-font='lexend'] {
+  /* Lexend: designed to reduce visual stress for readers with dyslexia */
+  --font-sans: 'Lexend', system-ui, -apple-system, sans-serif;
+  --font-body-size: 13.5px;
+  --font-line-height: 1.7;
 }
 
 /* ── Light mode — system preference fallback ────────────────────────────────── */
