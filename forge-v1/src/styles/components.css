@@ -2089,6 +2089,82 @@ tr:hover .ticker-pin-btn,
   cursor: not-allowed;
 }
 
+/* ── Push notification toggle row ───────────────────────────────────────────── */
+.push-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px 14px;
+  gap: 8px;
+}
+
+.push-toggle-label {
+  font-size: 10px;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  font-family: var(--font-sans);
+}
+
+.push-toggle-blocked {
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+  cursor: default;
+}
+
+/* The toggle pill button */
+.push-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px 3px 6px;
+  border-radius: 20px;
+  border: 1px solid rgba(139, 149, 166, 0.3);
+  background: rgba(139, 149, 166, 0.08);
+  color: var(--color-text-tertiary);
+  font-size: 10px;
+  font-family: var(--font-sans);
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s, color 0.2s;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.push-toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.push-toggle-thumb {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-text-tertiary);
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+
+/* ON state */
+.push-toggle.on {
+  border-color: rgba(76, 175, 80, 0.5);
+  background: rgba(76, 175, 80, 0.12);
+  color: var(--color-success);
+}
+.push-toggle.on .push-toggle-thumb {
+  background: var(--color-success);
+}
+
+.push-toggle:not(.on):not(:disabled):hover {
+  border-color: rgba(79, 195, 247, 0.4);
+  background: rgba(79, 195, 247, 0.08);
+  color: var(--color-accent-primary);
+}
+.push-toggle.on:not(:disabled):hover {
+  border-color: rgba(76, 175, 80, 0.7);
+  background: rgba(76, 175, 80, 0.2);
+}
+
 /* Fee character selector in the True Profit section heading */
 .fee-char-select {
   font-size: 10px;

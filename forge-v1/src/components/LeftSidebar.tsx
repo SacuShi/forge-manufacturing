@@ -423,31 +423,32 @@ const LeftSidebar: FC<LeftSidebarProps> = ({
 
       {/* ── Push Notifications ───────────────────────────────────────────────── */}
       {pushState !== 'unsupported' && (
-        <div style={{ padding: '8px 12px 14px' }}>
-          {pushState === 'granted' ? (
-            <button
-              type="button"
-              className="char-add-btn"
-              style={{ width: '100%', fontSize: 10, padding: '4px 8px', opacity: 0.75 }}
-              onClick={onPushDisable}
-              title="Disable job completion notifications"
+        <div className="push-toggle-row">
+          <span className="push-toggle-label">
+            🔔 Job notifications
+          </span>
+          {pushState === 'denied' ? (
+            <span
+              className="push-toggle-blocked"
+              title="Notifications are blocked in your browser — check your browser settings to allow them"
             >
-              🔔 Notifications on
-            </button>
-          ) : pushState === 'denied' ? (
-            <div style={{ fontSize: 10, color: 'var(--color-text-tertiary)', textAlign: 'center', paddingTop: 4 }}>
-              Notifications blocked in browser
-            </div>
+              Blocked
+            </span>
           ) : (
             <button
               type="button"
-              className="char-add-btn"
-              style={{ width: '100%', fontSize: 10, padding: '4px 8px' }}
-              onClick={onPushEnable}
+              className={`push-toggle${pushState === 'granted' ? ' on' : ''}`}
+              onClick={pushState === 'granted' ? onPushDisable : onPushEnable}
               disabled={pushState === 'checking'}
-              title="Get notified when your industry jobs complete"
+              aria-pressed={pushState === 'granted'}
+              title={pushState === 'granted'
+                ? 'Click to disable job completion notifications'
+                : 'Click to get notified when your industry jobs complete'}
             >
-              {pushState === 'checking' ? '…' : '🔔 Enable notifications'}
+              <span className="push-toggle-thumb" />
+              <span className="push-toggle-text">
+                {pushState === 'checking' ? '…' : pushState === 'granted' ? 'ON' : 'OFF'}
+              </span>
             </button>
           )}
         </div>
