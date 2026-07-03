@@ -1155,6 +1155,7 @@ const AppShell: FC = () => {
           selectedVolume={selectedVolume}
           selectedLiquidityRisk={selectedLiquidityRisk}
           activeImplants={auth.implants}
+          jumpClones={auth.jumpClones}
           selectedImplants={selectedImplants}
           onImplantsChange={setSelectedImplants}
         />

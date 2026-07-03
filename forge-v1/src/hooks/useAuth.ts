@@ -47,6 +47,7 @@ import type {
   EsiJob,
   EsiCharacter,
   AltCharacter,
+  JumpClone,
 } from '../types';
 import { esiFetchAll, esiGet, apiPost } from '../api/client';
 
@@ -68,6 +69,8 @@ const SCOPES =
   'esi-industry.read_corporation_jobs.v1 ' +
   // v1.17.0 — active implants (industry hardwirings affect build time / ISK-hr).
   'esi-clones.read_implants.v1 ' +
+  // v1.32.0 — jump clone list (implant selector lets user model a different clone).
+  'esi-clones.read_clones.v1 ' +
   // v1.27.0 — active market orders (station trading My Orders panel + undercut alerts).
   'esi-markets.read_character_orders.v1 ' +
   // v1.28.0 — C-J6MT Keepstar structure market (alliance trade hub).
@@ -105,6 +108,8 @@ export interface AuthState {
   skills:           Array<{ skill_id: number; active_skill_level: number }>;
   /** v1.17.1 — primary character's active implant type_ids (for the True Profit implant selector) */
   implants:         number[];
+  /** v1.32.0 — jump clones with their implants (for the clone-based implant selector) */
+  jumpClones:       JumpClone[];
   hasStandingsScope: boolean;
   /** Primary character standings — exposed so App.tsx can include them in combined re-POST */
   primaryStandings: StandingsData | null;
@@ -171,25 +176,28 @@ function saveAltTokens(tokens: string[]): void {
 }
 
 /**
- * Resolve item names for a list of typeIds in parallel with automatic deduplication.
- * Dedup prevents N+1 ESI requests when multiple jobs share the same product type.
- * Returns a Map<typeId, name> — failed lookups fall back to "Item #<id>".
+ * Resolve item names via the bulk ESI /universe/names/ POST endpoint (max 1000 IDs per call).
+ * Much faster than N individual GETs, and handles newer items/SKINs that individual
+ * type endpoints may not return a name for. Falls back to "Item #<id>" on any failure.
  */
 async function resolveTypeNames(typeIds: number[]): Promise<Map<number, string>> {
   const uniqueIds = [...new Set(typeIds)];
-  const results   = await Promise.allSettled(
-    uniqueIds.map((id) =>
-      esiGet<{ name: string }>(`/universe/types/${id}/`)
-        .then((r) => [id, r.name] as [number, string])
-    )
-  );
+  if (uniqueIds.length === 0) return new Map();
   const map = new Map<number, string>();
-  results.forEach((r, i) => {
-    map.set(
-      uniqueIds[i],
-      r.status === 'fulfilled' ? r.value[1] : `Item #${uniqueIds[i]}`
-    );
-  });
+  for (let i = 0; i < uniqueIds.length; i += 1000) {
+    const chunk = uniqueIds.slice(i, i + 1000);
+    try {
+      const res = await fetch(
+        'https://esi.evetech.net/latest/universe/names/?datasource=tranquility',
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(chunk) }
+      );
+      if (res.ok) {
+        const data = await res.json() as Array<{ id: number; name: string }>;
+        data.forEach(d => map.set(d.id, d.name));
+      }
+    } catch { /* silent — fallback below */ }
+  }
+  uniqueIds.forEach(id => { if (!map.has(id)) map.set(id, `Item #${id}`); });
   return map;
 }
 
@@ -209,6 +217,8 @@ export function useAuth(): AuthState & {
   const [skills,            setSkills]            = useState<Array<{ skill_id: number; active_skill_level: number }>>([]);
   // v1.17.1 — primary character's active implant type_ids (for the True Profit implant selector)
   const [implants,          setImplants]          = useState<number[]>([]);
+  // v1.32.0 — jump clones with their implants (for the clone-based implant selector)
+  const [jumpClones,        setJumpClones]        = useState<JumpClone[]>([]);
   const [hasStandingsScope, setHasStandingsScope] = useState(false);
   const [primaryStandings,  setPrimaryStandings]  = useState<StandingsData | null>(null);
   const [error,             setError]             = useState<string | null>(null);
@@ -397,6 +407,31 @@ export function useAuth(): AuthState & {
         addLog('Implants', 'ok', `${implantData.length} plugged in`);
       } catch (e) {
         addLog('Implants', 'warn', `Not loaded — ${(e as Error).message}`);
+      }
+
+      // ── 9c. Jump clones (for clone-based implant selector) ────────────────
+      // Returns list of jump clones with their installed implants.
+      // Graceful: old sessions without read_clones scope just leave the list empty.
+      setLoadStep('Loading jump clones…');
+      try {
+        const clonesData = await esiGet<{
+          jump_clones: Array<{
+            jump_clone_id: number;
+            location_id: number;
+            location_type: string;
+            implants: number[];
+          }>;
+        }>(`/characters/${cid}/clones/`, acc);
+        const parsed: JumpClone[] = (clonesData.jump_clones ?? []).map(c => ({
+          jumpCloneId:  c.jump_clone_id,
+          locationId:   c.location_id,
+          locationType: c.location_type,
+          implants:     c.implants ?? [],
+        }));
+        setJumpClones(parsed);
+        addLog('Jump Clones', 'ok', `${parsed.length} clone${parsed.length !== 1 ? 's' : ''}`);
+      } catch (e) {
+        addLog('Jump Clones', 'warn', `Not loaded — ${(e as Error).message}`);
       }
 
       // ── Build CharacterInfo ──────────────────────────────────────────────
@@ -778,6 +813,7 @@ export function useAuth(): AuthState & {
     setAssets([]);
     setSkills([]);
     setImplants([]);
+    setJumpClones([]);
     setHasStandingsScope(false);
     setPrimaryStandings(null);
     setError(null);
@@ -805,6 +841,7 @@ export function useAuth(): AuthState & {
     assets,
     skills,
     implants,
+    jumpClones,
     hasStandingsScope,
     primaryStandings,
     error,

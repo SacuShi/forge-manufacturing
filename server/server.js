@@ -515,6 +515,10 @@ async function runMigrations() {
     )
   `);
 
+  // v1.32.0: drop orphaned PIN columns from pre-v1.7 auth system (safe no-op if absent)
+  try { await dbRun(`ALTER TABLE corp_config DROP COLUMN pin_hash`); } catch (_) {}
+  try { await dbRun(`ALTER TABLE corp_config DROP COLUMN pin_salt`); } catch (_) {}
+
   console.log('✓ Database migrations complete');
 }
 
@@ -4779,6 +4783,24 @@ app.post('/api/ai-chat',
                   note: 'local_materials = buy and sell at same hub. jita_materials = buy inputs at Jita, sell finished goods at listed hub.',
                   products,
                 };
+
+                // Append haul context so AI can mention freight in recommendations
+                try {
+                  const haulRows = await dbAll(
+                    `SELECT haul_enabled, leg1_haul_rate, leg2_haul_rate,
+                            leg1_method, leg2_method, leg1_service_label, leg2_service_label
+                     FROM character_industry_settings WHERE character_id = ?`, [characterId]
+                  );
+                  if (haulRows.length && haulRows[0].haul_enabled) {
+                    const s = haulRows[0];
+                    toolResult.haul_context = {
+                      enabled: true,
+                      note: 'Profits shown do NOT include haulage. Your configured haul cost will reduce actual profit.',
+                      leg1: { method: s.leg1_method, rate: s.leg1_haul_rate, label: s.leg1_service_label },
+                      leg2: { method: s.leg2_method, rate: s.leg2_haul_rate, label: s.leg2_service_label },
+                    };
+                  }
+                } catch (_) { /* non-critical */ }
               } catch (cmErr) {
                 toolResult = { error: cmErr.message };
               }

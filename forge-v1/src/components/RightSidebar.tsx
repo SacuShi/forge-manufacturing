@@ -22,7 +22,7 @@
  */
 
 import { useMemo, useState, useCallback, useRef, useEffect, Fragment, type FC } from 'react';
-import type { ItemDetail, ItemDetailApiResponse, EsiBlueprint, Market, TrueCostResponse, AltCharacter, MaterialBreakdownResponse, BreakdownMaterial } from '../types';
+import type { ItemDetail, ItemDetailApiResponse, EsiBlueprint, Market, TrueCostResponse, AltCharacter, MaterialBreakdownResponse, BreakdownMaterial, JumpClone } from '../types';
 import { apiPost } from '../api/client';
 import { formatPerDay, liquidityInfo } from '../utils/format';
 
@@ -71,6 +71,8 @@ interface RightSidebarProps {
   selectedLiquidityRisk: string | null;
   // v1.17.1 — implant selector for True Profit ISK/hr (default: none)
   activeImplants:       number[];
+  /** v1.32.0 — jump clones (each may have mfg implants; drives the clone selector options) */
+  jumpClones:           JumpClone[];
   selectedImplants:     number[];
   onImplantsChange:     (implants: number[]) => void;
 }
@@ -313,6 +315,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
   selectedVolume,
   selectedLiquidityRisk,
   activeImplants,
+  jumpClones,
   selectedImplants,
   onImplantsChange,
 }) => {
@@ -1062,20 +1065,48 @@ const RightSidebar: FC<RightSidebarProps> = ({
                 { value: '', label: 'No implants (default)', ids: [] },
               ];
               const seen = new Set<number>();
+
+              // Current active clone implants
               for (const id of activeImplants) {
                 const imp = MFG_TIME_IMPLANTS[id];
                 if (!imp || seen.has(id)) continue;
                 opts.push({ value: `c${id}`, label: `Current clone — ${imp.short} (−${imp.pct}% time)`, ids: [id] });
                 seen.add(id);
               }
+
+              // Jump clones — only show clones that have at least one mfg-time implant
+              jumpClones.forEach((clone, idx) => {
+                const cloneMfgIds = clone.implants.filter(id => id in MFG_TIME_IMPLANTS);
+                if (cloneMfgIds.length === 0) return;
+                // Build a compact label from the implant shortnames
+                const impLabels = cloneMfgIds.map(id => MFG_TIME_IMPLANTS[id].short).join(', ');
+                opts.push({
+                  value: `j${clone.jumpCloneId}`,
+                  label: `Jump clone ${idx + 1} — ${impLabels}`,
+                  ids: clone.implants,
+                });
+              });
+
+              // What-if options for implants not already shown
               for (const id of WHATIF_BX_IDS) {
                 if (seen.has(id)) continue;
                 const imp = MFG_TIME_IMPLANTS[id];
                 opts.push({ value: `w${id}`, label: `What-if: ${imp.short} (−${imp.pct}% time)`, ids: [id] });
               }
+
+              // Determine the currently selected option value
               const curId = selectedImplants[0];
-              const curValue = !curId ? ''
-                : (activeImplants.includes(curId) ? `c${curId}` : `w${curId}`);
+              let curValue = '';
+              if (curId) {
+                if (activeImplants.includes(curId)) {
+                  curValue = `c${curId}`;
+                } else {
+                  // Check if it matches a jump clone selection
+                  const matchedClone = jumpClones.find(c => c.implants.includes(curId));
+                  curValue = matchedClone ? `j${matchedClone.jumpCloneId}` : `w${curId}`;
+                }
+              }
+
               return (
                 <div className="implant-selector">
                   <span className="implant-selector-label">💊 Implants</span>

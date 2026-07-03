@@ -104,6 +104,14 @@ export interface ActiveJob {
   endDate?: string;
 }
 
+/** v1.32.0 — Jump clone with its installed implants (from ESI /characters/{id}/clones/) */
+export interface JumpClone {
+  jumpCloneId: number;
+  locationId:  number;
+  locationType: string;
+  implants:    number[];
+}
+
 // ── Ticker pin system ─────────────────────────────────────────────────────────
 
 export interface TickerGroup {
