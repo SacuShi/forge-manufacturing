@@ -12,9 +12,17 @@ const helmet = require('helmet');
 const crypto = require('crypto');  // built-in — AES-256-GCM token encryption
 const security = require('./forge-security');
 
+// ── PATH-SENSITIVE LINES — DO NOT CHANGE TO RELATIVE PATHS ──────────────────
+// PM2's cwd is unreliable. These three lines MUST use __dirname.
+// Using bare relative paths causes a silent outage: server starts and responds
+// 404/500 but env vars are missing. This has caused three production outages (June 2026).
+// Do not 'simplify' these. Any agent or developer who removes __dirname here is wrong.
+require('dotenv').config({ path: require('path').join(__dirname, '.env') });
+
 // ── Push notifications (web-push) ─────────────────────────────────────────────
-// Loaded once at startup; null when web-push is not installed or VAPID keys are absent.
-// All push endpoints degrade gracefully when this is null.
+// Must be after dotenv.config() so VAPID keys are available in process.env.
+// null when web-push is not installed or VAPID keys are absent — all push
+// endpoints degrade gracefully when this is null.
 let webpush = null;
 try {
   webpush = require('web-push');
@@ -30,13 +38,6 @@ try {
     webpush = null;
   }
 } catch { console.warn('⚠ Push notifications: web-push not installed — push disabled'); }
-
-// ── PATH-SENSITIVE LINES — DO NOT CHANGE TO RELATIVE PATHS ──────────────────
-// PM2's cwd is unreliable. These three lines MUST use __dirname.
-// Using bare relative paths causes a silent outage: server starts and responds
-// 404/500 but env vars are missing. This has caused three production outages (June 2026).
-// Do not 'simplify' these. Any agent or developer who removes __dirname here is wrong.
-require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 
 const app = express();
 app.set('trust proxy', 1); // Trust Cloudflared proxy
