@@ -64,14 +64,24 @@ export function usePushNotifications(token: string | null) {
   }, [token]);
 
   const disable = useCallback(async () => {
-    if (!token || !subscription) return;
+    if (!token) return;
     try {
-      await apiPost('/api/push/unsubscribe', { endpoint: subscription.endpoint }, token);
-      await subscription.unsubscribe();
-      setSubscription(null);
-      setState('idle');
+      // Resolve subscription — may be null if SW check on mount didn't find it
+      let sub = subscription;
+      if (!sub) {
+        const reg = await navigator.serviceWorker.getRegistration('/sw.js');
+        sub = reg ? await reg.pushManager.getSubscription() : null;
+      }
+      if (sub) {
+        await apiPost('/api/push/unsubscribe', { endpoint: sub.endpoint }, token);
+        await sub.unsubscribe();
+      }
     } catch (err) {
       console.error('Push disable error:', err);
+    } finally {
+      // Always reset local state so the toggle visually disables
+      setSubscription(null);
+      setState('idle');
     }
   }, [token, subscription]);
 
