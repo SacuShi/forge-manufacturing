@@ -42,9 +42,10 @@ export function compactISKPerHr(v: number | null): string {
   return compactISK(v) + '/hr';
 }
 
+/** margin values from the server are already percentages (e.g. 69.2 = 69.2%), not 0–1 fractions */
 function fmtPct(v: number | null, decimals = 1): string {
   if (v === null) return '—';
-  return `${(v * 100).toFixed(decimals)}%`;
+  return `${v.toFixed(decimals)}%`;
 }
 
 function countdown(endDateStr: string | null, now: number): string {
@@ -75,10 +76,11 @@ function colorFromChange(pct: number | null): TickerColorClass {
   return 'neutral';
 }
 
+/** margin is already a percentage (e.g. 30 = 30%), not a 0–1 fraction */
 function marginColor(margin: number | null): TickerColorClass {
   if (margin === null) return 'neutral';
-  if (margin >= 0.30) return 'green';
-  if (margin >= 0.15) return 'amber';
+  if (margin >= 30) return 'green';
+  if (margin >= 15) return 'amber';
   return 'red';
 }
 
