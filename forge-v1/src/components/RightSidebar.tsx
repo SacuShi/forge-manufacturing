@@ -973,9 +973,9 @@ const RightSidebar: FC<RightSidebarProps> = ({
                     touch the top-level ✓/⚠/✗ badge's ownership-based meaning. */}
                 {missing.length > 0 && stockCheck && (() => {
                   const STOCK_CHECK_CFG = {
-                    ok:      { icon: '✓', label: 'Fixable now',   color: 'var(--color-success)', bg: 'rgba(76, 175, 80, 0.1)',  border: 'rgba(76, 175, 80, 0.3)' },
-                    mixed:   { icon: '⚠', label: 'Partial stock', color: 'var(--color-warning)', border: 'rgba(255, 152, 0, 0.3)', bg: 'rgba(255, 152, 0, 0.1)' },
-                    blocked: { icon: '✗', label: 'Not enough ISK', color: 'var(--color-danger)', bg: 'rgba(244, 67, 54, 0.1)', border: 'rgba(244, 67, 54, 0.3)' },
+                    ok:      { icon: '✓', label: 'Buyable Now',    color: 'var(--color-success)', bg: 'rgba(76, 175, 80, 0.08)',  border: 'rgba(76, 175, 80, 0.2)' },
+                    mixed:   { icon: '⚠', label: 'Limited Stock',  color: 'var(--color-warning)', bg: 'rgba(255, 152, 0, 0.08)', border: 'rgba(255, 152, 0, 0.2)' },
+                    blocked: { icon: '✗', label: "Can't Afford",   color: 'var(--color-danger)',  bg: 'rgba(244, 67, 54, 0.08)', border: 'rgba(244, 67, 54, 0.2)' },
                   } as const;
                   const cfg = STOCK_CHECK_CFG[stockCheck.verdict];
 
@@ -990,23 +990,23 @@ const RightSidebar: FC<RightSidebarProps> = ({
                     : `Materials are in stock on the ${materialMarketName} market, but buying them (${formatISK(stockCheck.totalCost)}) would exceed your ${formatISK(walletISK)} wallet.`;
 
                   return (
-                    <div style={{ marginTop: 4 }}>
-                      <span
+                    <div style={{ marginTop: 6 }}>
+                      <div
                         role="button"
                         tabIndex={0}
                         title={message}
                         onClick={(e) => { e.stopPropagation(); setStockCheckOpen(o => !o); }}
                         onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); setStockCheckOpen(o => !o); } }}
                         style={{
-                          display: 'inline-flex', alignItems: 'center', gap: 4,
+                          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
                           fontSize: 10, cursor: 'pointer', color: cfg.color,
                           background: cfg.bg, border: `0.5px solid ${cfg.border}`,
-                          borderRadius: 3, padding: '2px 7px',
+                          borderRadius: 3, padding: '6px 8px',
                         }}
                       >
-                        {cfg.icon} {cfg.label}
+                        <span>{cfg.icon} {cfg.label}</span>
                         <span style={{ opacity: 0.6, fontSize: 8 }}>{stockCheckOpen ? '▾' : '▸'}</span>
-                      </span>
+                      </div>
                       {stockCheckOpen && (
                         <div style={{
                           marginTop: 4, fontSize: 10, color: 'var(--color-text-secondary)',
