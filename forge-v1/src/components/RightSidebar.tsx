@@ -22,7 +22,7 @@
  */
 
 import { useMemo, useState, useCallback, useRef, useEffect, Fragment, type FC } from 'react';
-import type { ItemDetail, ItemDetailApiResponse, EsiBlueprint, Market, TrueCostResponse, AltCharacter, MaterialBreakdownResponse, BreakdownMaterial, JumpClone } from '../types';
+import type { ItemDetail, ItemDetailApiResponse, EsiBlueprint, Market, TrueCostResponse, AltCharacter, MaterialBreakdownResponse, BreakdownMaterial, JumpClone, MaterialStockCheckResponse } from '../types';
 import { apiPost } from '../api/client';
 import { formatPerDay, liquidityInfo } from '../utils/format';
 
@@ -75,6 +75,13 @@ interface RightSidebarProps {
   jumpClones:           JumpClone[];
   selectedImplants:     number[];
   onImplantsChange:     (implants: number[]) => void;
+  // v1.33.3 — live per-material stock check for the shortfall banner
+  /** Hub where missing materials would actually be purchased */
+  materialRegionId:     number;
+  /** Display name of the materials hub (e.g. "Jita") for the stock-check message */
+  materialMarketName:   string;
+  /** Combined wallet ISK across in-scope characters */
+  walletISK:            number;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -318,6 +325,9 @@ const RightSidebar: FC<RightSidebarProps> = ({
   jumpClones,
   selectedImplants,
   onImplantsChange,
+  materialRegionId,
+  materialMarketName,
+  walletISK,
 }) => {
   const isJita       = selectedMarket.id === 10000002;
   const marketLabel  = `${selectedMarket.name}${selectedMarket.type === 'nullsec' ? ' [NULLSEC]' : ''}`;
@@ -452,6 +462,46 @@ const RightSidebar: FC<RightSidebarProps> = ({
       } catch (_) { /* silent — clipboard unavailable */ }
     });
   }, [apiDetail, runsInputVal, meFactor]);
+
+  // ── Shortfall list (materials short for the current runs/ME) ──────────────
+  // Lifted out of the render IIFE so it can drive the stock-check fetch below.
+  // ME + runs-adjusted: mirrors /api/true-cost — max(1, ceil(qty × meFactor)) × runs
+  const missing = useMemo(() => {
+    if (!apiDetail?.buildInfo?.materials) return [];
+    return apiDetail.buildInfo.materials
+      .map(m => ({
+        ...m,
+        shortForRuns: Math.max(
+          0,
+          Math.max(1, Math.ceil(m.needed * meFactor)) * displayRuns - m.have
+        ),
+      }))
+      .filter(m => m.shortForRuns > 0);
+  }, [apiDetail, meFactor, displayRuns]);
+
+  // ── Live per-material stock check (v1.33.3) ────────────────────────────────
+  // Fires whenever there's a shortage, scoped only to the missing materials.
+  // Proactive (not hover-triggered) — this is a single open item, not a table
+  // of rows, so there's no hover-storm risk to guard against.
+  const [stockCheck,        setStockCheck]        = useState<MaterialStockCheckResponse | null>(null);
+  const [stockCheckOpen,    setStockCheckOpen]     = useState(false);
+
+  useEffect(() => {
+    setStockCheckOpen(false); // collapse the expanded detail when the item/shortfall changes
+    if (missing.length === 0) { setStockCheck(null); return; }
+    let cancelled = false;
+    apiPost<MaterialStockCheckResponse>('/api/material-stock-check', {
+      materials: missing.map(m => ({ materialId: m.materialId, needed: m.shortForRuns })),
+      regionId:  materialRegionId,
+      walletISK,
+    })
+      .then(res => { if (!cancelled) setStockCheck(res); })
+      .catch(() => { if (!cancelled) setStockCheck(null); });
+    return () => { cancelled = true; };
+    // missing is a derived array (new reference each render) — key on its actual
+    // contents (material ids + shortfall qty) instead to avoid a refetch loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [missing.map(m => `${m.materialId}:${m.shortForRuns}`).join(','), materialRegionId, walletISK]);
 
   // Since MainContent now passes product type_id, selectedTypeId IS the product typeId.
   // We only need a fallback strip for edge cases where blueprint type_id was passed.
@@ -879,18 +929,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
                 </div>
 
                 {/* Shortage summary + Multibuy copy */}
-                {(() => {
-                  // ME + runs-adjusted: mirrors /api/true-cost — max(1, ceil(qty × meFactor)) × runs
-                  const missing = apiDetail.buildInfo!.materials
-                    .map(m => ({
-                      ...m,
-                      shortForRuns: Math.max(
-                        0,
-                        Math.max(1, Math.ceil(m.needed * meFactor)) * displayRuns - m.have
-                      ),
-                    }))
-                    .filter(m => m.shortForRuns > 0);
-                  if (missing.length === 0) return null;
+                {missing.length > 0 && (() => {
                   const shortfallTotal = missing.reduce(
                     (s, m) => s + m.shortForRuns * (m.unitCost ?? 0), 0
                   );
@@ -925,6 +964,58 @@ const RightSidebar: FC<RightSidebarProps> = ({
                       >
                         {copiedShortfall ? '✓ Copied!' : '📋 Multibuy'}
                       </button>
+                    </div>
+                  );
+                })()}
+
+                {/* v1.33.3 — live stock-check indicator: hover (desktop) or tap (mobile)
+                    for the detail. Nested inside the existing shortfall state — doesn't
+                    touch the top-level ✓/⚠/✗ badge's ownership-based meaning. */}
+                {missing.length > 0 && stockCheck && (() => {
+                  const STOCK_CHECK_CFG = {
+                    ok:      { icon: '✓', label: 'Fixable now',   color: 'var(--color-success)', bg: 'rgba(76, 175, 80, 0.1)',  border: 'rgba(76, 175, 80, 0.3)' },
+                    mixed:   { icon: '⚠', label: 'Partial stock', color: 'var(--color-warning)', border: 'rgba(255, 152, 0, 0.3)', bg: 'rgba(255, 152, 0, 0.1)' },
+                    blocked: { icon: '✗', label: 'Not enough ISK', color: 'var(--color-danger)', bg: 'rgba(244, 67, 54, 0.1)', border: 'rgba(244, 67, 54, 0.3)' },
+                  } as const;
+                  const cfg = STOCK_CHECK_CFG[stockCheck.verdict];
+
+                  const thinNames = stockCheck.materials
+                    .filter(m => !m.covered)
+                    .map(m => itemNames.get(m.materialId) ?? `Material #${m.materialId}`);
+
+                  const message = stockCheck.verdict === 'ok'
+                    ? `Missing materials are available on the ${materialMarketName} market — buying them now costs ${formatISK(stockCheck.totalCost)}, within your ${formatISK(walletISK)} wallet. Use Multibuy above to purchase the shortfall.`
+                    : stockCheck.verdict === 'mixed'
+                    ? `${thinNames.join(', ')} ${thinNames.length === 1 ? 'has' : 'have'} limited stock on the ${materialMarketName} market right now — not enough listed to fill the full shortage. The rest can be bought for ~${formatISK(stockCheck.totalCost)}.`
+                    : `Materials are in stock on the ${materialMarketName} market, but buying them (${formatISK(stockCheck.totalCost)}) would exceed your ${formatISK(walletISK)} wallet.`;
+
+                  return (
+                    <div style={{ marginTop: 4 }}>
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        title={message}
+                        onClick={(e) => { e.stopPropagation(); setStockCheckOpen(o => !o); }}
+                        onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); setStockCheckOpen(o => !o); } }}
+                        style={{
+                          display: 'inline-flex', alignItems: 'center', gap: 4,
+                          fontSize: 10, cursor: 'pointer', color: cfg.color,
+                          background: cfg.bg, border: `0.5px solid ${cfg.border}`,
+                          borderRadius: 3, padding: '2px 7px',
+                        }}
+                      >
+                        {cfg.icon} {cfg.label}
+                        <span style={{ opacity: 0.6, fontSize: 8 }}>{stockCheckOpen ? '▾' : '▸'}</span>
+                      </span>
+                      {stockCheckOpen && (
+                        <div style={{
+                          marginTop: 4, fontSize: 10, color: 'var(--color-text-secondary)',
+                          padding: '6px 8px', background: 'var(--color-bg-primary)',
+                          border: '0.5px solid var(--color-border-light)', borderRadius: 3,
+                        }}>
+                          {message}
+                        </div>
+                      )}
                     </div>
                   );
                 })()}

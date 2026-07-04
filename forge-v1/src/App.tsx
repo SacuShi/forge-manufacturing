@@ -1209,6 +1209,9 @@ const AppShell: FC = () => {
           jumpClones={auth.jumpClones}
           selectedImplants={selectedImplants}
           onImplantsChange={setSelectedImplants}
+          materialRegionId={selectedSourceMarket.id}
+          materialMarketName={selectedSourceMarket.name}
+          walletISK={totalWalletISK}
         />
 
         <ChatPanel

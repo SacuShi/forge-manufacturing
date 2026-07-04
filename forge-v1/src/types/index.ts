@@ -746,6 +746,27 @@ export interface TrueCostResponse {
   };
 }
 
+/** v1.33.3 — one material's live sell-order check from /api/material-stock-check */
+export interface MaterialStockCheckResult {
+  materialId:   number;
+  needed:       number;
+  /** Cumulative sell-order volume available right now (all orders, not just the cheapest) */
+  availableQty: number;
+  orderCount:   number;
+  /** Real walked-book cost to buy min(availableQty, needed) units */
+  cost:         number;
+  /** true when availableQty >= needed — this material's shortage can be fully filled right now */
+  covered:      boolean;
+}
+
+export interface MaterialStockCheckResponse {
+  /** 'ok' = fully fixable now; 'mixed' = one or more materials are thin; 'blocked' = stock is fine but cost > wallet */
+  verdict:   'ok' | 'mixed' | 'blocked';
+  totalCost: number;
+  wallet:    number;
+  materials: MaterialStockCheckResult[];
+}
+
 // ── 7. STATION TRADING TYPES (v1.27.0) ──────────────────────────────────────
 
 export interface TradingDepthLevel {

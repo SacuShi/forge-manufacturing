@@ -4003,6 +4003,88 @@ app.post('/api/blueprint-profits', security.apiLimiter, async (req, res) => {
   }
 });
 
+// ── POST /api/material-stock-check (v1.33.3) ─────────────────────────────────
+// Live per-material sell-order check for the RightSidebar's shortfall banner.
+// Scoped ONLY to the materials a specific item is actually missing (typically
+// under ~20), unlike the region-wide regionPriceCache which only stores a
+// single best price with no depth. Body:
+//   { materials: [{ materialId, needed }], regionId, walletISK }
+// For each material: fetches live sell orders for JUST that type_id (cheap —
+// filtered server-side by ESI, not a full-region page scan), sorts by price,
+// and walks the book to find the real cost of buying `needed` units (accurate
+// even when the cheapest single order doesn't cover the whole shortage).
+//
+// Verdict:
+//   'ok'      — every material's shortage is covered by live stock, and the
+//                real walked-book cost is within walletISK.
+//   'mixed'   — one or more materials do NOT have enough stock to cover their
+//                own shortage — named specifically so the client can qualify
+//                the message rather than silently claim buildability.
+//   'blocked' — stock covers everything, but the total cost exceeds walletISK.
+app.post('/api/material-stock-check', security.apiLimiter, async (req, res) => {
+  try {
+    const { materials, regionId, walletISK } = req.body;
+    if (!Array.isArray(materials) || materials.length === 0) {
+      return res.json({ verdict: 'ok', totalCost: 0, wallet: walletISK || 0, materials: [] });
+    }
+
+    const region = VALID_REGIONS.includes(parseInt(regionId)) ? parseInt(regionId) : 10000002;
+    const wallet = typeof walletISK === 'number' ? walletISK : 0;
+    // Defensive cap — no blueprint in the SDE has anywhere near this many distinct materials
+    const limited = materials.slice(0, 40);
+
+    const results = await Promise.all(limited.map(async (m) => {
+      const materialId = parseInt(m.materialId);
+      const needed = Math.max(0, m.needed || 0);
+      if (!materialId || needed <= 0) {
+        return { materialId, needed: 0, availableQty: 0, orderCount: 0, cost: 0, covered: true };
+      }
+      try {
+        const orderRes = await esiFetch(
+          `https://esi.evetech.net/latest/markets/${region}/orders/` +
+          `?datasource=tranquility&order_type=sell&type_id=${materialId}`
+        );
+        if (!orderRes.ok) {
+          return { materialId, needed, availableQty: 0, orderCount: 0, cost: 0, covered: false };
+        }
+        const orders = await orderRes.json();
+        orders.sort((a, b) => a.price - b.price);
+
+        let remaining = needed, cost = 0, availableQty = 0;
+        for (const o of orders) {
+          availableQty += o.volume_remain;
+          if (remaining <= 0) continue;
+          const take = Math.min(remaining, o.volume_remain);
+          cost += take * o.price;
+          remaining -= take;
+        }
+
+        return {
+          materialId, needed, availableQty,
+          orderCount: orders.length,
+          cost, // real cost of buying min(availableQty, needed) units, walking the book
+          covered: availableQty >= needed,
+        };
+      } catch (_) {
+        return { materialId, needed, availableQty: 0, orderCount: 0, cost: 0, covered: false };
+      }
+    }));
+
+    const thin      = results.filter(r => !r.covered);
+    const totalCost = results.reduce((s, r) => s + r.cost, 0);
+
+    let verdict;
+    if (thin.length > 0) verdict = 'mixed';
+    else if (totalCost > wallet) verdict = 'blocked';
+    else verdict = 'ok';
+
+    res.json({ verdict, totalCost, wallet, materials: results });
+  } catch (err) {
+    console.error('❌ Material stock check error:', err.message);
+    res.status(500).json({ error: clientErrMsg(err) });
+  }
+});
+
 
 // AI CHAT - Anthropic proxy with function calling
 // ── AI guardrail (v1.30.0) ───────────────────────────────────────────────────
