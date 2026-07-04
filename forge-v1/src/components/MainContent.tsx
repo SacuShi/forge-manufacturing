@@ -28,6 +28,8 @@ interface BlueprintProfit {
   margin:     number;
   iskPerHour: number;
   sellPrice?: number;
+  /** v1.33.0 — true when owned assets + wallet ISK cover this blueprint's ME0 material list */
+  canBuildNow?: boolean;
 }
 type BpSortField = 'name' | 'iskPerHour' | 'margin' | 'profit';
 
@@ -59,6 +61,8 @@ interface MainContentProps {
   assets: EsiAsset[];
   activeJobs: ActiveJob[];
   itemNames: Map<number, string>;
+  /** v1.33.0 — combined wallet ISK across in-scope characters, for the "✓ Can Build Now" pill */
+  walletISK: number;
 
   /** Called when any item is selected (typeId + name) — opens RightSidebar */
   onSelectItem: (typeId: number, name: string) => void;
@@ -118,6 +122,7 @@ const MainContent: FC<MainContentProps> = ({
   assets,
   activeJobs,
   itemNames,
+  walletISK,
   onSelectItem,
   regionId,
   marketSearchQuery,
@@ -142,6 +147,8 @@ const MainContent: FC<MainContentProps> = ({
   const [bpProfits, setBpProfits] = useState<Record<number, BlueprintProfit>>({});
   const [bpSort,    setBpSort]    = useState<BpSortField>('iskPerHour');
   const [bpSortDir, setBpSortDir] = useState<'asc' | 'desc'>('desc');
+  // v1.33.0 — "Can Build Now" filter: owned materials + wallet ISK cover the shortfall
+  const [bpBuildableOnly, setBpBuildableOnly] = useState(false);
   const [assetSearch, setAssetSearch] = useState('');
 
   const getBpName = (typeId: number) =>
@@ -199,13 +206,13 @@ const MainContent: FC<MainContentProps> = ({
     fetch('/api/blueprint-profits', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ blueprintTypeIds: typeIds, regionId }),
+      body: JSON.stringify({ blueprintTypeIds: typeIds, regionId, assets, walletISK }),
     })
       .then(res => res.json())
       .then(data => { if (!cancelled) setBpProfits(data || {}); })
       .catch(err => console.error('Failed to load blueprint profits:', err));
     return () => { cancelled = true; };
-  }, [blueprints, regionId]);
+  }, [blueprints, regionId, assets, walletISK]);
 
   const handleBpSort = (field: BpSortField) => {
     if (field === bpSort) {
@@ -267,10 +274,11 @@ const MainContent: FC<MainContentProps> = ({
       else groups.set(b.type_id, [b]);
     });
 
-    // Step 3 — name search
+    // Step 3 — name search + "Can Build Now" filter (owned materials + wallet ISK)
     const entries = Array.from(groups.entries()).filter(([typeId]) => {
-      if (!q) return true;
-      return getBpName(typeId).toLowerCase().includes(q);
+      if (q && !getBpName(typeId).toLowerCase().includes(q)) return false;
+      if (bpBuildableOnly && !bpProfits[typeId]?.canBuildNow) return false;
+      return true;
     });
 
     // Step 4 — sort. Name = alphabetical; metric sorts use /api/blueprint-profits
@@ -293,7 +301,7 @@ const MainContent: FC<MainContentProps> = ({
     });
     return entries;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [blueprints, bpSearch, bpFilter, itemNames, bpProfits, bpSort, bpSortDir]);
+  }, [blueprints, bpSearch, bpFilter, bpBuildableOnly, itemNames, bpProfits, bpSort, bpSortDir]);
 
   const assetGroups = useMemo(() => {
     const g = new Map<string, { qty: number; typeId: number }>();
@@ -493,6 +501,15 @@ const MainContent: FC<MainContentProps> = ({
                 {f.toUpperCase()}
               </button>
             ))}
+            <button
+              type="button"
+              className={`pill-filter${bpBuildableOnly ? ' active' : ''}`}
+              onClick={() => setBpBuildableOnly((v) => !v)}
+              aria-pressed={bpBuildableOnly}
+              title="Owned materials fully cover the build, or your wallet covers the shortfall"
+            >
+              ✓ Can Build Now
+            </button>
           </div>
 
           {/* Sort controls — same metrics as Market Opportunities (selected hub) */}

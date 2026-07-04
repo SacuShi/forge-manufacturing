@@ -1090,6 +1090,7 @@ const AppShell: FC = () => {
           assets={combinedAssets}
           activeJobs={allActiveJobs}
           itemNames={itemNames}
+          walletISK={totalWalletISK}
           selectedTypeId={selectedTypeId}
           onSelectItem={handleSelectItem}
           regionId={selectedMarket.id}

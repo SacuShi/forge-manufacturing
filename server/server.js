@@ -3899,16 +3899,41 @@ app.post('/api/blueprint-metadata', security.apiLimiter, async (req, res) => {
 // ── POST /api/blueprint-profits (v1.15.0) ────────────────────────────────────
 // Per-blueprint profitability for the "My Blueprints" tab, from the same
 // precomputed_profits data that powers Market Opportunities. Body:
-//   { blueprintTypeIds: number[], regionId?: number }
+//   { blueprintTypeIds: number[], regionId?: number, assets?: EsiAsset[], walletISK?: number }
 // Returns a map keyed by blueprint type_id (= blueprint_id):
-//   { [bpTypeId]: { profit, margin, iskPerHour, sellPrice, materialCost, buildTime } }
+//   { [bpTypeId]: { profit, margin, iskPerHour, sellPrice, materialCost, buildTime, canBuildNow? } }
+//
+// v1.33.0 — canBuildNow: when assets + walletISK are supplied, cross-references
+// each blueprint's ME0 (worst-case, single-run) material list against owned
+// assets. Any shortage is priced at the live source-hub sell price; canBuildNow
+// is true when that shortfall cost is within the character's current wallet
+// balance (covers both "already stocked" and "can afford to top up now").
+// Only computed when the region's live price cache is warm — otherwise omitted
+// (a background warm is kicked off so a retry a few seconds later succeeds).
 app.post('/api/blueprint-profits', security.apiLimiter, async (req, res) => {
   try {
-    const { blueprintTypeIds, regionId } = req.body;
+    const { blueprintTypeIds, regionId, assets, walletISK } = req.body;
     if (!Array.isArray(blueprintTypeIds) || blueprintTypeIds.length === 0) return res.json({});
 
     const region = VALID_REGIONS.includes(parseInt(regionId)) ? parseInt(regionId) : 10000002;
     const limited = blueprintTypeIds.slice(0, 2000);
+
+    const checkBuildable = Array.isArray(assets) && typeof walletISK === 'number';
+    const priceEntry = regionPriceCache.get(region);
+    const pricesWarm = !!(priceEntry && Date.now() < priceEntry.expiry);
+    if (checkBuildable && !pricesWarm && !regionWarmingSet.has(region)) {
+      regionWarmingSet.add(region);
+      fetchRegionPrices(region)
+        .then(prices => setRegionPriceCache(region, prices))
+        .catch(() => {})
+        .finally(() => regionWarmingSet.delete(region));
+    }
+    const assetQuantities = {};
+    if (checkBuildable) {
+      for (const a of assets) {
+        assetQuantities[a.type_id] = (assetQuantities[a.type_id] || 0) + a.quantity;
+      }
+    }
 
     const out = {};
     const CHUNK = 900; // stay under SQLite host-parameter limit
@@ -3922,6 +3947,20 @@ app.post('/api/blueprint-profits', security.apiLimiter, async (req, res) => {
          WHERE region_id = ? AND blueprint_id IN (${ph})`,
         [region, ...slice]
       );
+
+      let matsByBp = null;
+      if (checkBuildable && pricesWarm) {
+        matsByBp = new Map();
+        const matRows = await dbAll(
+          `SELECT blueprint_id, material_id, quantity FROM blueprint_materials WHERE blueprint_id IN (${ph})`,
+          slice
+        );
+        for (const m of matRows) {
+          if (!matsByBp.has(m.blueprint_id)) matsByBp.set(m.blueprint_id, []);
+          matsByBp.get(m.blueprint_id).push(m);
+        }
+      }
+
       for (const r of rows) {
         out[r.blueprint_id] = {
           profit:        r.profit,
@@ -3932,6 +3971,19 @@ app.post('/api/blueprint-profits', security.apiLimiter, async (req, res) => {
           buildTime:     r.build_time,
           liquidityRisk: r.liquidity_risk,
         };
+
+        if (matsByBp) {
+          const mats = matsByBp.get(r.blueprint_id) || [];
+          let shortfallCost = 0;
+          for (const m of mats) {
+            const have     = assetQuantities[m.material_id] || 0;
+            const shortage = Math.max(0, m.quantity - have);
+            if (shortage > 0) {
+              shortfallCost += (priceEntry.prices[m.material_id]?.sell || 0) * shortage;
+            }
+          }
+          out[r.blueprint_id].canBuildNow = shortfallCost <= walletISK;
+        }
       }
     }
     res.json(out);
