@@ -1826,6 +1826,7 @@ tr:hover .ticker-pin-btn,
 
 @media (max-width: 767px) {
   .ticker-bar { display: none; }
+  .app-body   { padding-bottom: 0; }
 }
 
 /* Empty state */

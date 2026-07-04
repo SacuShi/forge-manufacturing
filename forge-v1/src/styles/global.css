@@ -40,6 +40,9 @@ body {
   flex: 1;
   overflow: hidden;
   position: relative;
+  /* Reserves space above the fixed ticker bar (overridden inline in App.tsx to
+     68px in dual-row mode) so content never renders underneath it. */
+  padding-bottom: 38px;
 }
 
 /* ── Scrollbars ────────────────────────────────────────────────────────────── */

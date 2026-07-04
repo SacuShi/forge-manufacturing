@@ -56,6 +56,7 @@ import { usePushNotifications }  from './hooks/usePushNotifications';
 function mapToMarketItems(
   results: TopProfitableResponse['results'],
   esiBlueprints: EsiBlueprint[],
+  canBuildNowMap: Map<number, boolean>,
   rankOffset = 0
 ): MarketItem[] {
   // Map blueprint type_id → owned status (BPO wins over BPC)
@@ -92,7 +93,9 @@ function mapToMarketItems(
       buildTime:        formatBuildTime(item.build_time ?? 0),
       buildTimeMinutes: Math.round((item.build_time ?? 0) / 60),
       owned,
-      canBuild:         owned !== '—',
+      // v1.33.1 — "can build" now means owned blueprint AND owned materials/ISK cover it
+      // (not just blueprint ownership). Unknown (map not yet loaded) = not buildable yet.
+      canBuild:         owned !== '—' && (canBuildNowMap.get(item.blueprint_id) ?? false),
       priceSource:      item.price_source ?? null,
       avg30dPrice:      item.avg_30d_price ?? null,
       avgDailyVolume:   item.avg_daily_volume ?? null,
@@ -278,6 +281,36 @@ const AppShell: FC = () => {
     return `${allBlueprints.length}:${combinedAssets.length}:${bestSkillsArray.length}:${skillHash}:${altIds}`;
   }, [allBlueprints, combinedAssets, bestSkillsArray, activeAltCharacters]);
 
+  // v1.33.1 — "Can Build Now" map for Market Opportunities' Can Build pill: owned
+  // materials + wallet ISK cover each owned blueprint's shortfall. Reuses
+  // /api/blueprint-profits (same computation as the My Blueprints tab); only the
+  // canBuildNow field is used here, priced at the MATERIALS hub (not the sell hub).
+  const [canBuildNowMap, setCanBuildNowMap] = useState<Map<number, boolean>>(new Map());
+  useEffect(() => {
+    if (allBlueprints.length === 0) { setCanBuildNowMap(new Map()); return; }
+    const typeIds = [...new Set(allBlueprints.map((b) => b.type_id))];
+    let cancelled = false;
+    fetch('/api/blueprint-profits', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        blueprintTypeIds: typeIds,
+        regionId: selectedSourceMarket.id,
+        assets: combinedAssets,
+        walletISK: totalWalletISK,
+      }),
+    })
+      .then((res) => res.json())
+      .then((data: Record<number, { canBuildNow?: boolean }>) => {
+        if (cancelled) return;
+        const map = new Map<number, boolean>();
+        Object.entries(data).forEach(([bpId, v]) => map.set(Number(bpId), !!v.canBuildNow));
+        setCanBuildNowMap(map);
+      })
+      .catch(() => { if (!cancelled) setCanBuildNowMap(new Map()); });
+    return () => { cancelled = true; };
+  }, [allBlueprints, selectedSourceMarket.id, combinedAssets, totalWalletISK]);
+
   // Resolve names for any asset/blueprint type_ids missing from the DB-sourced name map.
   // Runs once after both the character data and the name map have fully loaded.
   useEffect(() => {
@@ -414,8 +447,8 @@ const AppShell: FC = () => {
   const marketItems = useMemo<MarketItem[]>(() => {
     const source = marketSearchResults ?? rawResults;
     if (!source.length) return [];
-    return mapToMarketItems(source, allBlueprints);
-  }, [rawResults, marketSearchResults, allBlueprints]);
+    return mapToMarketItems(source, allBlueprints, canBuildNowMap);
+  }, [rawResults, marketSearchResults, allBlueprints, canBuildNowMap]);
 
   // Server-side name search — called when user types in the market search box.
   const handleMarketSearch = useCallback((query: string) => {
@@ -1026,7 +1059,9 @@ const AppShell: FC = () => {
         style={{
           '--left-panel-w':  `${leftWidth}px`,
           '--right-panel-w': detailOpen ? `${rightWidth}px` : '0px',
-          paddingBottom: '36px',
+          // v1.33.1 — matches TickerBar's own dual-row condition (dualRow AND 2+ groups)
+          // so content never renders behind the taller dual-row ticker bar.
+          paddingBottom: (ticker.dualRow && ticker.groupOps.groups.length >= 2) ? '68px' : '38px',
         } as React.CSSProperties}
         onClick={(e) => {
           if (!chatAutoOpened) return;
