@@ -306,15 +306,16 @@ const AppShell: FC = () => {
         }),
       })
         .then((res) => res.json())
-        .then((data: Record<string, { canBuildNow?: boolean }> & { _meta?: { canBuildDataWarm?: boolean } }) => {
+        .then((data: Record<string, unknown>) => {
           if (cancelled) return;
           const map = new Map<number, boolean>();
           Object.entries(data).forEach(([bpId, v]) => {
             if (bpId === '_meta') return;
-            map.set(Number(bpId), !!v.canBuildNow);
+            map.set(Number(bpId), !!(v as { canBuildNow?: boolean } | undefined)?.canBuildNow);
           });
           setCanBuildNowMap(map);
-          if (!silent && data._meta && data._meta.canBuildDataWarm === false) {
+          const meta = data._meta as { canBuildDataWarm?: boolean } | undefined;
+          if (!silent && meta && meta.canBuildDataWarm === false) {
             retryTimer = setTimeout(() => load(true), 15_000);
           }
         })
