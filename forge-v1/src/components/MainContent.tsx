@@ -199,19 +199,35 @@ const MainContent: FC<MainContentProps> = ({
 
   // v1.15.0 — fetch per-blueprint profitability for the selected hub (same source
   // as Market Opportunities). Refetches when the blueprint set or hub changes.
+  // v1.33.2 — if the server's canBuildDataWarm meta flag is false (price cache was
+  // cold), silently retry once after 15s so the "Can Build Now" pill self-heals
+  // once the background warm finishes, same pattern as useTrueCost's prices_warm.
   useEffect(() => {
     if (!blueprints || blueprints.length === 0) { setBpProfits({}); return; }
     const typeIds = [...new Set(blueprints.map(b => b.type_id))];
     let cancelled = false;
-    fetch('/api/blueprint-profits', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ blueprintTypeIds: typeIds, regionId, assets, walletISK }),
-    })
-      .then(res => res.json())
-      .then(data => { if (!cancelled) setBpProfits(data || {}); })
-      .catch(err => console.error('Failed to load blueprint profits:', err));
-    return () => { cancelled = true; };
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const load = (silent = false) => {
+      fetch('/api/blueprint-profits', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ blueprintTypeIds: typeIds, regionId, assets, walletISK }),
+      })
+        .then(res => res.json())
+        .then((data: Record<string, unknown> & { _meta?: { canBuildDataWarm?: boolean } }) => {
+          if (cancelled) return;
+          const { _meta, ...profits } = data || {};
+          setBpProfits(profits as Record<number, BlueprintProfit>);
+          if (!silent && _meta && _meta.canBuildDataWarm === false) {
+            retryTimer = setTimeout(() => load(true), 15_000);
+          }
+        })
+        .catch(err => console.error('Failed to load blueprint profits:', err));
+    };
+    load();
+
+    return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
   }, [blueprints, regionId, assets, walletISK]);
 
   const handleBpSort = (field: BpSortField) => {

@@ -3920,8 +3920,14 @@ app.post('/api/blueprint-profits', security.apiLimiter, async (req, res) => {
 
     const checkBuildable = Array.isArray(assets) && typeof walletISK === 'number';
     const priceEntry = regionPriceCache.get(region);
-    const pricesWarm = !!(priceEntry && Date.now() < priceEntry.expiry);
-    if (checkBuildable && !pricesWarm && !regionWarmingSet.has(region)) {
+    // Same lenient read as sellPrices in /api/item-details (regionPriceCache.get(...)?.prices):
+    // a technically-expired-but-present cache entry is still far better than refusing to
+    // answer, since canBuildNow is a best-effort signal, not a financial figure. Only kick
+    // off a background warm-up when the entry is genuinely missing or actually expired —
+    // the computation itself proceeds as long as ANY price data is present.
+    const pricesAvailable = !!(priceEntry && priceEntry.prices);
+    const isExpired = !priceEntry || Date.now() >= priceEntry.expiry;
+    if (checkBuildable && isExpired && !regionWarmingSet.has(region)) {
       regionWarmingSet.add(region);
       fetchRegionPrices(region)
         .then(prices => setRegionPriceCache(region, prices))
@@ -3949,7 +3955,7 @@ app.post('/api/blueprint-profits', security.apiLimiter, async (req, res) => {
       );
 
       let matsByBp = null;
-      if (checkBuildable && pricesWarm) {
+      if (checkBuildable && pricesAvailable) {
         matsByBp = new Map();
         const matRows = await dbAll(
           `SELECT blueprint_id, material_id, quantity FROM blueprint_materials WHERE blueprint_id IN (${ph})`,
@@ -3986,6 +3992,10 @@ app.post('/api/blueprint-profits', security.apiLimiter, async (req, res) => {
         }
       }
     }
+    // Meta flag (not a blueprint_id — safe alongside numeric keys) so the client can
+    // silently retry once the background warm finishes, same pattern as /api/true-cost's
+    // prices_warm. Only relevant when a buildability check was actually requested.
+    if (checkBuildable) out._meta = { canBuildDataWarm: pricesAvailable };
     res.json(out);
   } catch (err) {
     console.error('❌ Blueprint profits error:', err.message);

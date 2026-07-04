@@ -285,30 +285,44 @@ const AppShell: FC = () => {
   // materials + wallet ISK cover each owned blueprint's shortfall. Reuses
   // /api/blueprint-profits (same computation as the My Blueprints tab); only the
   // canBuildNow field is used here, priced at the MATERIALS hub (not the sell hub).
+  // v1.33.2 — silently retries once after 15s if the server flags the price cache
+  // as cold (_meta.canBuildDataWarm === false), same pattern as useTrueCost.
   const [canBuildNowMap, setCanBuildNowMap] = useState<Map<number, boolean>>(new Map());
   useEffect(() => {
     if (allBlueprints.length === 0) { setCanBuildNowMap(new Map()); return; }
     const typeIds = [...new Set(allBlueprints.map((b) => b.type_id))];
     let cancelled = false;
-    fetch('/api/blueprint-profits', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        blueprintTypeIds: typeIds,
-        regionId: selectedSourceMarket.id,
-        assets: combinedAssets,
-        walletISK: totalWalletISK,
-      }),
-    })
-      .then((res) => res.json())
-      .then((data: Record<number, { canBuildNow?: boolean }>) => {
-        if (cancelled) return;
-        const map = new Map<number, boolean>();
-        Object.entries(data).forEach(([bpId, v]) => map.set(Number(bpId), !!v.canBuildNow));
-        setCanBuildNowMap(map);
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const load = (silent = false) => {
+      fetch('/api/blueprint-profits', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          blueprintTypeIds: typeIds,
+          regionId: selectedSourceMarket.id,
+          assets: combinedAssets,
+          walletISK: totalWalletISK,
+        }),
       })
-      .catch(() => { if (!cancelled) setCanBuildNowMap(new Map()); });
-    return () => { cancelled = true; };
+        .then((res) => res.json())
+        .then((data: Record<string, { canBuildNow?: boolean }> & { _meta?: { canBuildDataWarm?: boolean } }) => {
+          if (cancelled) return;
+          const map = new Map<number, boolean>();
+          Object.entries(data).forEach(([bpId, v]) => {
+            if (bpId === '_meta') return;
+            map.set(Number(bpId), !!v.canBuildNow);
+          });
+          setCanBuildNowMap(map);
+          if (!silent && data._meta && data._meta.canBuildDataWarm === false) {
+            retryTimer = setTimeout(() => load(true), 15_000);
+          }
+        })
+        .catch(() => { if (!cancelled) setCanBuildNowMap(new Map()); });
+    };
+    load();
+
+    return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
   }, [allBlueprints, selectedSourceMarket.id, combinedAssets, totalWalletISK]);
 
   // Resolve names for any asset/blueprint type_ids missing from the DB-sourced name map.
