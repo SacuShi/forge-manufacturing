@@ -390,9 +390,9 @@ const QueuePlannerTab: FC<QueuePlannerTabProps> = ({ queueCharacters, primaryTok
                       <span className="qp-col-pin">
                         <TickerPinButton
                           options={[
-                            { type: 'mfg_profit',   label: `${rec.productName} profit` },
-                            { type: 'mfg_isk_hour', label: `${rec.productName} ISK/hr` },
-                            { type: 'mfg_margin',   label: `${rec.productName} margin` },
+                            { type: 'mfg_profit',   label: `${rec.productName} profit (Gross)` },
+                            { type: 'mfg_isk_hour', label: `${rec.productName} ISK/hr (Gross)` },
+                            { type: 'mfg_margin',   label: `${rec.productName} margin (Gross)` },
                           ]}
                           baseConfig={{ typeId: rec.productId, itemName: rec.productName, regionId }}
                         />

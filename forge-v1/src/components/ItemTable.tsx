@@ -281,9 +281,9 @@ const ItemTable: FC<ItemTableProps> = ({
                   {regionId && (
                     <TickerPinButton
                       options={[
-                        { type: 'mfg_profit',   label: `${item.name} profit` },
-                        { type: 'mfg_margin',   label: `${item.name} margin` },
-                        { type: 'mfg_isk_hour', label: `${item.name} ISK/hr` },
+                        { type: 'mfg_profit',   label: `${item.name} profit (Gross)` },
+                        { type: 'mfg_margin',   label: `${item.name} margin (Gross)` },
+                        { type: 'mfg_isk_hour', label: `${item.name} ISK/hr (Gross)` },
                         { type: 'price_sell',   label: `${item.name} sell price` },
                       ]}
                       baseConfig={{ typeId: item.typeId, itemName: item.name, regionId, hubName }}

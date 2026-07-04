@@ -90,10 +90,10 @@ function autoLabel(config: NewPinConfig): string {
     case 'price_sell':      return `${config.itemName ?? 'Item'} sell${hub}`;
     case 'price_buy':       return `${config.itemName ?? 'Item'} buy${hub}`;
     case 'price_spread':    return `${config.itemName ?? 'Item'} spread${hub}`;
-    case 'mfg_profit':      return `${config.itemName ?? 'Item'} profit${hub}`;
-    case 'mfg_margin':      return `${config.itemName ?? 'Item'} margin${hub}`;
-    case 'mfg_isk_hour':    return `${config.itemName ?? 'Item'} ISK/hr${hub}`;
-    case 'mfg_top_hub':     return `Top mfg${hub}`;
+    case 'mfg_profit':      return `${config.itemName ?? 'Item'} profit (Gross)${hub}`;
+    case 'mfg_margin':      return `${config.itemName ?? 'Item'} margin (Gross)${hub}`;
+    case 'mfg_isk_hour':    return `${config.itemName ?? 'Item'} ISK/hr (Gross)${hub}`;
+    case 'mfg_top_hub':     return `Top mfg (Gross)${hub}`;
     case 'trade_spread':    return `${config.itemName ?? 'Item'} trade${hub}`;
     case 'trade_top_hub':   return `Top trade${hub}`;
     case 'wallet':          return 'Wallet';
@@ -510,7 +510,7 @@ function buildHubSlot(
       return {
         pinId: pin.id,
         primaryText: compactISK(v),
-        secondaryText: `${pin.itemName ?? ''} @ ${hub}`,
+        secondaryText: `${pin.itemName ?? ''} (Gross) @ ${hub}`,
         direction: cp !== null ? (cp > 0.005 ? 'up' : cp < -0.005 ? 'down' : 'stable') : null,
         changePct: cp,
         colorClass: cc,
@@ -527,7 +527,7 @@ function buildHubSlot(
       return {
         pinId: pin.id,
         primaryText: fmtPct(v),
-        secondaryText: `${pin.itemName ?? ''} @ ${hub}`,
+        secondaryText: `${pin.itemName ?? ''} (Gross) @ ${hub}`,
         direction: cp !== null ? (cp > 0 ? 'up' : 'down') : null,
         changePct: cp,
         colorClass: cc,
@@ -544,7 +544,7 @@ function buildHubSlot(
       return {
         pinId: pin.id,
         primaryText: compactISKPerHr(v),
-        secondaryText: `${pin.itemName ?? ''} @ ${hub}`,
+        secondaryText: `${pin.itemName ?? ''} (Gross) @ ${hub}`,
         direction: cp !== null ? (cp > 0.005 ? 'up' : cp < -0.005 ? 'down' : 'stable') : null,
         changePct: cp,
         colorClass: cc,
@@ -561,7 +561,7 @@ function buildHubSlot(
       return {
         pinId: pin.id,
         primaryText: name,
-        secondaryText: `${compactISK(v)} · ${fmtPct(r.margin ?? null)} @ ${hub}`,
+        secondaryText: `${compactISK(v)} · ${fmtPct(r.margin ?? null)} (Gross) @ ${hub}`,
         direction: null,
         changePct: null,
         colorClass: cc,
