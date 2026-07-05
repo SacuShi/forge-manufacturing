@@ -4416,6 +4416,16 @@ app.post('/api/ai-chat',
         }
       },
       {
+        name: "get_my_orders",
+        description: "Get the player's own active market orders (buy + sell), flagged for undercuts against the live Jita book. Use for: 'my orders', 'am I undercut', 'my listings', station trading status.",
+        input_schema: {
+          type: "object",
+          properties: {
+            undercutOnly: { type: "boolean", description: "Only return undercut orders, omit the rest (default false)" }
+          }
+        }
+      },
+      {
         name: "get_corp_blueprints",
         description: "Get the CORPORATION's blueprints (corp hangar), not personal ones. Use when the user asks about 'corp blueprints', 'corporation blueprints', or what the corp owns. Works only if the current character holds the in-game Director (or CEO) role — otherwise returns { error:'not_director' }. Data is fetched live from ESI with the user's own token.",
         input_schema: {
@@ -4628,6 +4638,42 @@ app.post('/api/ai-chat',
                   done: j.done,
                 }))
               };
+              break;
+            }
+
+            case "get_my_orders": {
+              try {
+                const ordersRes = await fetch(`http://localhost:${PORT}/api/trading/character-orders`, {
+                  headers: { Authorization: req.headers.authorization || '' },
+                });
+                const ordersData = await ordersRes.json();
+                if (ordersData.error) {
+                  toolResult = { error: ordersData.error };
+                  break;
+                }
+
+                const allOrders   = ordersData.orders || [];
+                const undercutOnly = !!toolUse.input.undercutOnly;
+                const undercut     = allOrders.filter(o => o.isUndercut);
+                const rest         = undercutOnly ? [] : allOrders.filter(o => !o.isUndercut);
+
+                toolResult = {
+                  total: allOrders.length,
+                  undercut_count: undercut.length,
+                  // Undercut orders are the actionable ones — full detail
+                  undercut: undercut.map(o => ({
+                    name:        o.name,
+                    side:        o.is_buy_order ? 'buy' : 'sell',
+                    my_price:    o.price,
+                    market_best: o.bookBest,
+                    undercut_by: Math.round(o.undercutBy * 100) / 100,
+                  })),
+                  // Non-undercut orders need no action — one compact line each, not full objects
+                  other: rest.map(o => `${o.name} (${o.is_buy_order ? 'buy' : 'sell'} @ ${o.price})`),
+                };
+              } catch (e) {
+                toolResult = { error: e.message };
+              }
               break;
             }
 
