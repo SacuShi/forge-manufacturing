@@ -677,19 +677,30 @@ const RightSidebar: FC<RightSidebarProps> = ({
 
             {/* Price history sparkline */}
             {apiDetail.priceHistory && apiDetail.priceHistory.length > 0 && (() => {
-              const prices = apiDetail.priceHistory!.map((d) => d.average);
-              const min    = Math.min(...prices);
-              const max    = Math.max(...prices);
-              const range  = max - min;
-              const latest = prices[prices.length - 1];
+              const prices     = apiDetail.priceHistory!.map((d) => d.average);
+              const min        = Math.min(...prices);
+              const max        = Math.max(...prices);
+              const range      = max - min;
+              const latest     = prices[prices.length - 1];
+              const isKeestar  = apiDetail.priceHistorySource === 'keepstar';
+              const days       = apiDetail.priceHistory!.length;
+              const heading    = isKeestar
+                ? `C-J6MT Price (${days} Days)`
+                : 'Jita Price (90 Days)';
               return (
                 <div className="detail-section">
                   <div className="detail-section-heading">
-                    Jita Price (90 Days)
-                    {!isJita && (
+                    {heading}
+                    {!isJita && !isKeestar && (
                       <span style={{ float: 'right', fontSize: 10, fontWeight: 400,
                         color: 'var(--color-text-tertiary)', letterSpacing: 0 }}>
                         history always Jita
+                      </span>
+                    )}
+                    {isKeestar && days < 30 && (
+                      <span style={{ float: 'right', fontSize: 10, fontWeight: 400,
+                        color: 'var(--color-text-tertiary)', letterSpacing: 0 }}>
+                        accumulating…
                       </span>
                     )}
                   </div>

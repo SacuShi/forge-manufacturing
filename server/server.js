@@ -67,10 +67,10 @@ app.use(helmet({
     directives: {
       defaultSrc: ["'self'"],
       scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://cdn.tailwindcss.com", "https://unpkg.com"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
       connectSrc: ["'self'", "https://login.eveonline.com", "https://esi.evetech.net", "https://evetycoon.com"],
       imgSrc: ["'self'", "data:", "https:", "blob:"],
-      fontSrc: ["'self'", "data:"]
+      fontSrc: ["'self'", "data:", "https://fonts.gstatic.com"]
     }
   },
   hsts: { maxAge: 31536000, includeSubDomains: true }
@@ -518,6 +518,48 @@ async function runMigrations() {
   // v1.32.0: drop orphaned PIN columns from pre-v1.7 auth system (safe no-op if absent)
   try { await dbRun(`ALTER TABLE corp_config DROP COLUMN pin_hash`); } catch (_) {}
   try { await dbRun(`ALTER TABLE corp_config DROP COLUMN pin_salt`); } catch (_) {}
+
+  // v1.34.0: Keepstar market history — autonomous polling, server-side refresh token
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS structure_token (
+      structure_id      INTEGER PRIMARY KEY,
+      enc_refresh_token TEXT NOT NULL,
+      token_iv          TEXT NOT NULL,
+      token_tag         TEXT NOT NULL,
+      stored_at         TEXT DEFAULT (datetime('now'))
+    )
+  `);
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS structure_market_history (
+      structure_id INTEGER NOT NULL,
+      type_id      INTEGER NOT NULL,
+      date         TEXT    NOT NULL,
+      avg_sell     REAL,
+      min_sell     REAL,
+      max_sell     REAL,
+      order_count  INTEGER,
+      PRIMARY KEY (structure_id, type_id, date)
+    )
+  `);
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_smh_lookup ON structure_market_history (structure_id, type_id, date)`);
+  try { await dbRun(`ALTER TABLE structure_market_history ADD COLUMN total_sell_qty INTEGER DEFAULT NULL`); } catch (_) {}
+  // Migrate token captured by test flow (one-time, no-op if already done or test skipped)
+  try {
+    const testTok = await dbGet(`SELECT * FROM test_structure_token WHERE structure_id = ?`, [1049588174021]);
+    if (testTok) {
+      await dbRun(
+        `INSERT OR IGNORE INTO structure_token (structure_id, enc_refresh_token, token_iv, token_tag, stored_at)
+         VALUES (?, ?, ?, ?, ?)`,
+        [testTok.structure_id, testTok.enc_refresh_token, testTok.token_iv, testTok.token_tag, testTok.stored_at]
+      );
+      // Migrate test history rows too
+      await dbRun(`
+        INSERT OR IGNORE INTO structure_market_history (structure_id, type_id, date, avg_sell, min_sell, max_sell, order_count)
+        SELECT structure_id, type_id, date, avg_sell, min_sell, max_sell, order_count
+          FROM structure_market_history_test
+      `);
+    }
+  } catch (_) { /* test tables may not exist on a fresh install */ }
 
   console.log('✓ Database migrations complete');
 }
@@ -1127,8 +1169,8 @@ async function fetchRegionPrices(regionId) {
 // prices map in the same format as fetchRegionPrices() so the precompute loop
 // is transparent to the data source.
 async function fetchStructureMarketPrices() {
-  const token = getStructureToken();
-  if (!token) throw new Error('No active alliance token — no user has logged in recently');
+  const token = await getOrRefreshStructureToken();
+  if (!token) throw new Error('No active alliance token and no stored refresh token — visit /api/ks-test-auth to authorise');
 
   console.log(`⟳ Fetching Keepstar structure market (${KEEPSTAR_STRUCTURE_ID})...`);
   const startTime = Date.now();
@@ -1638,7 +1680,7 @@ async function pollStructureHub(hubId) {
   const meta = hubMetas[hubId];
   if (meta.fetching) return;
 
-  const token = getStructureToken();
+  const token = await getOrRefreshStructureToken();
   if (!token) {
     console.log(`⏸ ${cfg.name} poller: no active token — will retry`);
     scheduleNextHubPoll(hubId, true); // backoff
@@ -2188,15 +2230,50 @@ const KEEPSTAR_REGION_ID    = 10099000;
 // Token pool: capture any authenticated user's EVE token during normal requests.
 // EVE tokens expire in ~20 min; pool is refreshed on each /api/session-data POST.
 // Precompute uses the pool token if available; if not, Keepstar prices are skipped.
-const _ksTkPool = { token: null, expiry: 0 };
+// fromDb flag distinguishes tokens refreshed from the stored DB refresh token
+// (guaranteed correct character) from tokens captured from active user sessions
+// (any character — may lack Keepstar docking access).
+const _ksTkPool = { token: null, expiry: 0, fromDb: false };
 
 function cacheStructureToken(token) {
   _ksTkPool.token  = token;
   _ksTkPool.expiry = Date.now() + 17 * 60 * 1000; // 17 min (3 min safety margin)
+  _ksTkPool.fromDb = false; // user session token — unknown character
 }
 
 function getStructureToken() {
   return (_ksTkPool.token && Date.now() < _ksTkPool.expiry) ? _ksTkPool.token : null;
+}
+
+// Always prefer the DB refresh token (tied to the specific character with Keepstar
+// docking access). Only fall back to _ksTkPool if no DB token exists — any logged-in
+// user's token has the right scope but may not have structure access.
+async function getOrRefreshStructureToken() {
+  // If pool holds a DB-refreshed token still within its window, reuse it — avoids
+  // hitting CCP's token endpoint on every structure market call during precompute.
+  if (_ksTkPool.fromDb && _ksTkPool.token && Date.now() < _ksTkPool.expiry) {
+    return _ksTkPool.token;
+  }
+
+  // Refresh from DB (correct character, correct access guaranteed).
+  try {
+    const freshToken = await refreshStructureToken(KEEPSTAR_STRUCTURE_ID);
+    if (freshToken) {
+      _ksTkPool.token  = freshToken;
+      _ksTkPool.expiry = Date.now() + 17 * 60 * 1000;
+      _ksTkPool.fromDb = true;
+      return freshToken;
+    }
+  } catch (err) {
+    console.warn('[KS token] DB refresh failed:', err.message);
+  }
+
+  // No DB token at all — fall back to session pool (any logged-in user).
+  const poolToken = getStructureToken();
+  if (poolToken) {
+    console.warn('[KS token] No DB token — using session pool token (may 403 if character lacks Keepstar access)');
+  }
+  return poolToken || null;
 }
 
 // ── Haulage provider rate tables (Phase 2) ────────────────────────────────────
@@ -3382,39 +3459,60 @@ app.post('/api/item-details', security.apiLimiter, async (req, res) => {
       mass: item.mass
     } : {};
 
-    // Get market history from ESI (not cached per-item to save memory)
-    const JITA_REGION = 10000002;
-    const historyRes = await esiFetch(
-      `https://esi.evetech.net/latest/markets/${JITA_REGION}/history/?datasource=tranquility&type_id=${typeId}`
-    );
-
+    // Get market history — from structure_market_history for Keepstar, ESI for all others
     let avg30dFromHistory = 0;
-    if (historyRes.ok) {
-      const historyData = await historyRes.json();
-      if (Array.isArray(historyData) && historyData.length > 0) {
-        // Calculate 30-day average BEFORE sorting — ESI returns history oldest-first,
-        // so slice(-30) on the raw array gives the 30 most recent trading days.
-        // IMPORTANT: must happen before .sort() which mutates the array in-place,
-        // changing the order and making slice(-30) return the oldest days instead.
-        const recent30 = historyData.slice(-30);
-        if (recent30.length > 0) {
-          avg30dFromHistory = recent30.reduce((sum, d) => sum + (d.average || 0), 0) / recent30.length;
-        }
-
-        // Sort descending then reverse for chronological chart display (last 90 days)
-        const sorted = historyData
-          .sort((a, b) => new Date(b.date) - new Date(a.date))
-          .slice(0, 90)
-          .reverse();
-
-        itemDetails.priceHistory = sorted.map(day => ({
-          date: day.date,
-          average: day.average,
-          highest: day.highest,
-          lowest: day.lowest,
-          volume: day.volume,
-          orderCount: day.order_count
+    if (regionId === KEEPSTAR_REGION_ID) {
+      const ksRows = await dbAll(
+        `SELECT date, avg_sell, min_sell, max_sell, order_count
+           FROM structure_market_history
+          WHERE structure_id = ? AND type_id = ?
+          ORDER BY date DESC LIMIT 90`,
+        [KEEPSTAR_STRUCTURE_ID, typeId]
+      );
+      if (ksRows.length > 0) {
+        const recent30 = ksRows.slice(0, 30);
+        avg30dFromHistory = recent30.reduce((s, r) => s + (r.avg_sell || 0), 0) / recent30.length;
+        itemDetails.priceHistory = ksRows.reverse().map(r => ({
+          date:       r.date,
+          average:    r.avg_sell,
+          highest:    r.max_sell,
+          lowest:     r.min_sell,
+          orderCount: r.order_count,
         }));
+        itemDetails.priceHistorySource = 'keepstar';
+      }
+    } else {
+      const JITA_REGION = 10000002;
+      const historyRes = await esiFetch(
+        `https://esi.evetech.net/latest/markets/${JITA_REGION}/history/?datasource=tranquility&type_id=${typeId}`
+      );
+      if (historyRes.ok) {
+        const historyData = await historyRes.json();
+        if (Array.isArray(historyData) && historyData.length > 0) {
+          // Calculate 30-day average BEFORE sorting — ESI returns history oldest-first,
+          // so slice(-30) on the raw array gives the 30 most recent trading days.
+          // IMPORTANT: must happen before .sort() which mutates the array in-place,
+          // changing the order and making slice(-30) return the oldest days instead.
+          const recent30 = historyData.slice(-30);
+          if (recent30.length > 0) {
+            avg30dFromHistory = recent30.reduce((sum, d) => sum + (d.average || 0), 0) / recent30.length;
+          }
+
+          // Sort descending then reverse for chronological chart display (last 90 days)
+          const sorted = historyData
+            .sort((a, b) => new Date(b.date) - new Date(a.date))
+            .slice(0, 90)
+            .reverse();
+
+          itemDetails.priceHistory = sorted.map(day => ({
+            date:       day.date,
+            average:    day.average,
+            highest:    day.highest,
+            lowest:     day.lowest,
+            volume:     day.volume,
+            orderCount: day.order_count,
+          }));
+        }
       }
     }
 
@@ -9693,6 +9791,221 @@ setInterval(async () => {
 const pushRoutes = require('./routes/push');
 app.use(pushRoutes({ security, dbRun, dbAll, webpush }));
 
+// ── Keepstar token test routes (development only) ────────────────────────────
+// These two routes let the test-keepstar-poll.js script capture a real EVE
+// refresh token without fighting FORGE's frontend CSRF state check.
+// Redirect URI to register in EVE developer portal:
+//   https://forge-ukc.com/api/ks-test-callback
+//
+// Remove these routes once the full polling feature ships.
+
+const _ksTestState = { value: null, expiry: 0 };
+const KS_TEST_REDIRECT = 'https://forge-ukc.com/api/ks-test-callback';
+const KS_TEST_SCOPE    = 'esi-markets.structure_markets.v1';
+
+// GET /api/ks-test-auth?key=ADMIN_KEY
+// Returns a JSON { url } the test script tells the user to open.
+app.get('/api/ks-test-auth', async (req, res) => {
+  const adminKey = process.env.FORGE_ADMIN_KEY;
+  if (!adminKey || req.query.key !== adminKey) {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+  const state = crypto.randomBytes(16).toString('hex');
+  _ksTestState.value  = state;
+  _ksTestState.expiry = Date.now() + 10 * 60 * 1000; // 10 min
+  const url =
+    'https://login.eveonline.com/v2/oauth/authorize' +
+    '?response_type=code' +
+    `&client_id=${encodeURIComponent(process.env.EVE_CLIENT_ID)}` +
+    `&redirect_uri=${encodeURIComponent(KS_TEST_REDIRECT)}` +
+    `&scope=${encodeURIComponent(KS_TEST_SCOPE)}` +
+    `&state=${state}`;
+  res.json({ url, note: 'Open this URL in your browser, log in as a character with C-J6MT docking access.' });
+});
+
+// GET /api/ks-test-callback?code=&state=
+// Called by EVE SSO after user authorises. Exchanges code, encrypts and stores
+// the refresh token in the test_structure_token table in forge.db, returns HTML.
+app.get('/api/ks-test-callback', async (req, res) => {
+  const { code, state } = req.query;
+  if (!code || !state) return res.status(400).send('<h2>Missing code or state</h2>');
+  if (!_ksTestState.value || Date.now() > _ksTestState.expiry || state !== _ksTestState.value) {
+    return res.status(400).send('<h2>State mismatch or expired — restart the test script and try again</h2>');
+  }
+  _ksTestState.value = null; // one-time use
+
+  try {
+    const authHdr  = 'Basic ' + Buffer.from(`${process.env.EVE_CLIENT_ID}:${process.env.EVE_CLIENT_SECRET}`).toString('base64');
+    const tokenRes = await fetch('https://login.eveonline.com/v2/oauth/token', {
+      method: 'POST',
+      headers: { 'Authorization': authHdr, 'Content-Type': 'application/x-www-form-urlencoded', 'Host': 'login.eveonline.com' },
+      body:    `grant_type=authorization_code&code=${encodeURIComponent(code)}&redirect_uri=${encodeURIComponent(KS_TEST_REDIRECT)}`,
+    });
+    const tokenData = await tokenRes.json();
+    if (!tokenRes.ok || !tokenData.refresh_token) {
+      return res.status(500).send('<h2>Token exchange failed</h2><pre>' + JSON.stringify(tokenData, null, 2) + '</pre>');
+    }
+
+    if (!CORP_ENCRYPTION_KEY) return res.status(500).send('<h2>FORGE_CORP_KEY not configured</h2>');
+    const enc = encryptToken(tokenData.refresh_token);
+
+    await dbRun(`CREATE TABLE IF NOT EXISTS test_structure_token (
+      structure_id      INTEGER PRIMARY KEY,
+      enc_refresh_token TEXT NOT NULL,
+      token_iv          TEXT NOT NULL,
+      token_tag         TEXT NOT NULL,
+      stored_at         TEXT DEFAULT (datetime('now'))
+    )`);
+    await dbRun(
+      `INSERT OR REPLACE INTO test_structure_token (structure_id, enc_refresh_token, token_iv, token_tag)
+       VALUES (?, ?, ?, ?)`,
+      [1049588174021, enc.ciphertext, enc.iv, enc.tag]
+    );
+
+    res.send(`<!doctype html><html><body style="font-family:monospace;padding:2em">
+      <h2 style="color:green">✓ Keepstar token stored</h2>
+      <p>Refresh token encrypted + saved to <code>test_structure_token</code> in forge.db.</p>
+      <p>You can now run <code>node test-keepstar-poll.js</code> — it will use the stored token autonomously.</p>
+      <p>Access token expires in: <strong>${tokenData.expires_in}s</strong></p>
+    </body></html>`);
+  } catch (err) {
+    res.status(500).send('<h2>Error</h2><pre>' + err.message + '</pre>');
+  }
+});
+
+// ── Keepstar market history polling job (v1.34.0) ────────────────────────────
+// Runs every 4 hours. Fetches all sell orders from C-J6MT Keepstar, computes a
+// daily min/avg/max snapshot per type, stores in structure_market_history.
+// Uses the encrypted refresh token from structure_token — no user presence needed.
+
+const KS_POLL_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
+let   ksPollRunning        = false;
+
+async function refreshStructureToken(structureId) {
+  const row = await dbGet(`SELECT * FROM structure_token WHERE structure_id = ?`, [structureId]);
+  if (!row) return null;
+
+  const refreshToken = decryptToken(row.enc_refresh_token, row.token_iv, row.token_tag);
+  const authHdr      = 'Basic ' + Buffer.from(`${process.env.EVE_CLIENT_ID}:${process.env.EVE_CLIENT_SECRET}`).toString('base64');
+
+  const res  = await fetch('https://login.eveonline.com/v2/oauth/token', {
+    method:  'POST',
+    headers: { 'Authorization': authHdr, 'Content-Type': 'application/x-www-form-urlencoded', 'Host': 'login.eveonline.com' },
+    body:    `grant_type=refresh_token&refresh_token=${encodeURIComponent(refreshToken)}`,
+  });
+  const data = await res.json();
+  if (!res.ok || !data.access_token) {
+    console.error(`[KS poll] Token refresh failed (${res.status}):`, data.error_description || data.error);
+    return null;
+  }
+
+  // Store rotated refresh token if EVE issued a new one
+  if (data.refresh_token && data.refresh_token !== refreshToken) {
+    const enc = encryptToken(data.refresh_token);
+    await dbRun(
+      `UPDATE structure_token SET enc_refresh_token=?, token_iv=?, token_tag=?, stored_at=datetime('now') WHERE structure_id=?`,
+      [enc.ciphertext, enc.iv, enc.tag, structureId]
+    );
+  }
+  return data.access_token;
+}
+
+async function pollKeepstarHistory() {
+  if (ksPollRunning) return;
+  ksPollRunning = true;
+  console.log('[KS poll] Starting Keepstar market snapshot...');
+
+  try {
+    const accessToken = await getOrRefreshStructureToken();
+    if (!accessToken) {
+      console.warn('[KS poll] No valid token — skipping. Run /api/ks-test-auth to re-authorise.');
+      return;
+    }
+
+    // Fetch all order pages
+    let page = 1, sellOrders = [];
+    while (true) {
+      const res = await fetch(
+        `https://esi.evetech.net/latest/markets/structures/${KEEPSTAR_STRUCTURE_ID}/?page=${page}&datasource=tranquility`,
+        { headers: { 'Authorization': `Bearer ${accessToken}` } }
+      );
+      if (!res.ok) { console.error(`[KS poll] ESI ${res.status} on page ${page}`); break; }
+      const orders = await res.json();
+      if (!Array.isArray(orders) || orders.length === 0) break;
+      sellOrders.push(...orders.filter(o => !o.is_buy_order));
+      const totalPages = parseInt(res.headers.get('x-pages') || '1');
+      if (page >= totalPages) break;
+      page++;
+    }
+
+    if (sellOrders.length === 0) { console.warn('[KS poll] No sell orders returned'); return; }
+
+    // Group by type_id — track prices AND total available quantity
+    const byType = {};
+    for (const o of sellOrders) {
+      if (!byType[o.type_id]) byType[o.type_id] = { prices: [], qty: 0 };
+      byType[o.type_id].prices.push(o.price);
+      byType[o.type_id].qty += (o.volume_remain || 0);
+    }
+
+    // Load yesterday's total_sell_qty for volume estimation (qty drop = implied sales)
+    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    const prevRows  = await dbAll(
+      `SELECT type_id, total_sell_qty FROM structure_market_history
+        WHERE structure_id = ? AND date = ?`,
+      [KEEPSTAR_STRUCTURE_ID, yesterday]
+    );
+    const prevQtyMap = new Map(prevRows.map(r => [r.type_id, r.total_sell_qty]));
+
+    // Write daily snapshot (INSERT OR REPLACE so re-runs on same day overwrite cleanly)
+    const today = new Date().toISOString().slice(0, 10);
+    let written = 0, volEstimates = 0;
+    for (const [typeIdStr, { prices, qty }] of Object.entries(byType)) {
+      const typeId = parseInt(typeIdStr);
+      const avg    = prices.reduce((a, b) => a + b, 0) / prices.length;
+      await dbRun(
+        `INSERT OR REPLACE INTO structure_market_history
+           (structure_id, type_id, date, avg_sell, min_sell, max_sell, order_count, total_sell_qty)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [KEEPSTAR_STRUCTURE_ID, typeId, today,
+         +avg.toFixed(2), Math.min(...prices), Math.max(...prices), prices.length, qty]
+      );
+      written++;
+
+      // Volume estimate: if quantity dropped vs yesterday, implied sales = drop
+      // Guard: only use if drop is positive and plausible (< 10× today's qty, avoids
+      // new listing floods looking like massive sales)
+      const prevQty = prevQtyMap.get(typeId);
+      if (prevQty != null && prevQty > qty) {
+        const impliedVol = prevQty - qty;
+        if (impliedVol > 0 && impliedVol < qty * 10 + 1000) {
+          await dbRun(
+            `INSERT INTO hub_history_prices (type_id, region_id, avg_30d_volume, updated_at)
+             VALUES (?, ?, ?, datetime('now'))
+             ON CONFLICT(type_id, region_id) DO UPDATE SET
+               avg_30d_volume = ROUND((avg_30d_volume * 29 + excluded.avg_30d_volume) / 30, 2),
+               updated_at     = datetime('now')`,
+            [typeId, KEEPSTAR_REGION_ID, impliedVol]
+          );
+          volEstimates++;
+        }
+      }
+    }
+
+    // Prune rows older than 95 days to keep DB lean
+    await dbRun(
+      `DELETE FROM structure_market_history WHERE structure_id=? AND date < date('now', '-95 days')`,
+      [KEEPSTAR_STRUCTURE_ID]
+    );
+
+    console.log(`[KS poll] ✓ Wrote ${written} type snapshots for ${today} (${sellOrders.length} sell orders, ${volEstimates} vol estimates)`);
+  } catch (err) {
+    console.error('[KS poll] Error:', err.message);
+  } finally {
+    ksPollRunning = false;
+  }
+}
+
 // START SERVER
 initDatabase().then(async () => {
   // Run v0.9.0 migrations
@@ -9709,6 +10022,10 @@ initDatabase().then(async () => {
   // prevent idle-stop from firing before any real user request arrives.
   lastTradingRequestAt = Date.now();
   ensureHubPollerRunning('jita');
+
+  // Keepstar history poller — run once at startup then every 4 hours
+  pollKeepstarHistory();
+  setInterval(pollKeepstarHistory, KS_POLL_INTERVAL_MS);
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`

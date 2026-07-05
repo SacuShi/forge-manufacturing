@@ -347,9 +347,11 @@ export interface ItemDetailApiResponse {
     average: number;
     highest: number;
     lowest: number;
-    volume: number;
+    volume?: number;
     orderCount: number;
   }>;
+  /** 'keepstar' when history comes from structure_market_history; absent for Jita ESI */
+  priceHistorySource?: string;
   currentPrice?: {
     sell: number;
     buy: number;
