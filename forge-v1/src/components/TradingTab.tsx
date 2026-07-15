@@ -595,7 +595,7 @@ const TradingTab: FC<TradingTabProps> = ({ token }) => {
           {/* Filters */}
           <div className="td-filters">
             <label className="td-filter-label">
-              Min trade profit
+              Min spread profit
               <div className="td-filter-input-row">
                 <input type="range" min={0} max={50} step={0.5} value={minMargin}
                   onChange={e => setMinMargin(Number(e.target.value))} className="td-slider" />
@@ -694,10 +694,15 @@ const TradingTab: FC<TradingTabProps> = ({ token }) => {
             )}
             {!scanning && !scanData && !scanError && !token &&
               <div className="td-state-msg">Log in to use the scanner.</div>}
-            {!scanning && scanData && selectedHub === 'keepstar' && (
+            {!scanning && scanData && selectedHub === 'keepstar' && scanData.hubVolumeEnriched && (
+              <div className="td-hub-info-banner td-hub-info-ok">
+                ✓ Vol/day estimated from FORGE's autonomous Keepstar polling (sell-quantity tracking, 30-day rolling avg).
+                Items showing <strong>—</strong> haven't traded recently or are newly listed.
+              </div>
+            )}
+            {!scanning && scanData && selectedHub === 'keepstar' && !scanData.hubVolumeEnriched && (
               <div className="td-hub-info-banner">
-                ⓘ Vol/day not available for player structures — ESI has no market history endpoint for Keepstars.
-                Use spread and order depth to judge liquidity manually.
+                ⓘ Collecting Keepstar volume data — polling runs every 4 hours. Vol/day will populate as data accumulates.
               </div>
             )}
             {!scanning && scanData && selectedHub !== 'jita' && selectedHub !== 'keepstar' && !scanData.hubVolumeEnriched && (

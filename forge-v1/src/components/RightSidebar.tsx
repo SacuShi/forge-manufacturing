@@ -22,7 +22,8 @@
  */
 
 import { useMemo, useState, useCallback, useRef, useEffect, Fragment, type FC } from 'react';
-import type { ItemDetail, ItemDetailApiResponse, EsiBlueprint, Market, TrueCostResponse, AltCharacter, MaterialBreakdownResponse, BreakdownMaterial, JumpClone, MaterialStockCheckResponse } from '../types';
+import type { ItemDetail, ItemDetailApiResponse, EsiBlueprint, Market, TrueCostResponse, AltCharacter, MaterialBreakdownResponse, BreakdownMaterial, JumpClone, MaterialStockCheckResponse, InterHubArbRow, InterHubHaulResult } from '../types';
+import { INVENTION_DECRYPTORS } from '../types';
 import { apiPost } from '../api/client';
 import { formatPerDay, liquidityInfo } from '../utils/format';
 
@@ -75,6 +76,18 @@ interface RightSidebarProps {
   jumpClones:           JumpClone[];
   selectedImplants:     number[];
   onImplantsChange:     (implants: number[]) => void;
+  // v1.35.0 — invention decryptor + manual probability bonus
+  inventionDecryptorType:      string | null;
+  onInventionDecryptorChange:  (type: string | null) => void;
+  inventionProbBonus:          number;
+  onInventionProbBonusChange:  (bonus: number) => void;
+  // Inter-Hub Arb — non-null when the selected item was clicked from the arb tab.
+  // RightSidebar renders the trade view instead of the manufacturing view.
+  interHubContext?:           InterHubArbRow | null;
+  interHubHaulData?:          InterHubHaulResult | null;
+  interHubHaulLoading?:       boolean;
+  /** v1.35.0 — opens the inter-hub haul config panel (independent from mfg haul) */
+  onConfigureInterHubHaul?:   () => void;
   // v1.33.3 — live per-material stock check for the shortfall banner
   /** Hub where missing materials would actually be purchased */
   materialRegionId:     number;
@@ -328,6 +341,14 @@ const RightSidebar: FC<RightSidebarProps> = ({
   materialRegionId,
   materialMarketName,
   walletISK,
+  inventionDecryptorType,
+  onInventionDecryptorChange,
+  inventionProbBonus,
+  onInventionProbBonusChange,
+  interHubContext            = null,
+  interHubHaulData           = null,
+  interHubHaulLoading        = false,
+  onConfigureInterHubHaul    = () => {},
 }) => {
   const isJita       = selectedMarket.id === 10000002;
   const marketLabel  = `${selectedMarket.name}${selectedMarket.type === 'nullsec' ? ' [NULLSEC]' : ''}`;
@@ -561,6 +582,19 @@ const RightSidebar: FC<RightSidebarProps> = ({
             )}
             {/* ── Owned / Not Owned indicator ──────────────────────────── */}
             {(() => {
+              if (interHubContext) {
+                return (
+                  <div style={{ marginTop: 4 }}>
+                    <span style={{
+                      fontSize: 10, fontWeight: 600, letterSpacing: 0.3,
+                      background: 'var(--color-accent-primary)',
+                      color: 'white', borderRadius: 3, padding: '2px 7px',
+                    }}>
+                      ⟺ {interHubContext.buy_hub_name} → {interHubContext.sell_hub_name}
+                    </span>
+                  </div>
+                );
+              }
               const isOwned = selectedTypeId ? ownedProductTypeIds.has(selectedTypeId) : false;
               if (isBlueprintClick && blueprint) {
                 // Clicked directly from blueprints tab — show exact type + ME/TE
@@ -604,8 +638,279 @@ const RightSidebar: FC<RightSidebarProps> = ({
           </button>
         </div>
 
+        {/* ── Inter-Hub Trade View ────────────────────────────────────────── */}
+        {interHubContext && (() => {
+          // Use character's actual rates once loaded; fall back to Accounting V estimate while loading
+          const taxRate    = interHubHaulData ? interHubHaulData.transaction_tax_rate : 0.03375;
+          const brokerRate = interHubHaulData ? interHubHaulData.broker_fee_rate      : null;
+          const taxAmount  = interHubContext.sell_into * taxRate;
+          const brokerAmt  = brokerRate != null ? interHubContext.sell_into * brokerRate : null;
+          const haulCost   = interHubHaulData?.haul_cost ?? 0;
+          // net_profit (from arb row) used TAX=0.964 estimate; recalc with real rates once loaded
+          const netProfitReal = interHubHaulData
+            ? interHubContext.sell_into * (1 - taxRate) - interHubContext.buy_at
+            : interHubContext.net_profit;
+          const netMarginReal = interHubContext.buy_at > 0
+            ? (netProfitReal / interHubContext.buy_at) * 100
+            : interHubContext.net_margin_pct;
+          const afterHaul  = interHubHaulData?.haul_enabled ? netProfitReal - haulCost : null;
+          const row        = interHubContext;
+          const haul       = interHubHaulData;
+          const haulLabel  = haul?.haul_enabled
+            ? `${haul.method_label}${(haul.contracts ?? 0) > 1 ? `, ${haul.contracts} contracts` : ''}`
+            : null;
+
+          const rowStyle: React.CSSProperties = {
+            display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+            gap: 8, padding: '3px 0',
+          };
+          const labelStyle: React.CSSProperties = {
+            fontSize: 11, color: 'var(--color-text-tertiary)', flexShrink: 0,
+          };
+          const valueStyle: React.CSSProperties = { fontSize: 12, fontWeight: 500, textAlign: 'right' };
+
+          return (
+            <>
+              {/* Price breakdown */}
+              <div className="detail-section">
+                <div className="detail-section-heading">Trade Breakdown</div>
+
+                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                  {/* Buy at */}
+                  <div style={rowStyle}>
+                    <span style={labelStyle}>Buy at (sell orders, {row.buy_hub_name})</span>
+                    <span style={valueStyle}>{formatISK(row.buy_at)}</span>
+                  </div>
+                  {(row.sell_orders_at_buy != null || row.sell_vol_at_buy != null) && (
+                    <div style={{ ...rowStyle, marginTop: -2, marginBottom: 2 }}>
+                      <span style={{ ...labelStyle, fontSize: 9, color: 'var(--color-text-tertiary)', paddingLeft: 8 }}>
+                        {row.sell_orders_at_buy != null ? `${row.sell_orders_at_buy.toLocaleString()} sell orders` : ''}
+                        {row.sell_orders_at_buy != null && row.sell_vol_at_buy != null ? ' · ' : ''}
+                        {row.sell_vol_at_buy != null ? `${row.sell_vol_at_buy.toLocaleString()} units at best` : ''}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Haul */}
+                  {interHubHaulLoading ? (
+                    <div style={{ ...rowStyle }}>
+                      <span style={labelStyle}>Haul cost</span>
+                      <span style={{ ...valueStyle, color: 'var(--color-text-tertiary)', fontSize: 11 }}>calculating…</span>
+                    </div>
+                  ) : haul?.haul_enabled ? (
+                    <div style={rowStyle}>
+                      <span style={labelStyle}>Haul ({haulLabel}{haul.jumps > 0 ? `, ${haul.jumps} jumps` : ''})</span>
+                      <span style={{ ...valueStyle, color: haulCost > 0 ? 'var(--color-danger)' : 'var(--color-text-tertiary)' }}>
+                        {haulCost > 0 ? `−${formatISK(haulCost)}` : '—'}
+                      </span>
+                    </div>
+                  ) : (
+                    <div style={rowStyle}>
+                      <span style={labelStyle}>Haul cost</span>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ ...valueStyle, color: 'var(--color-text-tertiary)', fontSize: 10 }}>not configured</span>
+                        <button
+                          type="button"
+                          onClick={onConfigureInterHubHaul}
+                          title="Configure inter-hub haulage"
+                          style={{
+                            fontSize: 9, padding: '1px 6px', borderRadius: 10,
+                            background: 'rgba(79,195,247,0.12)',
+                            border: '0.5px solid rgba(79,195,247,0.35)',
+                            color: 'var(--color-accent-primary)',
+                            cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap',
+                          }}
+                        >
+                          ⚙ Configure haulage
+                        </button>
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Sales tax — rate from Accounting skill once haul data loads */}
+                  <div style={rowStyle}>
+                    <span style={labelStyle}>
+                      Transaction tax
+                      {haul ? ` (Accounting ${haul.accounting_level}, ${(taxRate * 100).toFixed(2)}%)` : ' (est. Acct V)'}
+                    </span>
+                    <span style={{ ...valueStyle, color: 'var(--color-danger)' }}>−{formatISK(taxAmount)}</span>
+                  </div>
+
+                  {/* Broker fee — only applicable when placing sell orders (not filling buy orders) */}
+                  {brokerAmt != null && (
+                    <div style={rowStyle}>
+                      <span style={labelStyle}>
+                        Broker fee if placing orders
+                        {haul ? ` (BR ${haul.broker_relations}, ${(brokerRate! * 100).toFixed(2)}%)` : ''}
+                      </span>
+                      <span style={{ ...valueStyle, color: 'var(--color-warning)', fontSize: 11 }}>
+                        −{formatISK(brokerAmt)}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Divider */}
+                  <div style={{ height: 0.5, background: 'var(--color-border-light)', margin: '6px 0' }} />
+
+                  {/* Sell into */}
+                  <div style={rowStyle}>
+                    <span style={labelStyle}>Sell into (buy orders, {row.sell_hub_name})</span>
+                    <span style={valueStyle}>{formatISK(row.sell_into)}</span>
+                  </div>
+                  {(row.buy_orders_at_sell != null || row.buy_vol_at_sell != null) && (
+                    <div style={{ ...rowStyle, marginTop: -2 }}>
+                      <span style={{ ...labelStyle, fontSize: 9, color: 'var(--color-text-tertiary)', paddingLeft: 8 }}>
+                        {row.buy_orders_at_sell != null ? `${row.buy_orders_at_sell.toLocaleString()} buy orders` : ''}
+                        {row.buy_orders_at_sell != null && row.buy_vol_at_sell != null ? ' · ' : ''}
+                        {row.buy_vol_at_sell != null ? `${row.buy_vol_at_sell.toLocaleString()} units at best` : ''}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Net profit summary */}
+              <div className="detail-section">
+                <div className="detail-section-heading">Net Result</div>
+                <div style={{ display: 'grid', gridTemplateColumns: afterHaul !== null ? '1fr 1fr 1fr' : '1fr 1fr', gap: 4 }}>
+                  <div className="stat-card" style={{ textAlign: 'center' }}>
+                    <div className="stat-card-label">PROFIT / UNIT</div>
+                    <div className="stat-card-value" style={{
+                      color: netProfitReal > 0 ? 'var(--color-success)' : 'var(--color-danger)',
+                      fontSize: 13,
+                    }}>
+                      {formatISK(netProfitReal)}
+                    </div>
+                  </div>
+                  <div className="stat-card" style={{ textAlign: 'center' }}>
+                    <div className="stat-card-label">MARGIN</div>
+                    <div className="stat-card-value" style={{
+                      color: netMarginReal >= 10 ? 'var(--color-success)' : netMarginReal >= 5 ? 'var(--color-warning)' : 'var(--color-text-secondary)',
+                      fontSize: 13,
+                    }}>
+                      {netMarginReal.toFixed(1)}%
+                    </div>
+                  </div>
+                  {afterHaul !== null && (
+                    <div className="stat-card" style={{ textAlign: 'center' }}>
+                      <div className="stat-card-label">AFTER HAUL</div>
+                      <div className="stat-card-value" style={{
+                        color: afterHaul > 0 ? 'var(--color-success)' : 'var(--color-danger)',
+                        fontSize: 13,
+                      }}>
+                        {formatISK(afterHaul)}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Cargo stats */}
+              <div className="detail-section">
+                <div className="detail-section-heading">Cargo &amp; Volume</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 }}>
+                  {row.volume_m3 > 0 && (
+                    <div className="stat-card" style={{ textAlign: 'center' }}>
+                      <div className="stat-card-label">VOL / UNIT</div>
+                      <div className="stat-card-value" style={{ fontSize: 12 }}>
+                        {row.volume_m3 < 1 ? row.volume_m3.toFixed(3) : row.volume_m3.toFixed(2)} m³
+                      </div>
+                    </div>
+                  )}
+                  {row.isk_per_m3 != null && (
+                    <div className="stat-card" style={{ textAlign: 'center' }}>
+                      <div className="stat-card-label">ISK / M³</div>
+                      <div className="stat-card-value" style={{ fontSize: 12 }}>{formatISK(row.isk_per_m3)}</div>
+                    </div>
+                  )}
+                  {row.avg_daily_volume != null && (
+                    <div className="stat-card" style={{ textAlign: 'center' }}>
+                      <div className="stat-card-label">VOL / DAY</div>
+                      <div className="stat-card-value" style={{ fontSize: 12 }}>
+                        {row.avg_daily_volume >= 1000
+                          ? (row.avg_daily_volume / 1000).toFixed(1) + 'k'
+                          : row.avg_daily_volume.toFixed(0)}
+                      </div>
+                    </div>
+                  )}
+                  {row.avg_daily_volume != null && (
+                    <div className="stat-card" style={{ textAlign: 'center' }}>
+                      <div className="stat-card-label">EST. DAILY</div>
+                      <div className="stat-card-value" style={{
+                        color: netProfitReal > 0 ? 'var(--color-success)' : 'var(--color-danger)',
+                        fontSize: 12,
+                      }}>
+                        {formatISK(netProfitReal * row.avg_daily_volume)}
+                      </div>
+                    </div>
+                  )}
+                  {afterHaul !== null && row.avg_daily_volume != null && (
+                    <div className="stat-card" style={{ textAlign: 'center', gridColumn: '1 / -1' }}>
+                      <div className="stat-card-label">EST. DAILY (AFTER HAUL)</div>
+                      <div className="stat-card-value" style={{
+                        color: (afterHaul * row.avg_daily_volume) > 0 ? 'var(--color-success)' : 'var(--color-danger)',
+                        fontSize: 12,
+                      }}>
+                        {formatISK(afterHaul * row.avg_daily_volume)}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Jump count from haul data */}
+                {(haul?.jumps ?? 0) > 0 && (
+                  <div style={{ marginTop: 6, fontSize: 10, color: 'var(--color-text-tertiary)' }}>
+                    Route: {row.buy_hub_name} → {row.sell_hub_name} · {haul!.jumps} jump{haul!.jumps !== 1 ? 's' : ''}
+                  </div>
+                )}
+              </div>
+
+              {/* ── Capital & Risk ─────────────────────────────────────── */}
+              <div className="detail-section" style={{ marginTop: 0 }}>
+                <div className="detail-section-heading">Capital &amp; Risk</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 }}>
+                  <div className="stat-card" style={{ textAlign: 'center' }}
+                    title="Cash tied up per unit while in transit (buy price + haul cost)">
+                    <div className="stat-card-label">CAPITAL / UNIT</div>
+                    <div className="stat-card-value" style={{ fontSize: 12 }}>
+                      {formatISK(row.buy_at + (haul?.haul_enabled ? haulCost : 0))}
+                    </div>
+                  </div>
+                  {row.avg_daily_volume != null && (
+                    <div className="stat-card" style={{ textAlign: 'center' }}
+                      title="Full capital needed to move one day's worth of volume">
+                      <div className="stat-card-label">DAILY CAPITAL</div>
+                      <div className="stat-card-value" style={{ fontSize: 12 }}>
+                        {formatISK((row.buy_at + (haul?.haul_enabled ? haulCost : 0)) * row.avg_daily_volume)}
+                      </div>
+                    </div>
+                  )}
+                  {netProfitReal > 0 && row.buy_at > 0 && (
+                    <div className="stat-card" style={{ textAlign: 'center' }}
+                      title="How many units you need to sell to recover one unit's capital outlay">
+                      <div className="stat-card-label">BREAK-EVEN UNITS</div>
+                      <div className="stat-card-value" style={{ fontSize: 12 }}>
+                        {Math.ceil(row.buy_at / netProfitReal).toLocaleString()}
+                      </div>
+                    </div>
+                  )}
+                  {row.avg_daily_volume != null && row.avg_daily_volume < 5 && (
+                    <div className="stat-card" style={{ textAlign: 'center', gridColumn: netProfitReal > 0 && row.buy_at > 0 ? undefined : '1 / -1' }}
+                      title="Low daily volume — orders may sit unsold for extended periods">
+                      <div className="stat-card-label" style={{ color: 'var(--color-warning)' }}>⚠ THIN MARKET</div>
+                      <div className="stat-card-value" style={{ fontSize: 11, color: 'var(--color-warning)' }}>
+                        {row.avg_daily_volume.toFixed(1)} / day
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </>
+          );
+        })()}
+
         {/* ── Blueprint info block (BPO/BPC, ME, TE, Runs) ───────────────── */}
-        {blueprint && (
+        {!interHubContext && blueprint && (
           <div className="detail-section" style={{ paddingBottom: 6 }}>
             <div className="detail-section-heading">Blueprint Details</div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 4 }}>
@@ -643,7 +948,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
         )}
 
         {/* ── Loading indicator ───────────────────────────────────────────── */}
-        {detailLoading && (
+        {!interHubContext && detailLoading && (
           <div style={{ color: 'var(--color-text-tertiary)', fontSize: 11, textAlign: 'center', padding: 16 }}>
             <div className="loading-spinner" style={{ width: 20, height: 20, margin: '0 auto 8px' }} />
             Loading item details…
@@ -651,23 +956,20 @@ const RightSidebar: FC<RightSidebarProps> = ({
         )}
 
         {/* ── API error (non-fatal) ────────────────────────────────────────── */}
-        {detailError && !detailLoading && (
+        {!interHubContext && detailError && !detailLoading && (
           <div style={{ color: 'var(--color-danger)', fontSize: 11, textAlign: 'center', padding: 12 }}>
             ⚠ {detailError}
           </div>
         )}
 
         {/* ── Live data from /api/item-details ────────────────────────────── */}
-        {apiDetail && !detailLoading && (
+        {!interHubContext && apiDetail && !detailLoading && (
           <>
-            {/* Build readiness badge */}
+            {/* Build readiness badge — only positive/negative ownership; missing-materials moved below Limited Stock */}
             {apiDetail.buildInfo && (
               <div style={{ padding: '6px 12px' }}>
                 {apiDetail.buildInfo.blueprintOwned && apiDetail.buildInfo.canBuild && (
                   <span className="status-badge can-build">✓ Can Build Now</span>
-                )}
-                {apiDetail.buildInfo.blueprintOwned && !apiDetail.buildInfo.canBuild && (
-                  <span className="status-badge missing">⚠ Missing Materials</span>
                 )}
                 {!apiDetail.buildInfo.blueprintOwned && (
                   <span className="status-badge no-bp">✗ No Blueprint</span>
@@ -939,49 +1241,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
                   })}
                 </div>
 
-                {/* Shortage summary + Multibuy copy */}
-                {missing.length > 0 && (() => {
-                  const shortfallTotal = missing.reduce(
-                    (s, m) => s + m.shortForRuns * (m.unitCost ?? 0), 0
-                  );
-                  return (
-                    <div style={{ marginTop: 6, padding: '6px 8px', borderRadius: 3,
-                      background: 'rgba(244, 67, 54, 0.08)', border: '0.5px solid rgba(244, 67, 54, 0.2)',
-                      fontSize: 10, color: 'var(--color-danger)',
-                      display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                      <span>
-                        {missing.length} material{missing.length !== 1 ? 's' : ''} short
-                        {shortfallTotal > 0 && <> · {formatISK(shortfallTotal)} to buy</>}
-                      </span>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); copyShortfall(); }}
-                        title={`Copy shortfall list to clipboard in EVE Multibuy format.\nPaste directly into the Multibuy window (right-click → Paste).\nQuantities are raw blueprint amounts × runs (before ME adjustment).`}
-                        style={{
-                          background: copiedShortfall
-                            ? 'rgba(76, 175, 80, 0.18)' : 'rgba(244, 67, 54, 0.15)',
-                          color: copiedShortfall
-                            ? 'var(--color-success)' : 'var(--color-danger)',
-                          border: `0.5px solid ${copiedShortfall
-                            ? 'rgba(76, 175, 80, 0.4)' : 'rgba(244, 67, 54, 0.35)'}`,
-                          borderRadius: 3,
-                          padding: '2px 7px',
-                          fontSize: 9,
-                          cursor: 'pointer',
-                          fontFamily: 'inherit',
-                          flexShrink: 0,
-                          transition: 'background 0.15s, color 0.15s, border-color 0.15s',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {copiedShortfall ? '✓ Copied!' : '📋 Multibuy'}
-                      </button>
-                    </div>
-                  );
-                })()}
-
-                {/* v1.33.3 — live stock-check indicator: hover (desktop) or tap (mobile)
-                    for the detail. Nested inside the existing shortfall state — doesn't
-                    touch the top-level ✓/⚠/✗ badge's ownership-based meaning. */}
+                {/* v1.33.3 — Buyable Now / Limited Stock / Can't Afford pill (shown first) */}
                 {missing.length > 0 && stockCheck && (() => {
                   const STOCK_CHECK_CFG = {
                     ok:      { icon: '✓', label: 'Buyable Now',    color: 'var(--color-success)', bg: 'rgba(76, 175, 80, 0.08)',  border: 'rgba(76, 175, 80, 0.2)' },
@@ -995,7 +1255,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
                     .map(m => itemNames.get(m.materialId) ?? `Material #${m.materialId}`);
 
                   const message = stockCheck.verdict === 'ok'
-                    ? `Missing materials are available on the ${materialMarketName} market — buying them now costs ${formatISK(stockCheck.totalCost)}, within your ${formatISK(walletISK)} wallet. Use Multibuy above to purchase the shortfall.`
+                    ? `Missing materials are available on the ${materialMarketName} market — buying them now costs ${formatISK(stockCheck.totalCost)}, within your ${formatISK(walletISK)} wallet. Use Multibuy below to purchase the shortfall.`
                     : stockCheck.verdict === 'mixed'
                     ? `${thinNames.join(', ')} ${thinNames.length === 1 ? 'has' : 'have'} limited stock on the ${materialMarketName} market right now — not enough listed to fill the full shortage. The rest can be bought for ~${formatISK(stockCheck.totalCost)}.`
                     : `Materials are in stock on the ${materialMarketName} market, but buying them (${formatISK(stockCheck.totalCost)}) would exceed your ${formatISK(walletISK)} wallet.`;
@@ -1031,6 +1291,44 @@ const RightSidebar: FC<RightSidebarProps> = ({
                   );
                 })()}
 
+                {/* Missing Materials banner + Multibuy — full-width, below stock-check pill */}
+                {missing.length > 0 && (() => {
+                  const shortfallTotal = missing.reduce(
+                    (s, m) => s + m.shortForRuns * (m.unitCost ?? 0), 0
+                  );
+                  return (
+                    <div style={{
+                      marginTop: 6, padding: '6px 8px', borderRadius: 3,
+                      background: 'rgba(244, 67, 54, 0.08)', border: '0.5px solid rgba(244, 67, 54, 0.2)',
+                      fontSize: 10, color: 'var(--color-danger)',
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+                    }}>
+                      <span>
+                        ⚠ Missing Materials · {missing.length} material{missing.length !== 1 ? 's' : ''} short
+                        {shortfallTotal > 0 && <> · {formatISK(shortfallTotal)} to buy</>}
+                      </span>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); copyShortfall(); }}
+                        title={`Copy shortfall list to clipboard in EVE Multibuy format.\nPaste directly into the Multibuy window (right-click → Paste).\nQuantities are raw blueprint amounts × runs (before ME adjustment).`}
+                        style={{
+                          background: copiedShortfall
+                            ? 'rgba(76, 175, 80, 0.18)' : 'rgba(244, 67, 54, 0.15)',
+                          color: copiedShortfall
+                            ? 'var(--color-success)' : 'var(--color-danger)',
+                          border: `0.5px solid ${copiedShortfall
+                            ? 'rgba(76, 175, 80, 0.4)' : 'rgba(244, 67, 54, 0.35)'}`,
+                          borderRadius: 3, padding: '2px 7px', fontSize: 9,
+                          cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0,
+                          transition: 'background 0.15s, color 0.15s, border-color 0.15s',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {copiedShortfall ? '✓ Copied!' : '📋 Multibuy'}
+                      </button>
+                    </div>
+                  );
+                })()}
+
               </div>
             )}
 
@@ -1042,11 +1340,188 @@ const RightSidebar: FC<RightSidebarProps> = ({
                   : apiDetail.description}
               </div>
             )}
+
+            {/* ── Invention origin (T2 items) ───────────────────────────────── */}
+            {apiDetail.inventionInfo && (() => {
+              const decr = INVENTION_DECRYPTORS.find(d => d.type === (inventionDecryptorType || 'none')) ?? INVENTION_DECRYPTORS[0];
+              const adjProb = Math.min(1, apiDetail.inventionInfo.baseProbability * (1 + decr.probMult / 100) + (inventionProbBonus / 100));
+              const adjAttempts = 1 / adjProb;
+              const adjRuns = apiDetail.inventionInfo.outputRuns + decr.runs;
+              return (
+                <div className="detail-section">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                    <div className="detail-section-heading" style={{ marginBottom: 0 }}>Invention</div>
+                    <select
+                      value={inventionDecryptorType || 'none'}
+                      onChange={e => onInventionDecryptorChange(e.target.value === 'none' ? null : e.target.value)}
+                      style={{ fontSize: 10, background: 'var(--color-bg-elevated)', color: '#ff9800', border: '0.5px solid rgba(255,152,0,0.4)', borderRadius: 'var(--radius-sm)', padding: '2px 4px', cursor: 'pointer' }}
+                    >
+                      {INVENTION_DECRYPTORS.map(d => (
+                        <option key={d.type} value={d.type}>{d.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginBottom: 6 }}>
+                    Invented from:{' '}
+                    <span style={{ color: 'var(--color-text-primary)', fontWeight: 500 }}>
+                      {apiDetail.inventionInfo.t1BlueprintName ?? `Blueprint #${apiDetail.inventionInfo.t1BlueprintId}`}
+                    </span>
+                  </div>
+                  <div className="stat-card" style={{ marginBottom: 2 }}>
+                    <div className="stat-card-label">Chance per attempt</div>
+                    <div className="stat-card-value" style={{ fontWeight: 600 }}>
+                      {(adjProb * 100).toFixed(1)}%
+                      {decr.probMult !== 0 && (
+                        <span style={{ color: 'var(--color-text-tertiary)', fontSize: 10, marginLeft: 4 }}>
+                          (base {(apiDetail.inventionInfo.baseProbability * 100).toFixed(1)}%)
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="stat-card" style={{ marginBottom: 2 }}>
+                    <div className="stat-card-label">Expected attempts per BPC</div>
+                    <div className="stat-card-value">{adjAttempts.toFixed(2)}×</div>
+                  </div>
+                  <div className="stat-card" style={{ marginBottom: 6 }}>
+                    <div className="stat-card-label">Runs per invented BPC</div>
+                    <div className="stat-card-value">
+                      {adjRuns}
+                      {decr.runs !== 0 && <span style={{ color: 'var(--color-text-tertiary)', fontSize: 10, marginLeft: 4 }}>(base {apiDetail.inventionInfo.outputRuns})</span>}
+                    </div>
+                  </div>
+                  {decr.type !== 'none' && (
+                    <div style={{ fontSize: 10, color: 'var(--color-text-tertiary)', marginBottom: 6 }}>
+                      Decryptor: ME{decr.me >= 0 ? '+' : ''}{decr.me} · TE{decr.te >= 0 ? '+' : ''}{decr.te} on output BPC
+                    </div>
+                  )}
+                  <div style={{ fontSize: 10, color: 'var(--color-text-tertiary)', marginBottom: 4 }}>Datacores per attempt:</div>
+                  {apiDetail.inventionInfo.datacores.map(dc => (
+                    <div key={dc.materialId} className="stat-card" style={{ marginBottom: 2 }}>
+                      <div className="stat-card-label">{dc.name} ×{dc.quantity}</div>
+                      <div className="stat-card-value">{dc.unitPrice > 0 ? formatISK(dc.unitPrice) + '/ea' : '—'}</div>
+                    </div>
+                  ))}
+                  {(() => {
+                    const skillCost = trueCostData?.invention_cost?.per_bpc_cost;
+                    const displayCost = skillCost ?? (apiDetail.inventionInfo.perBpcCost > 0 ? apiDetail.inventionInfo.perBpcCost : null);
+                    if (!displayCost) return null;
+                    const hasSkills = skillCost != null;
+                    return (
+                      <div className="stat-card" style={{ marginTop: 4, borderTop: '1px solid var(--color-border)' }}>
+                        <div className="stat-card-label">
+                          Est. cost/BPC
+                          {hasSkills
+                            ? <span style={{ color: 'var(--color-text-tertiary)', marginLeft: 4 }}>(your skills + decryptor)</span>
+                            : <span style={{ color: 'var(--color-text-tertiary)', marginLeft: 4 }}>(base prob, no skills)</span>
+                          }
+                        </div>
+                        <div className="stat-card-value" style={{ color: 'var(--color-danger)' }}>
+                          {formatISK(displayCost)}
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              );
+            })()}
+
+            {/* ── Invention options (T1 items) ──────────────────────────────── */}
+            {apiDetail.inventionOptions && apiDetail.inventionOptions.length > 0 && (() => {
+              const decr = INVENTION_DECRYPTORS.find(d => d.type === (inventionDecryptorType || 'none')) ?? INVENTION_DECRYPTORS[0];
+              return (
+                <div className="detail-section" style={{
+                  border: '1px solid rgba(255,152,0,0.35)', borderRadius: 'var(--radius-sm)',
+                  padding: '8px 10px', background: 'rgba(255,152,0,0.04)',
+                }}>
+                  {/* Header row with decryptor selector */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                    <div className="detail-section-heading" style={{ color: '#ff9800', marginBottom: 0 }}>
+                      Can Invent Into (T2)
+                    </div>
+                    <select
+                      value={inventionDecryptorType || 'none'}
+                      onChange={e => onInventionDecryptorChange(e.target.value === 'none' ? null : e.target.value)}
+                      style={{ fontSize: 10, background: 'var(--color-bg-elevated)', color: '#ff9800', border: '0.5px solid rgba(255,152,0,0.4)', borderRadius: 'var(--radius-sm)', padding: '2px 4px', cursor: 'pointer' }}
+                    >
+                      {INVENTION_DECRYPTORS.map(d => (
+                        <option key={d.type} value={d.type}>{d.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Decryptor stats badge (when one is selected) */}
+                  {decr.type !== 'none' && (
+                    <div style={{ fontSize: 10, color: '#ff9800', opacity: 0.75, marginBottom: 8, padding: '3px 6px', background: 'rgba(255,152,0,0.08)', borderRadius: 'var(--radius-sm)', border: '0.5px solid rgba(255,152,0,0.2)' }}>
+                      {decr.name}: {decr.probMult > 0 ? '+' : ''}{decr.probMult}% chance · {decr.runs >= 0 ? '+' : ''}{decr.runs} runs · ME{decr.me >= 0 ? '+' : ''}{decr.me} · TE{decr.te >= 0 ? '+' : ''}{decr.te}
+                    </div>
+                  )}
+
+                  {/* Probability bonus input */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                    <span style={{ fontSize: 10, color: '#ff9800', opacity: 0.7, flexShrink: 0 }}>Extra prob bonus %</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      step={1}
+                      value={inventionProbBonus}
+                      onChange={e => onInventionProbBonusChange(Math.max(0, Math.min(100, Number(e.target.value) || 0)))}
+                      style={{ width: 48, fontSize: 10, background: 'var(--color-bg-elevated)', color: 'var(--color-text-primary)', border: '0.5px solid rgba(255,152,0,0.3)', borderRadius: 'var(--radius-sm)', padding: '2px 4px', textAlign: 'right' }}
+                    />
+                    <span style={{ fontSize: 9, color: 'var(--color-text-tertiary)' }}>rigs / implants</span>
+                  </div>
+
+                  {/* Datacores */}
+                  {apiDetail.inventionDatacores && apiDetail.inventionDatacores.length > 0 && (
+                    <div style={{ marginBottom: 8 }}>
+                      <div style={{ fontSize: 10, color: '#ff9800', opacity: 0.7, marginBottom: 4 }}>Datacores per attempt:</div>
+                      {apiDetail.inventionDatacores.map(dc => (
+                        <div key={dc.materialId} className="stat-card" style={{ marginBottom: 2, border: '0.5px solid rgba(255,152,0,0.2)' }}>
+                          <div className="stat-card-label" style={{ color: '#ff9800', opacity: 0.85 }}>{dc.name} ×{dc.quantity}</div>
+                          <div className="stat-card-value">{dc.unitPrice > 0 ? formatISK(dc.unitPrice) + '/ea' : '—'}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* T2 outcome list */}
+                  <div style={{ fontSize: 10, color: '#ff9800', opacity: 0.7, marginBottom: 4 }}>T2 outcomes — click to view item:</div>
+                  {apiDetail.inventionOptions.map(opt => {
+                    const adjProb = Math.min(1, opt.baseProbability * (1 + decr.probMult / 100) + (inventionProbBonus / 100));
+                    const adjRuns = opt.outputRuns + decr.runs;
+                    return (
+                      <div
+                        key={opt.t2BlueprintId}
+                        className="stat-card"
+                        style={{ marginBottom: 3, cursor: 'pointer', border: '0.5px solid rgba(255,152,0,0.3)' }}
+                        role="button" tabIndex={0}
+                        onClick={() => onSelectItem(opt.t2ProductId, opt.t2Name)}
+                        onKeyDown={(e) => e.key === 'Enter' && onSelectItem(opt.t2ProductId, opt.t2Name)}
+                      >
+                        <div className="stat-card-label" style={{ color: '#ff9800' }}>
+                          {opt.t2Name}
+                          <span style={{ color: 'rgba(255,152,0,0.55)', marginLeft: 6 }}>
+                            {(adjProb * 100).toFixed(1)}% / attempt
+                            {adjRuns > 1 && ` · ${adjRuns} runs`}
+                          </span>
+                        </div>
+                        <div className="stat-card-value" style={{ textAlign: 'right' }}>
+                          {opt.t2SellPrice > 0 ? <span style={{ color: 'var(--color-success)' }}>{formatISK(opt.t2SellPrice)}</span> : '—'}
+                          {opt.perBpcCost > 0 && (
+                            <span style={{ color: 'rgba(255,152,0,0.55)', fontSize: 10, marginLeft: 6 }}>(cost ~{formatISK(opt.perBpcCost)})</span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
           </>
         )}
 
         {/* ── Fallback: precomputed financials (shown while apiDetail loads) ── */}
-        {!apiDetail && !detailLoading && fallbackDetail && (
+        {!interHubContext && !apiDetail && !detailLoading && fallbackDetail && (
           <>
             <div className="detail-section">
               <div className="detail-section-heading" title="GROSS estimate before your fees/blueprint — same baseline as the Market table and the AI. True Profit (your NET) loads below.">
@@ -1090,7 +1565,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
         )}
 
         {/* ── Blueprint click with no apiDetail yet — show what we have ── */}
-        {isBlueprintClick && !apiDetail && !detailLoading && !fallbackDetail && (
+        {!interHubContext && isBlueprintClick && !apiDetail && !detailLoading && !fallbackDetail && (
           <div style={{ padding: 16, color: 'var(--color-text-tertiary)', fontSize: 12,
             textAlign: 'center' }}>
             No market data for this blueprint.
@@ -1099,7 +1574,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
         )}
 
         {/* ── True Profit — 4-box breakdown ──────────────────────────────── */}
-        {selectedTypeId && (
+        {!interHubContext && selectedTypeId && (
           <div className="detail-section">
             <div className="detail-section-heading" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <span>True Profit (Net)</span>
@@ -1279,21 +1754,40 @@ const RightSidebar: FC<RightSidebarProps> = ({
                   {/* Tooltip — shows full effective ME breakdown */}
                   <div className="cost-tooltip">
                     {(() => {
-                      const bpMe   = trueCostData.manufacturing_setup?.blueprint_me   ?? blueprintME;
-                      const strMe  = trueCostData.manufacturing_setup?.structure_me_bonus ?? 0;
-                      const rigMe  = trueCostData.manufacturing_setup?.rig_me_bonus   ?? 0;
-                      const effME  = trueCostData.manufacturing_setup?.effective_me   ?? bpMe;
-                      const effFac = Math.max(0, 1 - effME / 100);
+                      const isT2    = trueCostData.manufacturing_setup?.is_t2 ?? false;
+                      const bpMe    = trueCostData.manufacturing_setup?.blueprint_me   ?? blueprintME;
+                      const t2Base  = trueCostData.manufacturing_setup?.t2_base_me     ?? null;
+                      const decrMe  = trueCostData.manufacturing_setup?.decryptor_me_bonus ?? null;
+                      const strMe   = trueCostData.manufacturing_setup?.structure_me_bonus ?? 0;
+                      const rigMe   = trueCostData.manufacturing_setup?.rig_me_bonus   ?? 0;
+                      const effME   = trueCostData.manufacturing_setup?.effective_me   ?? bpMe;
+                      const effFac  = Math.max(0, 1 - effME / 100);
                       const rawCost = effME > 0
                         ? trueCostData.total_material_cost / effFac
                         : trueCostData.total_material_cost;
-                      const saving = rawCost - trueCostData.total_material_cost;
+                      const saving  = rawCost - trueCostData.total_material_cost;
+                      const meColor = (n: number) => n >= 0 ? 'var(--color-success)' : 'var(--color-warning)';
                       return (
                         <>
-                          <div className="cost-tooltip-row">
-                            <span>Blueprint ME</span>
-                            <span style={{ color: 'var(--color-success)' }}>{bpMe}%</span>
-                          </div>
+                          {isT2 ? (
+                            <>
+                              <div className="cost-tooltip-row">
+                                <span>T2 BPC base ME</span>
+                                <span style={{ color: meColor(t2Base ?? 0) }}>{t2Base}%</span>
+                              </div>
+                              {decrMe !== null && decrMe !== 0 && (
+                                <div className="cost-tooltip-row">
+                                  <span>Decryptor ME</span>
+                                  <span style={{ color: meColor(decrMe) }}>{decrMe > 0 ? '+' : ''}{decrMe}%</span>
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            <div className="cost-tooltip-row">
+                              <span>Blueprint ME</span>
+                              <span style={{ color: meColor(bpMe) }}>{bpMe}%</span>
+                            </div>
+                          )}
                           {strMe > 0 && (
                             <div className="cost-tooltip-row">
                               <span>Structure ME</span>
@@ -1306,13 +1800,13 @@ const RightSidebar: FC<RightSidebarProps> = ({
                               <span style={{ color: 'var(--color-success)' }}>+{rigMe.toFixed(1)}%</span>
                             </div>
                           )}
-                          {(strMe > 0 || rigMe > 0) && (
+                          {(isT2 || strMe > 0 || rigMe > 0) && (
                             <div className="cost-tooltip-row" style={{
                               borderTop: '0.5px solid rgba(79,195,247,0.15)',
                               marginTop: 3, paddingTop: 3,
                             }}>
                               <span>Effective ME</span>
-                              <span style={{ color: 'var(--color-success)', fontWeight: 600 }}>
+                              <span style={{ color: meColor(effME), fontWeight: 600 }}>
                                 {effME.toFixed(1)}%
                               </span>
                             </div>
@@ -1451,6 +1945,94 @@ const RightSidebar: FC<RightSidebarProps> = ({
                   </div>
                 </div>
 
+                {/* Box 4b — Invention Cost (T2 items only) */}
+                {trueCostData.invention_cost && (
+                  <div className="cost-box invention-cost">
+                    <span className="cost-box-label">Invention</span>
+                    <span className="cost-box-value" style={{ color: 'var(--color-danger)' }}>
+                      {formatISK(trueCostData.invention_cost.total)}
+                    </span>
+                    <div className="cost-tooltip">
+                      <div className="cost-tooltip-row">
+                        <span>Base chance / attempt</span>
+                        <span>{(trueCostData.invention_cost.base_probability * 100).toFixed(1)}%</span>
+                      </div>
+                      {trueCostData.invention_cost.skill_bonus > 0 && (
+                        <div className="cost-tooltip-row">
+                          <span>Skill factor</span>
+                          <span>×{trueCostData.invention_cost.skill_factor.toFixed(3)}</span>
+                        </div>
+                      )}
+                      {trueCostData.invention_cost.decryptor_type !== 'none' && trueCostData.invention_cost.decryptor && (
+                        <div className="cost-tooltip-row">
+                          <span>Decryptor ({INVENTION_DECRYPTORS.find(d => d.type === trueCostData.invention_cost!.decryptor_type)?.name ?? trueCostData.invention_cost.decryptor_type})</span>
+                          <span>×{(1 + trueCostData.invention_cost.decryptor.probMult / 100).toFixed(2)}</span>
+                        </div>
+                      )}
+                      {(trueCostData.invention_cost.rig_bonus > 0 || trueCostData.invention_cost.prob_bonus > 0) && (
+                        <div className="cost-tooltip-row">
+                          <span>Rig / bonus</span>
+                          <span>+{((trueCostData.invention_cost.rig_bonus + trueCostData.invention_cost.prob_bonus) * 100).toFixed(1)} pp</span>
+                        </div>
+                      )}
+                      <div className="cost-tooltip-row">
+                        <span style={{ fontWeight: 600 }}>Effective chance / attempt</span>
+                        <span style={{ fontWeight: 600 }}>{(trueCostData.invention_cost.effective_probability * 100).toFixed(1)}%</span>
+                      </div>
+                      <div className="cost-tooltip-row">
+                        <span>Expected attempts per BPC</span>
+                        <span>{trueCostData.invention_cost.expected_attempts.toFixed(2)}×</span>
+                      </div>
+                      {trueCostData.invention_cost.output_runs > 1 && (
+                        <div className="cost-tooltip-row">
+                          <span>Runs per invented BPC</span>
+                          <span>{trueCostData.invention_cost.output_runs}</span>
+                        </div>
+                      )}
+                      {trueCostData.invention_cost.decryptor && trueCostData.invention_cost.decryptor_type !== 'none' && (
+                        <div className="cost-tooltip-row">
+                          <span>Output BPC ME / TE</span>
+                          <span>{trueCostData.invention_cost.decryptor.me >= 0 ? '+' : ''}{trueCostData.invention_cost.decryptor.me} / {trueCostData.invention_cost.decryptor.te >= 0 ? '+' : ''}{trueCostData.invention_cost.decryptor.te}</span>
+                        </div>
+                      )}
+                      <div className="cost-tooltip-divider" />
+                      {trueCostData.invention_cost.datacores.map(dc => (
+                        <div key={dc.materialId} className="cost-tooltip-row">
+                          <span>{dc.name} ×{dc.quantity}</span>
+                          <span>{formatISK(dc.unitPrice)}/ea</span>
+                        </div>
+                      ))}
+                      <div className="cost-tooltip-divider" />
+                      <div className="cost-tooltip-row">
+                        <span>Datacores (×{trueCostData.invention_cost.expected_attempts.toFixed(2)} att{trueCostData.invention_cost.output_runs > 1 ? ` ÷ ${trueCostData.invention_cost.output_runs} runs` : ''})</span>
+                        <span>{formatISK(trueCostData.invention_cost.datacores_cost)}</span>
+                      </div>
+                      {trueCostData.invention_cost.decryptor_type !== 'none' && (
+                        <div className="cost-tooltip-row">
+                          <span>Decryptor (×{trueCostData.invention_cost.expected_attempts.toFixed(2)} att{trueCostData.invention_cost.output_runs > 1 ? ` ÷ ${trueCostData.invention_cost.output_runs} runs` : ''})</span>
+                          <span>{trueCostData.invention_cost.decryptor_cost > 0 ? formatISK(trueCostData.invention_cost.decryptor_cost) : '(price unknown)'}</span>
+                        </div>
+                      )}
+                      {trueCostData.invention_cost.job_cost > 0 && (
+                        <div className="cost-tooltip-row">
+                          <span>Invention job fees</span>
+                          <span>{formatISK(trueCostData.invention_cost.job_cost)}</span>
+                        </div>
+                      )}
+                      <div className="cost-tooltip-divider" />
+                      <div className="cost-tooltip-row total">
+                        <span>Total ({trueCostData.runs} run{trueCostData.runs !== 1 ? 's' : ''})</span>
+                        <span>{formatISK(trueCostData.invention_cost.total)}</span>
+                      </div>
+                      {trueCostData.invention_cost.skills.length > 0 && (
+                        <div className="cost-tooltip-setup">
+                          Skills: {trueCostData.invention_cost.skills.map(s => `L${s.level}`).join(' · ')}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 {/* Box 4 — True Profit (with full formula + haulage breakdown tooltip) */}
                 {(() => {
                   const h = trueCostData.haul_cost;
@@ -1516,6 +2098,16 @@ const RightSidebar: FC<RightSidebarProps> = ({
                             −{formatISK(trueCostData.sales_tax.total)}
                           </span>
                         </div>
+
+                        {/* Invention overhead */}
+                        {trueCostData.invention_cost && (
+                          <div className="cost-tooltip-row">
+                            <span>− Invention</span>
+                            <span style={{ color: 'var(--color-danger)' }}>
+                              −{formatISK(trueCostData.invention_cost.total)}
+                            </span>
+                          </div>
+                        )}
 
                         {/* ── Haulage — always present, detail varies by config ── */}
                         {haulConfigured ? (

@@ -58,6 +58,7 @@ const NAV_ITEMS = [
   { key: 'pi',          label: '🌍 PI Colonies' },
   { key: 'corp',        label: '🏭 Corp' },
   { key: 'trading',     label: '⟳ Station Trading' },
+  { key: 'interhub',   label: '⟺ Inter-Hub Arb' },
 ];
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

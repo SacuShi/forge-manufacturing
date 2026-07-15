@@ -8,7 +8,9 @@
  *   4. Ensures reaction component items exist          (moon goo, gases, etc.)
  *   5. Ensures all blueprint-referenced items exist    (products, materials)
  *   6. Bulk-imports ALL types from types.json          (faction, clothing, SKINs, etc.)
- *   7. Verification report
+ *   7. Tags PI tiers + ME research times
+ *   8. Imports T1→T2 invention chains                 (blueprint_invention, invention_materials)
+ *   9. Verification report
  *
  * Usage:  node sde-import.js
  * IMPORTANT: Stop the server first — pm2 stop forge
@@ -534,7 +536,81 @@ async function importResearchTimes(bpData) {
   console.log(`  ✓ research_time set on ${updated} blueprints`);
 }
 
-// ── Step 8: Verify ────────────────────────────────────────────────────────────
+// ── Step 8: T1→T2 invention chains ───────────────────────────────────────────
+// Populates blueprint_invention (T1 bp → T2 BPC links) and invention_materials
+// (datacores + optional optional decryptor slots per T1 blueprint).
+// These tables are the foundation for T2 manufacturing cost modeling.
+
+async function importInventionChains(bpData) {
+  console.log('\n═══ Step 8: T1→T2 invention chains ═══');
+
+  await dbRun(`CREATE TABLE IF NOT EXISTS blueprint_invention (
+    t1_blueprint_id  INTEGER NOT NULL,
+    t2_blueprint_id  INTEGER NOT NULL,
+    probability      REAL    DEFAULT 0.4,
+    output_runs      INTEGER DEFAULT 1,
+    PRIMARY KEY (t1_blueprint_id, t2_blueprint_id)
+  )`);
+
+  await dbRun(`CREATE TABLE IF NOT EXISTS invention_materials (
+    t1_blueprint_id  INTEGER NOT NULL,
+    material_id      INTEGER NOT NULL,
+    quantity         INTEGER NOT NULL,
+    PRIMARY KEY (t1_blueprint_id, material_id)
+  )`);
+
+  let chainCount    = 0;
+  let materialCount = 0;
+  let skipped       = 0;
+
+  await dbRun('BEGIN TRANSACTION');
+
+  // Full reimport inside transaction — crash before COMMIT leaves tables intact
+  await dbRun('DELETE FROM blueprint_invention');
+  await dbRun('DELETE FROM invention_materials');
+
+  for (const [bpId, bp] of Object.entries(bpData)) {
+    const act = bp.activities?.invention;
+    if (!act) continue;
+
+    const t1BpId   = parseInt(bpId);
+    const products  = Object.values(act.products  || {});
+    const materials = Object.values(act.materials || {});
+
+    if (products.length === 0) { skipped++; continue; }
+
+    // Each product is a distinct T2 BPC this T1 can invent into
+    for (const product of products) {
+      await dbRun(
+        `INSERT OR REPLACE INTO blueprint_invention
+           (t1_blueprint_id, t2_blueprint_id, probability, output_runs)
+         VALUES (?, ?, ?, ?)`,
+        [t1BpId, product.type_id, product.probability ?? 0.4, product.quantity ?? 1]
+      );
+      chainCount++;
+    }
+
+    // Datacores (+ any other consumed materials) shared across all T2 products
+    for (const mat of materials) {
+      await dbRun(
+        `INSERT OR REPLACE INTO invention_materials
+           (t1_blueprint_id, material_id, quantity)
+         VALUES (?, ?, ?)`,
+        [t1BpId, mat.type_id, mat.quantity]
+      );
+      materialCount++;
+    }
+  }
+
+  await dbRun('COMMIT');
+
+  const uniqueT1s = await dbGet('SELECT COUNT(DISTINCT t1_blueprint_id) as c FROM blueprint_invention');
+  console.log(`  ✓ ${chainCount} T1→T2 links across ${uniqueT1s.c} unique T1 blueprints`);
+  console.log(`  ✓ ${materialCount} datacore/material rows in invention_materials`);
+  if (skipped > 0) console.log(`  ⚠ ${skipped} invention entries skipped — no products listed`);
+}
+
+// ── Step 9: Verify ────────────────────────────────────────────────────────────
 
 async function verify() {
   console.log('\n═══ Step 8: Verification ═══');
@@ -558,9 +634,12 @@ async function verify() {
     WHERE i.type_id IS NULL OR i.name IS NULL
   `);
 
-  const totalItems = await dbGet('SELECT COUNT(*) as c FROM items');
-  const piTagged   = await dbGet(`SELECT COUNT(*) as c FROM items WHERE pi_tier IS NOT NULL`);
-  const rtCount    = await dbGet(`SELECT COUNT(*) as c FROM blueprints WHERE research_time IS NOT NULL`);
+  const totalItems  = await dbGet('SELECT COUNT(*) as c FROM items');
+  const piTagged    = await dbGet(`SELECT COUNT(*) as c FROM items WHERE pi_tier IS NOT NULL`);
+  const rtCount     = await dbGet(`SELECT COUNT(*) as c FROM blueprints WHERE research_time IS NOT NULL`);
+  const invLinks    = await dbGet(`SELECT COUNT(*) as c FROM blueprint_invention`);
+  const invT1s      = await dbGet(`SELECT COUNT(DISTINCT t1_blueprint_id) as c FROM blueprint_invention`);
+  const invMats     = await dbGet(`SELECT COUNT(*) as c FROM invention_materials`);
 
   console.log(`  total items in DB:              ${totalItems.c}`);
   console.log(`  items with meta_level=1 (T2):  ${t2.c}`);
@@ -569,6 +648,8 @@ async function verify() {
   console.log(`  blueprints — manufacturing:     ${mfgCount.c}`);
   console.log(`  blueprints — reactions:         ${rxCount.c}`);
   console.log(`  blueprints with research_time:  ${rtCount.c}`);
+  console.log(`  invention T1→T2 links:          ${invLinks.c} across ${invT1s.c} T1 blueprints`);
+  console.log(`  invention_materials rows:       ${invMats.c}`);
   console.log(`  blueprints without a name:      ${unnamed.c}${unnamed.c > 0 ? ' ⚠' : ' ✓'}`);
   if (sample?.names) console.log(`  Sample reaction products: ${sample.names}`);
   else console.log('  ⚠ No reaction products found — check blueprints.json reaction data');
@@ -618,6 +699,7 @@ async function main() {
     await importAllTypes(typesData);
     await tagPiTiers(typesData);
     await importResearchTimes(bpData);
+    await importInventionChains(bpData);
     await verify();
 
     console.log('\n✅ Done. Next steps:');

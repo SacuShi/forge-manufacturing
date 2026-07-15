@@ -78,8 +78,11 @@ module.exports = function pushRoutes({ security, dbRun, dbAll, webpush }) {
 
 // Background checker — called from server startup, not a route.
 // Exported separately so server.js can call it on an interval.
+let _checkRunning = false;
 module.exports.checkJobCompletions = async function checkJobCompletions({ dbRun, dbAll, webpush }) {
   if (!webpush) return;
+  if (_checkRunning) return; // ESI slow-path guard — prevents overlapping runs
+  _checkRunning = true;
   try {
     const now = new Date().toISOString();
     const due = await dbAll(
@@ -118,5 +121,7 @@ module.exports.checkJobCompletions = async function checkJobCompletions({ dbRun,
     await dbRun(`DELETE FROM push_job_watch WHERE notified=1 AND end_date < datetime('now','-2 days')`);
   } catch (err) {
     console.error('Push job check error:', err.message);
+  } finally {
+    _checkRunning = false;
   }
 };

@@ -12,6 +12,7 @@ import type {
   CorpAccessStatus,
   QueueCharacter,
   PiCharacter,
+  InterHubArbRow,
 } from '../types';
 import ItemTable    from './ItemTable';
 import CorpTab      from './CorpTab';
@@ -19,6 +20,7 @@ import ResearchTab  from './ResearchTab';
 import PiTab           from './PiTab';
 import QueuePlannerTab from './QueuePlannerTab';
 import TradingTab      from './TradingTab';
+import InterHubTab     from './InterHubTab';
 import ForgeWait       from './ForgeWait';
 import { formatISK, formatMargin } from '../utils/format';
 
@@ -31,7 +33,7 @@ interface BlueprintProfit {
   /** v1.33.0 — true when owned assets + wallet ISK cover this blueprint's ME0 material list */
   canBuildNow?: boolean;
 }
-type BpSortField = 'name' | 'iskPerHour' | 'margin' | 'profit';
+type BpSortField = 'name' | 'iskPerHour' | 'margin' | 'profit' | 'level';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -66,6 +68,16 @@ interface MainContentProps {
 
   /** Called when any item is selected (typeId + name) — opens RightSidebar */
   onSelectItem: (typeId: number, name: string) => void;
+  /** Called when an item is selected from the inter-hub tab — carries the full arb row */
+  onSelectArbItem?: (typeId: number, name: string, row: InterHubArbRow) => void;
+
+  /** v1.35.0 — inter-hub haul config panel props */
+  haulConfigOpen?:        boolean;
+  onHaulConfigOpen?:      () => void;
+  onHaulConfigClose?:     () => void;
+  interHubToken?:         string;
+  interHubCharacters?:    Array<{ characterId: number; name: string; skills: Array<{ skill_id: number; active_skill_level: number }> }>;
+  onInterHubHaulSaved?:   () => void;
 
   /** v1.11 — selected market hub region id (drives Research ROI material prices) */
   regionId: number;
@@ -102,6 +114,7 @@ const TABS = [
   { key: 'pi',         label: '🌍 PI Colonies' },
   { key: 'corp',       label: '🏭 Corp' },
   { key: 'trading',    label: '⟳ Station Trading' },
+  { key: 'interhub',  label: '⟺ Inter-Hub Arb' },
 ];
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -124,7 +137,14 @@ const MainContent: FC<MainContentProps> = ({
   itemNames,
   walletISK,
   onSelectItem,
+  onSelectArbItem,
   regionId,
+  haulConfigOpen       = false,
+  onHaulConfigOpen,
+  onHaulConfigClose    = () => {},
+  interHubToken        = '',
+  interHubCharacters   = [],
+  onInterHubHaulSaved,
   marketSearchQuery,
   marketSearching,
   onMarketSearch,
@@ -308,7 +328,14 @@ const MainContent: FC<MainContentProps> = ({
            : p.iskPerHour;
     };
     entries.sort(([a], [b]) => {
-      if (bpSort === 'name') return getBpName(a).localeCompare(getBpName(b));
+      if (bpSort === 'name') return dir * getBpName(a).localeCompare(getBpName(b));
+      if (bpSort === 'level') {
+        const la = bpMetadata[a] ?? 0;
+        const lb = bpMetadata[b] ?? 0;
+        return la !== lb
+          ? (la - lb) * dir
+          : getBpName(a).localeCompare(getBpName(b));
+      }
       const va = metric(a), vb = metric(b);
       if (va == null && vb == null) return getBpName(a).localeCompare(getBpName(b));
       if (va == null) return 1;   // no-data always last
@@ -537,6 +564,7 @@ const MainContent: FC<MainContentProps> = ({
               ['iskPerHour', 'ISK/hr'],
               ['margin',     'Margin'],
               ['profit',     'Total ISK'],
+              ['level',      'Level'],
               ['name',       'Name'],
             ] as [BpSortField, string][]).map(([key, label]) => (
               <button
@@ -877,6 +905,20 @@ const MainContent: FC<MainContentProps> = ({
       {/* v1.27.0 — Station Trading tab */}
       {activeTab === 'trading' && (
         <TradingTab token={token} />
+      )}
+
+      {/* Inter-Hub Arbitrage tab */}
+      {activeTab === 'interhub' && (
+        <InterHubTab
+          onSelectArbItem={onSelectArbItem ?? ((typeId, name) => onSelectItem(typeId, name))}
+          selectedTypeId={selectedTypeId}
+          haulConfigOpen={haulConfigOpen}
+          onHaulConfigOpen={onHaulConfigOpen}
+          onHaulConfigClose={onHaulConfigClose}
+          token={interHubToken}
+          characters={interHubCharacters}
+          onHaulSaved={onInterHubHaulSaved}
+        />
       )}
 
     </main>

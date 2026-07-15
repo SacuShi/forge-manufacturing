@@ -8,7 +8,7 @@
  * the primary to avoid "no session data" errors when an alt is isolated.
  */
 
-import { useState, useEffect, useCallback, useMemo, type FC } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, type FC } from 'react';
 import { apiPost }       from '../api/client';
 import { formatISK }     from '../utils/format';
 import type { QueueCharacter } from '../types';
@@ -106,10 +106,14 @@ function initials(name: string): string {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 const QueuePlannerTab: FC<QueuePlannerTabProps> = ({ queueCharacters, primaryToken, regionId, onSelectItem }) => {
-  const [result,      setResult]      = useState<QueuePlanResult | null>(null);
-  const [loading,     setLoading]     = useState(false);
-  const [error,       setError]       = useState<string | null>(null);
-  const [copied,      setCopied]      = useState(false);
+  const [result,        setResult]        = useState<QueuePlanResult | null>(null);
+  const [loading,       setLoading]       = useState(false);
+  const [error,         setError]         = useState<string | null>(null);
+  const [copied,        setCopied]        = useState(false);
+  const sessionRetryRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sessionRetryCount = useRef(0);
+  // Stable ref to latest runPlan — prevents stale-closure in the retry setTimeout
+  const runPlanRef = useRef<() => void>(() => {});
 
   const [horizonHours,   setHorizonHours]   = useState(72);
   const [budgetCapInput, setBudgetCapInput] = useState('');
@@ -136,7 +140,7 @@ const QueuePlannerTab: FC<QueuePlannerTabProps> = ({ queueCharacters, primaryTok
       skills:      c.skills,
     }));
 
-    apiPost<QueuePlanResult>('/api/queue-planner', {
+    apiPost<QueuePlanResult & { code?: string }>('/api/queue-planner', {
       regionId,
       horizonHours,
       budgetCap,
@@ -144,11 +148,42 @@ const QueuePlannerTab: FC<QueuePlannerTabProps> = ({ queueCharacters, primaryTok
       activityFilter,
       characters,
     }, primaryToken)
-      .then(d  => { setResult(d); setLoading(false); })
-      .catch(e => { setError(e.message || 'Failed to generate plan'); setLoading(false); });
+      .then(d => {
+        sessionRetryCount.current = 0;
+        setResult(d as QueuePlanResult);
+        setLoading(false);
+      })
+      .catch(e => {
+        const msg = e.message || 'Failed to generate plan';
+        if (msg.includes('SESSION_MISSING') || msg.includes('No session data')) {
+          if (sessionRetryCount.current < 3) {
+            // Session cache cold after server restart — retry up to 3 times
+            sessionRetryCount.current += 1;
+            setError('Session loading…');
+            sessionRetryRef.current = setTimeout(() => {
+              setError(null);
+              runPlanRef.current();
+            }, 4000);
+          } else {
+            sessionRetryCount.current = 0;
+            setError('Session timed out — server may still be warming up. Refresh to retry.');
+            setLoading(false);
+          }
+        } else {
+          sessionRetryCount.current = 0;
+          setError(msg);
+          setLoading(false);
+        }
+      });
   }, [primaryToken, queueCharacters, regionId, horizonHours, budgetCapInput, includeCorpBps, activityFilter]);
 
+  // Keep runPlanRef pointing at the latest closure so the retry setTimeout never calls a stale version
+  useEffect(() => { runPlanRef.current = runPlan; }, [runPlan]);
+
   useEffect(() => { if (primaryToken) runPlan(); }, [primaryToken, regionId]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Clean up any pending retry on unmount
+  useEffect(() => () => { if (sessionRetryRef.current) clearTimeout(sessionRetryRef.current); }, []);
 
   // ── Multibuy copy ─────────────────────────────────────────────────────────
   const handleCopyAll = useCallback(() => {

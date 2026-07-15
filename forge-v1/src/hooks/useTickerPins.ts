@@ -207,13 +207,23 @@ export function useTickerPins(input: UseTickerPinsInput): UseTickerPinsOutput {
   const activeGroupIdRef = useRef(activeGroupId);
   useEffect(() => { activeGroupIdRef.current = activeGroupId; }, [activeGroupId]);
 
-  // Active group's pins, sorted — the ticker renders these
+  // Active group's pins, sorted — the ticker renders these in single-row mode
   const displayPins = useMemo(() =>
     pins
       .filter(p => p.groupId === activeGroupId)
       .sort((a, b) => a.order - b.order),
     [pins, activeGroupId]
   );
+
+  // In dual-row mode the bar renders both group 0 and group 1, so slots must be
+  // populated for both groups' pins — not just the active group.
+  const pinsToSlot = useMemo(() => {
+    if (!dualRow || groups.length < 2) return displayPins;
+    const bothIds = new Set(groups.slice(0, 2).map(g => g.id));
+    return pins
+      .filter(p => bothIds.has(p.groupId))
+      .sort((a, b) => a.order - b.order);
+  }, [pins, groups, dualRow, displayPins]);
 
   // Live clock for countdown accuracy (30s)
   useEffect(() => {
@@ -266,10 +276,10 @@ export function useTickerPins(input: UseTickerPinsInput): UseTickerPinsOutput {
     return () => clearTimeout(t);
   }, [pins, groups, activeGroupId, dualRow, token]);
 
-  // ── Poll hub-specific pins for the active group ──────────────────────────────
+  // ── Poll hub-specific pins (active group + second group in dual-row mode) ─────
   useEffect(() => {
     if (!token) return;
-    const hubPins = displayPins.filter(p =>
+    const hubPins = pinsToSlot.filter(p =>
       ['price_sell','price_buy','price_spread','mfg_profit','mfg_margin',
        'mfg_isk_hour','mfg_top_hub','trade_spread','trade_top_hub'].includes(p.type)
     );
@@ -296,11 +306,11 @@ export function useTickerPins(input: UseTickerPinsInput): UseTickerPinsOutput {
     const id = setInterval(poll, 30_000);
     return () => clearInterval(id);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [displayPins, token, now]);
+  }, [pinsToSlot, token, now]);
 
-  // ── Derive character-state slots for the active group ───────────────────────
+  // ── Derive character-state slots (active group + second group in dual-row mode)
   useEffect(() => {
-    const charPins = displayPins.filter(p =>
+    const charPins = pinsToSlot.filter(p =>
       ['wallet','jobs_count','jobs_next','jobs_free_slots','pi_extractor','pi_colony_isk'].includes(p.type)
     );
     if (charPins.length === 0) return;
@@ -312,7 +322,7 @@ export function useTickerPins(input: UseTickerPinsInput): UseTickerPinsOutput {
       return next;
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [displayPins, walletISK, activeJobs, freeSlots, now]);
+  }, [pinsToSlot, walletISK, activeJobs, freeSlots, now]);
 
   // ── Broadcast active-group payload to pop-out ────────────────────────────────
   useEffect(() => {

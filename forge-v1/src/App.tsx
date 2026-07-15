@@ -13,6 +13,8 @@ import type {
   EsiAsset,
   QueueCharacter,
   PiCharacter,
+  InterHubArbRow,
+  InterHubHaulResult,
 } from './types';
 import { MARKETS } from './components/MarketSelector';
 import { useAuth }       from './hooks/useAuth';
@@ -211,6 +213,17 @@ const AppShell: FC = () => {
   const [buildRuns,       setBuildRuns]       = useState(1);
   // v1.17.1 — implant set the user chose to apply to True Profit ISK/hr (default none)
   const [selectedImplants, setSelectedImplants] = useState<number[]>([]);
+  // v1.35.0 — invention decryptor + manual probability bonus
+  const [inventionDecryptorType, setInventionDecryptorType] = useState<string | null>(null);
+  const [inventionProbBonus,     setInventionProbBonus]     = useState(0);
+
+  // Inter-Hub Arb — the full row of the last item clicked from the inter-hub tab.
+  // Non-null → RightSidebar renders the trade view instead of the manufacturing view.
+  const [interHubContext,          setInterHubContext]          = useState<InterHubArbRow | null>(null);
+  const [interHubHaulData,         setInterHubHaulData]         = useState<InterHubHaulResult | null>(null);
+  const [interHubHaulLoading,      setInterHubHaulLoading]      = useState(false);
+  const [interHubHaulConfigOpen,   setInterHubHaulConfigOpen]   = useState(false);
+  const [interHubHaulRefreshKey,   setInterHubHaulRefreshKey]   = useState(0);
 
   // ── v1.5 Aggregation ──────────────────────────────────────────────────────
   // Derive combined/isolated datasets from primary + alts based on viewCharacterId.
@@ -465,6 +478,31 @@ const AppShell: FC = () => {
     return mapToMarketItems(source, allBlueprints, canBuildNowMap);
   }, [rawResults, marketSearchResults, allBlueprints, canBuildNowMap]);
 
+  // Clear inter-hub context whenever the user navigates away from the arb tab.
+  useEffect(() => {
+    if (activeTab !== 'interhub') {
+      setInterHubContext(null);
+      setInterHubHaulData(null);
+    }
+  }, [activeTab]);
+
+  // Fetch haul cost per unit whenever an inter-hub item is selected.
+  useEffect(() => {
+    if (!interHubContext || !auth.token) { setInterHubHaulData(null); return; }
+    let cancelled = false;
+    setInterHubHaulLoading(true);
+    const { product_id, buy_region_id, sell_region_id, buy_at } = interHubContext;
+    fetch(
+      `/api/inter-hub-haul?typeId=${product_id}&buyHub=${buy_region_id}&sellHub=${sell_region_id}&collateral=${buy_at}`,
+      { headers: { Authorization: `Bearer ${auth.token}` } }
+    )
+      .then(r => r.json())
+      .then((data: InterHubHaulResult) => { if (!cancelled) setInterHubHaulData(data); })
+      .catch(() => { if (!cancelled) setInterHubHaulData(null); })
+      .finally(() => { if (!cancelled) setInterHubHaulLoading(false); });
+    return () => { cancelled = true; };
+  }, [interHubContext, auth.token, interHubHaulRefreshKey]);
+
   // Server-side name search — called when user types in the market search box.
   const handleMarketSearch = useCallback((query: string) => {
     setMarketSearchQuery(query);
@@ -547,6 +585,8 @@ const AppShell: FC = () => {
     feeToken,
     buildRuns,
     selectedImplants,
+    inventionDecryptorType,
+    inventionProbBonus,
   );
 
   useEffect(() => {
@@ -773,6 +813,11 @@ const AppShell: FC = () => {
     });
     setDetailOpen(true);
   }, []);
+
+  const handleSelectArbItem = useCallback((typeId: number, name: string, row: InterHubArbRow) => {
+    setInterHubContext(row);
+    handleSelectItem(typeId, name);
+  }, [handleSelectItem]);
 
   const handlePanelBack = useCallback(() => {
     setPanelHistory((h) => {
@@ -1143,6 +1188,7 @@ const AppShell: FC = () => {
           walletISK={totalWalletISK}
           selectedTypeId={selectedTypeId}
           onSelectItem={handleSelectItem}
+          onSelectArbItem={handleSelectArbItem}
           regionId={selectedMarket.id}
           onMarketSelect={handleItemSelect}
           onLoadMoreMarket={handleLoadMoreMarket}
@@ -1157,6 +1203,23 @@ const AppShell: FC = () => {
           accessStatus={corpAccessStatus}
           corpDataLoading={corpDataLoading}
           blueprintOwnerMap={blueprintOwnerMap}
+          haulConfigOpen={interHubHaulConfigOpen}
+          onHaulConfigOpen={() => setInterHubHaulConfigOpen(true)}
+          onHaulConfigClose={() => setInterHubHaulConfigOpen(false)}
+          interHubToken={auth.token ?? undefined}
+          interHubCharacters={[
+            ...(auth.character ? [{
+              characterId: auth.character.characterId,
+              name:        auth.character.name,
+              skills:      auth.skills,
+            }] : []),
+            ...auth.altCharacters.filter(a => !a.loading && !a.error).map(a => ({
+              characterId: a.characterId,
+              name:        a.name,
+              skills:      a.skills,
+            })),
+          ]}
+          onInterHubHaulSaved={() => setInterHubHaulRefreshKey(k => k + 1)}
         />
 
         {/* Drag handle: resize the info panel — only when it's open (desktop only) */}
@@ -1212,6 +1275,14 @@ const AppShell: FC = () => {
           materialRegionId={selectedSourceMarket.id}
           materialMarketName={selectedSourceMarket.name}
           walletISK={totalWalletISK}
+          inventionDecryptorType={inventionDecryptorType}
+          onInventionDecryptorChange={setInventionDecryptorType}
+          inventionProbBonus={inventionProbBonus}
+          onInventionProbBonusChange={setInventionProbBonus}
+          interHubContext={interHubContext}
+          interHubHaulData={interHubHaulData}
+          interHubHaulLoading={interHubHaulLoading}
+          onConfigureInterHubHaul={() => setInterHubHaulConfigOpen(true)}
         />
 
         <ChatPanel

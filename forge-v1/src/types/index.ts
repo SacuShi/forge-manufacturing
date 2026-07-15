@@ -337,6 +337,62 @@ export interface ItemDetailMaterial {
   piTier?: number | null;
 }
 
+/** Decryptor stats for the invention UI */
+export interface InventionDecryptorStats {
+  probMult: number;  // probability multiplier %  (e.g. 80 = +80%)
+  runs:     number;  // run modifier added to output BPC
+  me:       number;  // ME modifier on output BPC
+  te:       number;  // TE modifier on output BPC
+  output_runs?: number; // base_runs + runs (populated by server)
+}
+
+/** Client-side decryptor definitions (mirrors server DECRYPTORS constant) */
+export const INVENTION_DECRYPTORS: Array<{ type: string; name: string } & InventionDecryptorStats> = [
+  { type: 'none',                   name: 'No Decryptor',            probMult:   0, runs: 0, me:  0, te:  0 },
+  { type: 'optimized_attainment',   name: 'Optimised Attainment',    probMult:  90, runs: 2, me:  1, te: -2 },
+  { type: 'attainment',             name: 'Attainment',              probMult:  80, runs: 4, me: -1, te:  4 },
+  { type: 'parity',                 name: 'Parity',                  probMult:  50, runs: 3, me:  1, te: -2 },
+  { type: 'accelerant',             name: 'Accelerant',              probMult:  20, runs: 1, me:  2, te: 10 },
+  { type: 'process',                name: 'Process',                 probMult:  10, runs: 0, me:  3, te:  6 },
+  { type: 'symmetry',               name: 'Symmetry',                probMult:   0, runs: 2, me:  1, te:  8 },
+  { type: 'optimized_augmentation', name: 'Optimised Augmentation',  probMult: -10, runs: 7, me:  2, te:  0 },
+  { type: 'augmentation',           name: 'Augmentation',            probMult: -40, runs: 9, me: -2, te:  2 },
+];
+
+/** One datacore (or other consumed material) used per invention attempt */
+export interface InventionDatacore {
+  materialId:      number;
+  name:            string;
+  quantity:        number;
+  unitPrice:       number;
+  totalPerAttempt: number;
+}
+
+/** Invention origin info for a T2 item (which T1 blueprint it comes from) */
+export interface InventionInfo {
+  t1BlueprintId:   number;
+  t1BlueprintName: string | null;
+  baseProbability: number;
+  expectedAttempts: number;
+  outputRuns:      number;
+  /** Expected ISK cost per T2 BPC produced (datacores only, no auth skills applied) */
+  perBpcCost:      number;
+  datacores:       InventionDatacore[];
+}
+
+/** One T2 outcome inventable from a T1 blueprint */
+export interface InventionOption {
+  t2BlueprintId:    number;
+  t2ProductId:      number;
+  t2Name:           string;
+  t2SellPrice:      number;
+  baseProbability:  number;
+  expectedAttempts: number;
+  outputRuns:       number;
+  /** Expected datacores-only cost per T2 BPC at base probability */
+  perBpcCost:       number;
+}
+
 /** Full response from POST /api/item-details */
 export interface ItemDetailApiResponse {
   name?: string;
@@ -371,6 +427,12 @@ export interface ItemDetailApiResponse {
   };
   /** v1.12.0 — pricing derived from public single-item exchange contracts in-region. */
   contractPricing?: ContractPricing;
+  /** v1.35.0 — for T2 items: origin T1 blueprint + invention materials */
+  inventionInfo?: InventionInfo;
+  /** v1.35.0 — for T1 items: all T2 products inventable from this blueprint */
+  inventionOptions?: InventionOption[];
+  /** v1.35.0 — shared datacores for all T1→T2 options (parallel to inventionOptions) */
+  inventionDatacores?: InventionDatacore[];
 }
 
 /** Contract-derived price range for an item (POST /api/item-details, v1.12.0). */
@@ -426,6 +488,62 @@ export interface MaterialBreakdownResponse {
   productQuantity?: number;
   buildTime?: number;
   materials: BreakdownMaterial[];
+}
+
+/** One row returned by GET /api/inter-hub-arb */
+export interface InterHubArbRow {
+  product_id:        number;
+  product_name:      string;
+  buy_region_id:     number;
+  sell_region_id:    number;
+  buy_hub_name:      string;
+  sell_hub_name:     string;
+  buy_at:            number;   // lowest sell order at source hub
+  sell_into:         number;   // highest buy order at dest hub
+  gross_spread:      number;   // sell_into - buy_at
+  gross_margin_pct:  number;
+  net_profit:        number;   // after 3.6% sales tax
+  net_margin_pct:    number;
+  volume_m3:         number;   // packaged volume per unit
+  isk_per_m3:        number | null;
+  avg_daily_volume:  number | null;
+  est_daily_profit:  number | null;
+  // Live order-book depth (null when hub book not yet loaded)
+  sell_orders_at_buy: number | null;
+  sell_vol_at_buy:    number | null;
+  buy_orders_at_sell: number | null;
+  buy_vol_at_sell:    number | null;
+}
+
+/** Haul cost result from GET /api/inter-hub-haul */
+export interface InterHubHaulResult {
+  haul_enabled:         boolean;
+  method:               string;
+  method_label:         string;
+  service_label:        string | null;
+  haul_cost:            number;   // total ISK per unit
+  effective_isk_per_m3: number;
+  contracts:            number;
+  jumps:                number;
+  volume_m3:            number;
+  /** Character's actual transaction tax rate (Accounting skill) */
+  transaction_tax_rate: number;
+  /** Character's actual broker fee rate (Broker Relations + standings at sell hub) */
+  broker_fee_rate:      number;
+  accounting_level:     number;
+  broker_relations:     number;
+}
+
+/** Response from GET /api/inter-hub-arb */
+export interface InterHubArbResponse {
+  results:     InterHubArbRow[];
+  buy_hub:     string;
+  sell_hub:    string;
+  count:       number;
+  offset:      number;
+  has_more:    boolean;
+  min_margin:  number;
+  sort_by:     string;
 }
 
 /** One ranked blueprint in the ME Research ROI table (POST /api/me-research-roi). */
@@ -552,6 +670,21 @@ export interface IndustrySettings {
   leg2_self_char_id?:    number | null;
   leg2_self_ship?:       string | null;
   leg2_self_fuel?:       number;
+  /** v1.35.0 — invention-specific settings (separate structure may differ from mfg) */
+  invention_rig_ids?:    string;
+  invention_system_id?:  number | null;
+  invention_system_name?: string | null;
+  /** v1.35.0 — inter-hub independent haul config */
+  interhub_haul_enabled?:  boolean;
+  interhub_method?:        string;
+  interhub_haul_rate?:     number;
+  interhub_isk_per_jump?:  number;
+  interhub_flat_total?:    number;
+  interhub_self_fuel?:     number;
+  interhub_collateral?:    number;
+  interhub_service_label?: string | null;
+  interhub_self_char_id?:  number | null;
+  interhub_self_ship?:     string | null;
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -683,6 +816,30 @@ export interface TrueCostResponse {
     accounting_level:       number;
   };
 
+  /** v1.35.0 — Invention overhead (Box 4b). Null for non-T2 products. */
+  invention_cost?: {
+    total:                 number;
+    per_bpc_cost:          number;
+    effective_probability: number;
+    base_probability:      number;
+    skill_factor:          number;  // 1 + enc/40 + sci1/30 + sci2/30
+    skill_bonus:           number;  // = skill_factor - 1 (kept for backward compat)
+    rig_bonus:             number;
+    prob_bonus:            number;  // manual flat bonus (rigs / custom implants)
+    expected_attempts:     number;
+    datacores_cost:             number;
+    job_cost:                   number;
+    decryptor_cost:             number;  // amortized decryptor buy cost
+    dc_cost_per_attempt:        number;
+    decryptor_cost_per_attempt: number;
+    job_cost_per_attempt:       number;
+    decryptor_type:             string;
+    decryptor:                  InventionDecryptorStats;
+    output_runs:           number;  // base runs + decryptor run modifier
+    datacores: InventionDatacore[];
+    skills: Array<{ skillId: number; level: number }>;
+  } | null;
+
   /** v1.6/v1.7 — Haulage (Box 5). Zero values when haul not configured. */
   haul_cost: {
     total:          number;
@@ -741,7 +898,10 @@ export interface TrueCostResponse {
     facility_tax_pct:  number;
     sci_raw:           number;
     /** v1.9.3 — Effective ME breakdown */
-    blueprint_me?:       number;
+    is_t2?:              boolean;
+    blueprint_me?:       number;  // T1: researched BPO ME; T2: t2_base_me + decryptor_me_bonus
+    t2_base_me?:         number | null;
+    decryptor_me_bonus?: number | null;
     structure_me_bonus?: number;
     rig_me_bonus?:       number;
     effective_me?:       number;

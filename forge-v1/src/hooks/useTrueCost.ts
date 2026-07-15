@@ -31,14 +31,16 @@ interface UseTrueCostResult {
 const WARM_RETRY_MS = 15_000;
 
 export function useTrueCost(
-  productTypeId:    number | null,
-  sellRegionId:     number,       // hub where finished goods are sold
-  materialRegionId: number,       // hub where raw materials are purchased
-  me:               number,       // material efficiency from the character's best blueprint (0 if unknown)
-  te:               number,       // time efficiency — passed through to server for future use
-  token:            string | null,
-  runs:             number = 1,   // number of manufacturing runs
-  implants:         number[] = [], // v1.17.1 — selected implant set (default none)
+  productTypeId:       number | null,
+  sellRegionId:        number,        // hub where finished goods are sold
+  materialRegionId:    number,        // hub where raw materials are purchased
+  me:                  number,        // material efficiency from the character's best blueprint (0 if unknown)
+  te:                  number,        // time efficiency — passed through to server for future use
+  token:               string | null,
+  runs:                number = 1,    // number of manufacturing runs
+  implants:            number[] = [], // v1.17.1 — selected implant set (default none)
+  decryptorType:       string | null = null, // v1.35.0 — invention decryptor
+  inventionProbBonus:  number = 0,    // v1.35.0 — flat probability bonus % (manual override)
 ): UseTrueCostResult {
   const [data,    setData]    = useState<TrueCostResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -68,13 +70,15 @@ export function useTrueCost(
 
       try {
         const result = await apiPost<TrueCostResponse>('/api/true-cost', {
-          product_id:       productTypeId,
+          product_id:           productTypeId,
           me,
           te,
-          runs:             Math.max(1, runs),
-          regionId:         sellRegionId,
-          materialRegionId: materialRegionId,
+          runs:                 Math.max(1, runs),
+          regionId:             sellRegionId,
+          materialRegionId:     materialRegionId,
           implants,
+          decryptor_type:       decryptorType || 'none',
+          invention_prob_bonus: inventionProbBonus,
         }, token);
 
         if (!cancelled) {
@@ -88,7 +92,7 @@ export function useTrueCost(
           }
         }
       } catch (e) {
-        if (!cancelled) {
+        if (!cancelled && !silent) {
           const raw = (e as Error).message;
           // If the error body is HTML (Cloudflare 502 / gateway timeout), show a clean message.
           const isHtml = raw.includes('<!DOCTYPE') || raw.includes('<html');
@@ -115,9 +119,9 @@ export function useTrueCost(
       }
     };
 
-  // Re-fetch when item, hub, blueprint ME/TE, or runs count changes
+  // Re-fetch when item, hub, blueprint ME/TE, runs count, or invention settings change
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [productTypeId, sellRegionId, materialRegionId, token, me, te, runs, implants.join(',')]);
+  }, [productTypeId, sellRegionId, materialRegionId, token, me, te, runs, implants.join(','), decryptorType, inventionProbBonus]);
 
   return { data, loading, error };
 }
