@@ -19,6 +19,10 @@ import type { CharacterInfo, EsiBlueprint, AltCharacter, ActiveJob } from '../ty
 import { QUICK_PROMPTS } from '../data/mockData';
 import type { PushState } from '../hooks/usePushNotifications';
 import TickerPinButton from './TickerPinButton';
+import {
+  IconMarket, IconBlueprint, IconResearch, IconAssets, IconJobs,
+  IconQueue, IconPI, IconCorp, IconTrading, IconInterhub, IconLPStore,
+} from './NavIcons';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -49,16 +53,17 @@ interface LeftSidebarProps {
 const PORTRAIT_BASE = 'https://images.evetech.net/characters';
 
 const NAV_ITEMS = [
-  { key: 'market',      label: '◈ Market Opportunities' },
-  { key: 'blueprints',  label: '◈ My Blueprints' },
-  { key: 'research',    label: '🔬 Research ROI' },
-  { key: 'assets',      label: '◉ My Assets' },
-  { key: 'jobs',        label: '⚙ Active Jobs' },
-  { key: 'queue',       label: '📋 Queue Planner' },
-  { key: 'pi',          label: '🌍 PI Colonies' },
-  { key: 'corp',        label: '🏭 Corp' },
-  { key: 'trading',     label: '⟳ Station Trading' },
-  { key: 'interhub',   label: '⟺ Inter-Hub Arb' },
+  { key: 'market',     Icon: IconMarket,    label: 'Market Opportunities' },
+  { key: 'blueprints', Icon: IconBlueprint, label: 'My Blueprints' },
+  { key: 'research',   Icon: IconResearch,  label: 'Research ROI' },
+  { key: 'assets',     Icon: IconAssets,    label: 'My Assets' },
+  { key: 'jobs',       Icon: IconJobs,      label: 'Active Jobs' },
+  { key: 'queue',      Icon: IconQueue,     label: 'Queue Planner' },
+  { key: 'pi',         Icon: IconPI,        label: 'PI Colonies' },
+  { key: 'corp',       Icon: IconCorp,      label: 'Corp' },
+  { key: 'trading',    Icon: IconTrading,   label: 'Station Trading' },
+  { key: 'interhub',   Icon: IconInterhub,  label: 'Inter-Hub Arb' },
+  { key: 'lpstore',    Icon: IconLPStore,   label: 'LP Store' },
 ];
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -361,15 +366,17 @@ const LeftSidebar: FC<LeftSidebarProps> = ({
       {/* ── Navigation ──────────────────────────────────────────────────────── */}
       <div className="section-heading" aria-hidden="true">Navigation</div>
       <nav aria-label="Content tabs">
-        {NAV_ITEMS.map((item) => (
+        {NAV_ITEMS.map(({ key, Icon, label }) => (
           <button
-            key={item.key}
+            key={key}
             type="button"
-            className={`sidebar-nav-item${activeTab === item.key ? ' active' : ''}`}
-            onClick={() => onTabChange(item.key)}
-            aria-current={activeTab === item.key ? 'page' : undefined}
+            className={`sidebar-nav-item${activeTab === key ? ' active' : ''}`}
+            onClick={() => onTabChange(key)}
+            aria-current={activeTab === key ? 'page' : undefined}
+            style={{ display: 'flex', alignItems: 'center', gap: 7 }}
           >
-            {item.label}
+            <Icon />
+            {label}
           </button>
         ))}
       </nav>

@@ -23,6 +23,7 @@ interface InterHubTabProps {
   token?:             string;
   characters?:        CharacterSkillData[];
   onHaulSaved?:       () => void;
+  canDockKeestar?:    boolean;
 }
 
 const HUB_NAMES: Record<number, string> = {
@@ -90,7 +91,9 @@ const InterHubTab: FC<InterHubTabProps> = ({
   token             = '',
   characters        = [],
   onHaulSaved,
+  canDockKeestar    = true,
 }) => {
+  const availableMarkets = canDockKeestar ? MARKETS : MARKETS.filter(m => m.id !== 10099000);
   const [buyHub,      setBuyHub]      = useState<number>(() => parseInt(localStorage.getItem(LS_BUY)  || '10000002', 10));
   const [sellHub,     setSellHub]     = useState<number>(() => parseInt(localStorage.getItem(LS_SELL) || '10000043', 10));
   const [minMargin,   setMinMargin]   = useState<number>(() => parseFloat(localStorage.getItem(LS_MARG) || '5'));
@@ -192,7 +195,7 @@ const InterHubTab: FC<InterHubTabProps> = ({
             onChange={e => handleBuyHub(parseInt(e.target.value, 10))}
             aria-label="Buy hub"
           >
-            {MARKETS.map(m => (
+            {availableMarkets.map(m => (
               <option key={m.id} value={m.id} disabled={m.id === sellHub}>
                 {m.name}{m.type === 'nullsec' ? ' [NS]' : ''}
               </option>
@@ -221,7 +224,7 @@ const InterHubTab: FC<InterHubTabProps> = ({
             onChange={e => handleSellHub(parseInt(e.target.value, 10))}
             aria-label="Sell hub"
           >
-            {MARKETS.map(m => (
+            {availableMarkets.map(m => (
               <option key={m.id} value={m.id} disabled={m.id === buyHub}>
                 {m.name}{m.type === 'nullsec' ? ' [NS]' : ''}
               </option>

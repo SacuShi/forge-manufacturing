@@ -74,7 +74,9 @@ const SCOPES =
   // v1.27.0 — active market orders (station trading My Orders panel + undercut alerts).
   'esi-markets.read_character_orders.v1 ' +
   // v1.28.0 — C-J6MT Keepstar structure market (alliance trade hub).
-  'esi-markets.structure_markets.v1';
+  'esi-markets.structure_markets.v1 ' +
+  // v1.36.0 — LP balances per corp (LP Store tab).
+  'esi-characters.read_loyalty.v1';
 
 const SESSION_TOKEN_KEY = 'forge_token';
 const SESSION_STATE_KEY = 'forge_oauth_state';
@@ -113,6 +115,8 @@ export interface AuthState {
   hasStandingsScope: boolean;
   /** Primary character standings — exposed so App.tsx can include them in combined re-POST */
   primaryStandings: StandingsData | null;
+  /** Whether the primary character has docking rights at C-J6MT Keepstar. Defaults true (fail-open). */
+  canDockKeestar:   boolean;
   error:            string | null;
   loadStep:         string;
   dataLog:          LoadStep[];
@@ -221,6 +225,7 @@ export function useAuth(): AuthState & {
   const [jumpClones,        setJumpClones]        = useState<JumpClone[]>([]);
   const [hasStandingsScope, setHasStandingsScope] = useState(false);
   const [primaryStandings,  setPrimaryStandings]  = useState<StandingsData | null>(null);
+  const [canDockKeestar,    setCanDockKeestar]    = useState(true);
   const [error,             setError]             = useState<string | null>(null);
   const [loadStep,          setLoadStep]          = useState('');
   const [dataLog,           setDataLog]           = useState<LoadStep[]>([]);
@@ -434,6 +439,46 @@ export function useAuth(): AuthState & {
         addLog('Jump Clones', 'warn', `Not loaded — ${(e as Error).message}`);
       }
 
+      // ── 9d. LP balances (loyalty points per NPC corp) ────────────────────
+      setLoadStep('Loading LP balances…');
+      let lpPoints: import('../types').LPPoint[] = [];
+      try {
+        const lpRes = await fetch('/api/lp-balance', {
+          headers: { Authorization: `Bearer ${acc}` },
+        });
+        if (lpRes.ok) {
+          const lpData = await lpRes.json();
+          lpPoints = lpData.balances || [];
+          addLog('LP Balances', 'ok', `${lpPoints.length} corp${lpPoints.length !== 1 ? 's' : ''} with LP`);
+        } else if (lpRes.status === 403) {
+          addLog('LP Balances', 'warn', 'Scope not yet granted — re-login to enable LP Wallet');
+        } else {
+          addLog('LP Balances', 'warn', `ESI ${lpRes.status}`);
+        }
+      } catch (e) {
+        addLog('LP Balances', 'warn', `Not loaded — ${(e as Error).message}`);
+      }
+
+      // ── 9e. Keepstar docking rights ───────────────────────────────────────
+      // Probes the structure market endpoint (esi-markets.structure_markets.v1, already granted).
+      // ESI returns 403 if the character lacks docking rights; any other result → fail-open (true).
+      // This controls whether C-J6MT appears in hub selectors across the app.
+      setLoadStep('Checking Keepstar access…');
+      try {
+        const ksRes = await fetch('/api/can-dock-keepstar', {
+          headers: { Authorization: `Bearer ${acc}` },
+        });
+        if (ksRes.ok) {
+          const ksData = await ksRes.json();
+          setCanDockKeestar(ksData.canDock !== false);
+          addLog('Keepstar Access', ksData.canDock !== false ? 'ok' : 'warn',
+            ksData.canDock !== false ? 'Docking rights confirmed' : 'No docking rights — C-J6MT hidden');
+        }
+        // Non-ok from our own server → fail-open, no log entry needed
+      } catch {
+        // Network error → fail-open
+      }
+
       // ── Build CharacterInfo ──────────────────────────────────────────────
       const bpoCount = bData.filter((bp) => bp.quantity === -1).length;
       setCharacter({
@@ -444,6 +489,7 @@ export function useAuth(): AuthState & {
         blueprintCount: bData.length,
         bpoCount,
         activeJobs,
+        lpPoints,
       });
 
       // ── 10. Cache session on FORGE server (required for AI chat) ──────────
@@ -816,6 +862,7 @@ export function useAuth(): AuthState & {
     setJumpClones([]);
     setHasStandingsScope(false);
     setPrimaryStandings(null);
+    setCanDockKeestar(true);
     setError(null);
     setDataLog([]);
     setStatus('idle');
@@ -844,6 +891,7 @@ export function useAuth(): AuthState & {
     jumpClones,
     hasStandingsScope,
     primaryStandings,
+    canDockKeestar,
     error,
     loadStep,
     dataLog,

@@ -1099,6 +1099,7 @@ const AppShell: FC = () => {
         onMarketChange={handleMarketChange}
         onSourceMarketChange={handleSourceMarketChange}
         onOpenSettings={() => setSettingsOpen(true)}
+        canDockKeestar={auth.canDockKeestar}
       />
 
       {/* Re-auth banner: shown if standings scope not yet granted */}
@@ -1197,6 +1198,7 @@ const AppShell: FC = () => {
           haulConfigured={!!(industrySettings?.haul_enabled)}
           token={corpToken}
           primaryToken={auth.token}
+          lpPoints={auth.character?.lpPoints ?? []}
           piCharacters={piCharacters}
           queueCharacters={queueCharacters}
           corpStatus={corpStatus}
@@ -1220,6 +1222,7 @@ const AppShell: FC = () => {
             })),
           ]}
           onInterHubHaulSaved={() => setInterHubHaulRefreshKey(k => k + 1)}
+          canDockKeestar={auth.canDockKeestar}
         />
 
         {/* Drag handle: resize the info panel — only when it's open (desktop only) */}

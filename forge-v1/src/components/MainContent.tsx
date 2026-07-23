@@ -21,7 +21,12 @@ import PiTab           from './PiTab';
 import QueuePlannerTab from './QueuePlannerTab';
 import TradingTab      from './TradingTab';
 import InterHubTab     from './InterHubTab';
+import LPStoreTab      from './LPStoreTab';
 import ForgeWait       from './ForgeWait';
+import {
+  IconMarket, IconBlueprint, IconResearch, IconAssets, IconJobs,
+  IconQueue, IconPI, IconCorp, IconTrading, IconInterhub, IconLPStore,
+} from './NavIcons';
 import { formatISK, formatMargin } from '../utils/format';
 
 // Per-blueprint profitability (from /api/blueprint-profits — same data as Market Opps)
@@ -90,11 +95,15 @@ interface MainContentProps {
   queueCharacters?: QueueCharacter[];
   /** Always the primary character's auth token — used by Queue Planner regardless of which character is selected */
   primaryToken?: string | null;
+  /** LP point balances loaded at login time — passed to LP Store tab */
+  lpPoints?: import('../types').LPPoint[];
   corpStatus:       CorpStatus | null;
   accessStatus:     CorpAccessStatus | null;
   corpDataLoading?: boolean;
   /** v1.5 — item_id → character name; populated when alts are loaded; empty = no badges */
   blueprintOwnerMap?: Map<number, string>;
+  /** Whether the primary character has docking rights at C-J6MT Keepstar. Defaults true (fail-open). */
+  canDockKeestar?: boolean;
 }
 
 // Stable empty map used as the default for blueprintOwnerMap.
@@ -105,16 +114,17 @@ const EMPTY_BP_OWNER_MAP = new Map<number, string>();
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const TABS = [
-  { key: 'market',     label: '◈ Market Opportunities' },
-  { key: 'blueprints', label: '◈ Your blueprints' },
-  { key: 'research',   label: '🔬 Research ROI' },
-  { key: 'assets',     label: '◉ Assets' },
-  { key: 'jobs',       label: '⚙ Jobs' },
-  { key: 'queue',      label: '📋 Queue Planner' },
-  { key: 'pi',         label: '🌍 PI Colonies' },
-  { key: 'corp',       label: '🏭 Corp' },
-  { key: 'trading',    label: '⟳ Station Trading' },
-  { key: 'interhub',  label: '⟺ Inter-Hub Arb' },
+  { key: 'market',     Icon: IconMarket,    label: 'Market Opportunities' },
+  { key: 'blueprints', Icon: IconBlueprint, label: 'Your Blueprints' },
+  { key: 'research',   Icon: IconResearch,  label: 'Research ROI' },
+  { key: 'assets',     Icon: IconAssets,    label: 'Assets' },
+  { key: 'jobs',       Icon: IconJobs,      label: 'Jobs' },
+  { key: 'queue',      Icon: IconQueue,     label: 'Queue Planner' },
+  { key: 'pi',         Icon: IconPI,        label: 'PI Colonies' },
+  { key: 'corp',       Icon: IconCorp,      label: 'Corp' },
+  { key: 'trading',    Icon: IconTrading,   label: 'Station Trading' },
+  { key: 'interhub',   Icon: IconInterhub,  label: 'Inter-Hub Arb' },
+  { key: 'lpstore',    Icon: IconLPStore,   label: 'LP Store' },
 ];
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -156,6 +166,8 @@ const MainContent: FC<MainContentProps> = ({
   piCharacters      = [],
   queueCharacters   = [],
   primaryToken      = null,
+  lpPoints          = [],
+  canDockKeestar    = true,
 }) => {
   const [sortField, setSortField] = useState<SortField>('rank');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
@@ -368,16 +380,18 @@ const MainContent: FC<MainContentProps> = ({
     <main className="main-content" aria-label="Manufacturing data">
 
       <div className="main-tabs" role="tablist" aria-label="Content area tabs">
-        {TABS.map((t) => (
+        {TABS.map(({ key, Icon, label }) => (
           <button
-            key={t.key}
+            key={key}
             type="button"
             role="tab"
-            className={`main-tab${activeTab === t.key ? ' active' : ''}`}
-            aria-selected={activeTab === t.key}
-            onClick={() => onTabChange(t.key)}
+            className={`main-tab${activeTab === key ? ' active' : ''}`}
+            aria-selected={activeTab === key}
+            onClick={() => onTabChange(key)}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}
           >
-            {t.label}
+            <Icon />
+            {label}
           </button>
         ))}
       </div>
@@ -904,7 +918,7 @@ const MainContent: FC<MainContentProps> = ({
 
       {/* v1.27.0 — Station Trading tab */}
       {activeTab === 'trading' && (
-        <TradingTab token={token} />
+        <TradingTab token={token} canDockKeestar={canDockKeestar} />
       )}
 
       {/* Inter-Hub Arbitrage tab */}
@@ -918,6 +932,18 @@ const MainContent: FC<MainContentProps> = ({
           token={interHubToken}
           characters={interHubCharacters}
           onHaulSaved={onInterHubHaulSaved}
+          canDockKeestar={canDockKeestar}
+        />
+      )}
+
+      {/* LP Store Calculator */}
+      {activeTab === 'lpstore' && (
+        <LPStoreTab
+          onSelectItem={onSelectItem}
+          selectedTypeId={selectedTypeId}
+          lpPoints={lpPoints}
+          sellRegionId={regionId}
+          token={primaryToken}
         />
       )}
 

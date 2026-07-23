@@ -54,6 +54,7 @@ function fmtAge(sec: number | null): string {
 
 interface TradingTabProps {
   token: string | null;
+  canDockKeestar?: boolean;
 }
 
 // ── Sub-component: Order Book Depth ───────────────────────────────────────────
@@ -401,12 +402,13 @@ const HubDropdown: FC<{ hubs: TradeHub[]; value: string; onChange: (id: string) 
 
 // ── Main Component ────────────────────────────────────────────────────────────
 
-const TradingTab: FC<TradingTabProps> = ({ token }) => {
+const TradingTab: FC<TradingTabProps> = ({ token, canDockKeestar = true }) => {
+  const availableHubs = canDockKeestar ? TRADE_HUBS : TRADE_HUBS.filter(h => h.id !== 'keepstar');
   const [subTab,       setSubTab]       = useState<'scanner' | 'watchlist' | 'calculator' | 'orders'>('scanner');
   const [selectedItem, setSelectedItem] = useState<TradingScanItem | null>(null);
   const [selectedHub,  setSelectedHub]  = useState(() => {
     const saved = localStorage.getItem('forge-trading-hub');
-    return (saved && TRADE_HUBS.some(h => h.id === saved)) ? saved : 'jita';
+    return (saved && availableHubs.some(h => h.id === saved)) ? saved : 'jita';
   });
   const [minMargin,    setMinMargin]    = useState(3);
   const [minVol,       setMinVol]       = useState(50);
@@ -538,7 +540,7 @@ const TradingTab: FC<TradingTabProps> = ({ token }) => {
       <div className="td-header">
         <div className="td-header-left">
           <HubDropdown
-            hubs={TRADE_HUBS}
+            hubs={availableHubs}
             value={selectedHub}
             onChange={id => { setSelectedHub(id); setSelectedItem(null); localStorage.setItem('forge-trading-hub', id); }}
           />

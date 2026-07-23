@@ -10,7 +10,8 @@
  *   6. Bulk-imports ALL types from types.json          (faction, clothing, SKINs, etc.)
  *   7. Tags PI tiers + ME research times
  *   8. Imports T1→T2 invention chains                 (blueprint_invention, invention_materials)
- *   9. Verification report
+ *   9. Imports LP store offers                        (npc_corporations, lp_offers, lp_offer_required_items)
+ *  10. Verification report
  *
  * Usage:  node sde-import.js
  * IMPORTANT: Stop the server first — pm2 stop forge
@@ -655,6 +656,245 @@ async function verify() {
   else console.log('  ⚠ No reaction products found — check blueprints.json reaction data');
 }
 
+// ── Step 10: LP Store (Fuzzwork CSVs + ESI) ──────────────────────────────────
+
+function fetchText(url) {
+  return new Promise((resolve, reject) => {
+    const get = (u) => {
+      const client = u.startsWith('https') ? https : http;
+      client.get(u, { headers: { 'User-Agent': 'FORGE-SDE-Import/2.0' } }, (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          return get(res.headers.location);
+        }
+        if (res.statusCode !== 200) {
+          res.resume();
+          return reject(new Error(`HTTP ${res.statusCode} for ${u}`));
+        }
+        const chunks = [];
+        res.on('data', c => chunks.push(c));
+        res.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+        res.on('error', reject);
+      }).on('error', reject);
+    };
+    get(url);
+  });
+}
+
+function parseCSVRow(line) {
+  const fields = [];
+  let i = 0, inQuote = false, cur = '';
+  while (i < line.length) {
+    const c = line[i];
+    if (c === '"') {
+      if (inQuote && line[i + 1] === '"') { cur += '"'; i += 2; continue; }
+      inQuote = !inQuote;
+    } else if (c === ',' && !inQuote) {
+      fields.push(cur);
+      cur = '';
+    } else {
+      cur += c;
+    }
+    i++;
+  }
+  fields.push(cur);
+  return fields;
+}
+
+function parseCSV(text) {
+  const lines = text.split('\n').filter(l => l.trim());
+  if (!lines.length) return [];
+  const headers = parseCSVRow(lines[0]).map(h => h.trim());
+  return lines.slice(1).map(line => {
+    const vals = parseCSVRow(line);
+    const obj = {};
+    headers.forEach((h, i) => { obj[h] = (vals[i] || '').trim(); });
+    return obj;
+  });
+}
+
+function fetchESILP(corpId) {
+  return new Promise((resolve) => {
+    const opts = {
+      hostname: 'esi.evetech.net',
+      path: `/v1/loyalty/stores/${corpId}/offers/`,
+      headers: { 'User-Agent': 'FORGE-SDE-Import/2.0', 'Accept': 'application/json' },
+    };
+    https.get(opts, (res) => {
+      if (res.statusCode !== 200) { res.resume(); return resolve(null); }
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => {
+        try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
+        catch { resolve(null); }
+      });
+      res.on('error', () => resolve(null));
+    }).on('error', () => resolve(null));
+  });
+}
+
+// ── Step 9b: Item group / category names ──────────────────────────────────────
+
+async function importItemCategories(typesData) {
+  console.log('\n═══ Step 9b: Item categories (group_id + category_name) ═══');
+
+  try { await dbRun('ALTER TABLE items ADD COLUMN group_id INTEGER'); } catch (_) {}
+  try { await dbRun('ALTER TABLE items ADD COLUMN category_name TEXT'); } catch (_) {}
+
+  // Fetch group→category mapping from Fuzzwork
+  let groupToCat = new Map(); // groupId → categoryName
+  try {
+    console.log('  Fetching invGroups.csv + invCategories.csv...');
+    const [groupsCSV, catsCSV] = await Promise.all([
+      fetchText('https://www.fuzzwork.co.uk/dump/latest/csv/invGroups.csv'),
+      fetchText('https://www.fuzzwork.co.uk/dump/latest/csv/invCategories.csv'),
+    ]);
+    const catRows   = parseCSV(catsCSV);
+    const groupRows = parseCSV(groupsCSV);
+    const catNames  = new Map(catRows.map(r => [parseInt(r.categoryID, 10), r.categoryName]));
+    for (const row of groupRows) {
+      const gid = parseInt(row.groupID, 10);
+      const cid = parseInt(row.categoryID, 10);
+      if (gid && catNames.has(cid)) groupToCat.set(gid, catNames.get(cid));
+    }
+    console.log(`  ✓ ${groupToCat.size} group→category mappings`);
+  } catch (e) {
+    console.log(`  ⚠ Could not fetch group/category CSVs: ${e.message}`);
+  }
+
+  // Build typeId → [groupId, categoryName] from types.json
+  const byCategory = new Map(); // categoryName → typeId[]
+  const byGroup    = new Map(); // groupId → typeId[]
+
+  for (const type of Object.values(typesData)) {
+    const typeId  = type.type_id;
+    const groupId = type.group_id ?? null;
+    if (!typeId || !groupId) continue;
+    const catName = groupToCat.get(groupId) || null;
+
+    if (!byGroup.has(groupId)) byGroup.set(groupId, []);
+    byGroup.get(groupId).push(typeId);
+
+    if (catName) {
+      if (!byCategory.has(catName)) byCategory.set(catName, []);
+      byCategory.get(catName).push(typeId);
+    }
+  }
+
+  // Bulk UPDATE group_id grouped by groupId (fast: one UPDATE per group)
+  let gCount = 0;
+  for (const [groupId, typeIds] of byGroup) {
+    for (let i = 0; i < typeIds.length; i += 500) {
+      const chunk = typeIds.slice(i, i + 500);
+      await dbRun(
+        `UPDATE items SET group_id = ? WHERE type_id IN (${chunk.map(() => '?').join(',')})`,
+        [groupId, ...chunk]
+      );
+      gCount += chunk.length;
+    }
+  }
+
+  // Bulk UPDATE category_name grouped by category (fast: one UPDATE per category)
+  let cCount = 0;
+  for (const [catName, typeIds] of byCategory) {
+    for (let i = 0; i < typeIds.length; i += 500) {
+      const chunk = typeIds.slice(i, i + 500);
+      await dbRun(
+        `UPDATE items SET category_name = ? WHERE type_id IN (${chunk.map(() => '?').join(',')})`,
+        [catName, ...chunk]
+      );
+      cCount += chunk.length;
+    }
+  }
+
+  console.log(`  ✓ group_id set on ${gCount} items, category_name set on ${cCount} items across ${byCategory.size} categories`);
+}
+
+async function importLPStore() {
+  console.log('\n═══ Step 10: LP Store (Fuzzwork CSVs + ESI offers) ═══');
+
+  const CORP_CSV_URL    = 'https://www.fuzzwork.co.uk/dump/latest/csv/crpNPCCorporations.csv';
+  const FACTION_CSV_URL = 'https://www.fuzzwork.co.uk/dump/latest/csv/chrFactions.csv';
+
+  console.log('  Fetching crpNPCCorporations.csv...');
+  const corpCSV = await fetchText(CORP_CSV_URL);
+  console.log('  Fetching chrFactions.csv...');
+  const factionCSV = await fetchText(FACTION_CSV_URL);
+
+  const corpRows    = parseCSV(corpCSV);
+  const factionRows = parseCSV(factionCSV);
+
+  // faction name lookup
+  const factionNames = new Map();
+  for (const row of factionRows) {
+    const id = parseInt(row.factionID, 10);
+    if (id && row.factionName) factionNames.set(id, row.factionName);
+  }
+  console.log(`  ✓ ${factionNames.size} factions`);
+
+  // Populate npc_corporations and collect faction-linked corps to query ESI
+  await dbRun('DELETE FROM npc_corporations');
+  const corpsWithFaction = [];
+  let corpCount = 0;
+  for (const row of corpRows) {
+    const corpId    = parseInt(row.corporationID, 10);
+    const corpName  = row.corporationName;
+    const factionId = row.factionID ? parseInt(row.factionID, 10) : null;
+    const factionName = factionId ? (factionNames.get(factionId) || null) : null;
+    if (!corpId || !corpName) continue;
+    await dbRun(
+      'INSERT OR REPLACE INTO npc_corporations (corp_id, corp_name, faction_id, faction_name) VALUES (?,?,?,?)',
+      [corpId, corpName, factionId, factionName]
+    );
+    corpCount++;
+    if (factionId) corpsWithFaction.push({ corpId, corpName, factionId, factionName });
+  }
+  console.log(`  ✓ ${corpCount} NPC corps; querying ESI LP stores for ${corpsWithFaction.length} faction-linked corps...`);
+
+  // Batch-fetch LP offers from ESI (public endpoint, no auth)
+  await dbRun('DELETE FROM lp_offer_required_items');
+  await dbRun('DELETE FROM lp_offers');
+
+  const CONCURRENCY = 15;
+  let offerCount = 0, reqCount = 0, corpWithOffers = 0;
+
+  for (let i = 0; i < corpsWithFaction.length; i += CONCURRENCY) {
+    const batch = corpsWithFaction.slice(i, i + CONCURRENCY);
+    const results = await Promise.all(batch.map(({ corpId }) =>
+      fetchESILP(corpId).then(offers => ({ corpId, offers }))
+    ));
+
+    for (const { corpId, offers } of results) {
+      if (!Array.isArray(offers) || !offers.length) continue;
+      corpWithOffers++;
+      for (const offer of offers) {
+        const { offer_id: offerId, type_id: typeId, quantity: qty = 1,
+                lp_cost: lpCost = 0, isk_cost: iskCost = 0,
+                required_items: reqs = [] } = offer;
+        if (!offerId || !typeId) continue;
+        await dbRun(
+          'INSERT OR REPLACE INTO lp_offers (corp_id, offer_id, type_id, quantity, lp_cost, isk_cost) VALUES (?,?,?,?,?,?)',
+          [corpId, offerId, typeId, qty, lpCost, iskCost]
+        );
+        offerCount++;
+        for (const r of reqs) {
+          if (!r.type_id) continue;
+          await dbRun(
+            'INSERT OR REPLACE INTO lp_offer_required_items (offer_id, corp_id, req_type_id, quantity) VALUES (?,?,?,?)',
+            [offerId, corpId, r.type_id, r.quantity || 1]
+          );
+          reqCount++;
+        }
+      }
+    }
+    if ((i + CONCURRENCY) % 60 === 0) {
+      console.log(`  ... ${Math.min(i + CONCURRENCY, corpsWithFaction.length)}/${corpsWithFaction.length} corps queried`);
+    }
+  }
+
+  console.log(`  ✓ ${corpWithOffers} corps have LP stores`);
+  console.log(`  ✓ ${offerCount} LP offers, ${reqCount} required-item rows`);
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -700,6 +940,8 @@ async function main() {
     await tagPiTiers(typesData);
     await importResearchTimes(bpData);
     await importInventionChains(bpData);
+    await importItemCategories(typesData);
+    await importLPStore();
     await verify();
 
     console.log('\n✅ Done. Next steps:');

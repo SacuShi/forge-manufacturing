@@ -48,6 +48,7 @@ interface HeaderProps {
   onMarketChange:        (market: Market) => void;
   onSourceMarketChange:  (market: Market) => void;
   onOpenSettings:        () => void;
+  canDockKeestar:        boolean;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -73,6 +74,7 @@ const Header: FC<HeaderProps> = ({
   onMarketChange,
   onSourceMarketChange,
   onOpenSettings,
+  canDockKeestar,
 }) => {
   const portraitUrl = `${PORTRAIT_BASE}/${character.characterId}/portrait?size=32`;
 
@@ -142,17 +144,19 @@ const Header: FC<HeaderProps> = ({
         <div className="market-selector-group"
              title="Materials: where you buy ingredients · Market: where you sell finished goods">
           <MarketSelector
-            label="Materials"
+            label="Buy in"
             ariaLabel="Materials procurement hub"
             selectedMarket={selectedSourceMarket}
             onMarketChange={onSourceMarketChange}
+            hideKeestar={!canDockKeestar}
           />
           <MarketSelector
-            label="Market"
+            label="Sell at"
             ariaLabel="Sell market hub"
             selectedMarket={selectedMarket}
             onMarketChange={onMarketChange}
             loading={regionLoading}
+            hideKeestar={!canDockKeestar}
           />
         </div>
 

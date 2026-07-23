@@ -24,6 +24,7 @@ export const MOCK_CHARACTER: CharacterInfo = {
   activeJobCount: 7,
   blueprintCount: 143,
   bpoCount: 62,
+  lpPoints: [],
   activeJobs: [
     { name: 'Hammerhead II',        typeId: 2185,  quantity: 5,  remaining: '1h 42m',  done: false },
     { name: 'Drake',                typeId: 24698, quantity: 1,  remaining: '6h 11m',  done: false },

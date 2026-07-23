@@ -104,6 +104,7 @@ export function useTrueCost(
               ? 'Not manufacturable — this item comes from the LP store, drops, or contracts only.'
               : raw
           );
+          if (noBlueprint) setData(null);
         }
       } finally {
         if (!cancelled && !silent) setLoading(false);

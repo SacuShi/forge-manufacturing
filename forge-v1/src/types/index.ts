@@ -199,6 +199,15 @@ export interface TickerData {
   updatedAt:      number;
 }
 
+/** Raw LP point balance for one NPC corp, as returned by ESI */
+export interface LPPoint {
+  corp_id:      number;
+  corp_name:    string;
+  faction_id:   number | null;
+  faction_name: string | null;
+  lp:           number;
+}
+
 export interface CharacterInfo {
   characterId: number;
   name: string;
@@ -207,6 +216,7 @@ export interface CharacterInfo {
   blueprintCount: number;
   bpoCount: number;
   activeJobs: ActiveJob[];
+  lpPoints: LPPoint[];
 }
 
 /** Loading log entry for the LoadingScreen */
@@ -1015,5 +1025,57 @@ export interface CharacterOrder {
 export interface CharacterOrdersResponse {
   orders: CharacterOrder[];
   meta:   TradingMeta;
+}
+
+// ── LP Store (v1.36.0) ───────────────────────────────────────────────────────
+
+export interface LPOfferRequiredItem {
+  type_id:    number;
+  name:       string;
+  quantity:   number;
+  unit_price: number;
+  total_cost: number;
+}
+
+export interface LPOffer {
+  offer_id:       number;
+  corp_id:        number;
+  corp_name:      string;
+  faction_id:     number | null;
+  faction_name:   string | null;
+  type_id:        number;
+  item_name:      string;
+  quantity:       number;
+  lp_cost:        number;
+  isk_cost:       number;
+  required_items: LPOfferRequiredItem[];
+  jita_buy:       number;
+  revenue:        number;
+  req_cost:       number;
+  net_isk:        number;
+  isk_per_lp:     number;
+  volume:         number | null;
+  category_name:  string | null;
+}
+
+export interface LPFaction {
+  faction_id:  number;
+  faction_name: string;
+  corp_count:  number;
+}
+
+export interface LPCorp {
+  corp_id:     number;
+  corp_name:   string;
+  offer_count: number;
+}
+
+export interface LPStoreResponse {
+  offers:               LPOffer[];
+  total:                number;
+  prices_live:          boolean;
+  hub_name?:            string;
+  transaction_tax_rate?: number;
+  session_cached?:       boolean;
 }
 

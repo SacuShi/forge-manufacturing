@@ -36,6 +36,8 @@ interface MarketSelectorProps {
   label?:         string;
   /** Accessible label for the <select> element — defaults to `${label} hub`. */
   ariaLabel?:     string;
+  /** When true, hides the C-J6MT Keepstar option (user lacks docking rights). */
+  hideKeestar?:   boolean;
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -46,14 +48,14 @@ interface MarketSelectorProps {
  * that means practically for Source vs Market so the user isn't surprised.
  */
 function getTooltip(label: string | undefined, hubName: string): string {
-  if (label === 'Materials') {
+  if (label === 'Buy in') {
     return (
       `Material costs use ${hubName} sell price (lowest ask) — ` +
       `the price you pay to buy ingredients immediately from sell orders. ` +
       `Using buy-order prices would be cheaper but assumes you wait for fills.`
     );
   }
-  if (label === 'Market') {
+  if (label === 'Sell at') {
     return (
       `Revenue uses ${hubName} sell price (lowest ask) — ` +
       `assumes you list finished goods at the current cheapest price. ` +
@@ -66,10 +68,13 @@ function getTooltip(label: string | undefined, hubName: string): string {
 export const MarketSelector: FC<MarketSelectorProps> = ({
   selectedMarket,
   onMarketChange,
-  loading   = false,
+  loading      = false,
   label,
   ariaLabel,
-}) => (
+  hideKeestar  = false,
+}) => {
+  const visibleMarkets = hideKeestar ? MARKETS.filter(m => m.id !== 10099000) : MARKETS;
+  return (
   <div
     className="market-selector"
     title={getTooltip(label, selectedMarket.name)}
@@ -94,7 +99,7 @@ export const MarketSelector: FC<MarketSelectorProps> = ({
         if (market) onMarketChange(market);
       }}
     >
-      {MARKETS.map((market) => (
+      {visibleMarkets.map((market) => (
         <option key={market.id} value={market.id}>
           {market.name}{market.type === 'nullsec' ? ' [NULLSEC]' : ''}
         </option>
@@ -105,4 +110,5 @@ export const MarketSelector: FC<MarketSelectorProps> = ({
       <span className="market-selector-loading" aria-label="Loading prices">…</span>
     )}
   </div>
-);
+  );
+};
