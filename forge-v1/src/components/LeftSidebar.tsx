@@ -21,7 +21,7 @@ import type { PushState } from '../hooks/usePushNotifications';
 import TickerPinButton from './TickerPinButton';
 import {
   IconMarket, IconBlueprint, IconResearch, IconAssets, IconJobs,
-  IconQueue, IconPI, IconCorp, IconTrading, IconInterhub, IconLPStore,
+  IconQueue, IconPI, IconPIPlanner, IconCorp, IconTrading, IconInterhub, IconLPStore, IconHelp,
 } from './NavIcons';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -53,6 +53,7 @@ interface LeftSidebarProps {
 const PORTRAIT_BASE = 'https://images.evetech.net/characters';
 
 const NAV_ITEMS = [
+  { key: 'help',       Icon: IconHelp,      label: "Pilot's Guide" },
   { key: 'market',     Icon: IconMarket,    label: 'Market Opportunities' },
   { key: 'blueprints', Icon: IconBlueprint, label: 'My Blueprints' },
   { key: 'research',   Icon: IconResearch,  label: 'Research ROI' },
@@ -60,6 +61,7 @@ const NAV_ITEMS = [
   { key: 'jobs',       Icon: IconJobs,      label: 'Active Jobs' },
   { key: 'queue',      Icon: IconQueue,     label: 'Queue Planner' },
   { key: 'pi',         Icon: IconPI,        label: 'PI Colonies' },
+  { key: 'piplanner',  Icon: IconPIPlanner, label: 'PI Planner' },
   { key: 'corp',       Icon: IconCorp,      label: 'Corp' },
   { key: 'trading',    Icon: IconTrading,   label: 'Station Trading' },
   { key: 'interhub',   Icon: IconInterhub,  label: 'Inter-Hub Arb' },

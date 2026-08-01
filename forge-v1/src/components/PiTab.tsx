@@ -6,6 +6,7 @@ import { useState, useEffect, useMemo, type FC } from 'react';
 import { apiGet } from '../api/client';
 import { formatISK } from '../utils/format';
 import type { PiCharacter } from '../types';
+import { usePocoTaxRate } from '../hooks/usePocoTaxRate';
 import ForgeWait       from './ForgeWait';
 import TickerPinButton from './TickerPinButton';
 
@@ -104,7 +105,6 @@ const PI_TIER_COLORS: Record<number, string> = {
 const PI_BASE_VALUE: Record<number, number> = { 0: 5, 1: 400, 2: 7200, 3: 60000, 4: 1200000 };
 // Fixed factory outputs per cycle (EVE game mechanic)
 const PI_FACTORY_OUTPUT_QTY: Record<number, number> = { 1: 20, 2: 5, 3: 3, 4: 1 };
-const POCO_TAX_RATE = 0.10; // 10% default — typical player POCO rate
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -155,9 +155,10 @@ interface YieldLine {
  * CCP's base value per unit — different from the Jita market price).
  */
 function colonyYield(
-  colony:  Colony,
-  data:    PiData,
-  grouped: Array<{ schematicId: number; count: number }>,
+  colony:      Colony,
+  data:        PiData,
+  grouped:     Array<{ schematicId: number; count: number }>,
+  pocoTaxRate: number,
 ): YieldLine[] {
   const { productNames, schematics, prices, factoryOutputs } = data;
   const lines: YieldLine[] = [];
@@ -174,7 +175,7 @@ function colonyYield(
     const unitsPerDay = ex.qty_per_cycle * (86400 / ex.cycle_time);
     const sell        = prices[typeId]?.sell ?? 0;
     const grossISK    = unitsPerDay * sell;
-    const taxISK      = unitsPerDay * (PI_BASE_VALUE[tier] ?? 5) * POCO_TAX_RATE;
+    const taxISK      = unitsPerDay * (PI_BASE_VALUE[tier] ?? 5) * pocoTaxRate;
     lines.push({
       label: productNames[typeId]?.name ?? `Type ${typeId}`,
       typeId, tier, unitsPerDay: Math.round(unitsPerDay),
@@ -197,7 +198,7 @@ function colonyYield(
     const unitsPerDay = count * outputQty * (86400 / sch.cycleTime);
     const sell        = prices[typeId]?.sell ?? 0;
     const grossISK    = unitsPerDay * sell;
-    const taxISK      = unitsPerDay * (PI_BASE_VALUE[tier] ?? 400) * POCO_TAX_RATE;
+    const taxISK      = unitsPerDay * (PI_BASE_VALUE[tier] ?? 400) * pocoTaxRate;
     lines.push({
       label: productNames[typeId]?.name ?? sch.name,
       typeId, tier, unitsPerDay: Math.round(unitsPerDay),
@@ -231,6 +232,7 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
   const [market,        setMarket]        = useState<MarketData | null>(null);
   const [marketError,   setMarketError]   = useState<string | null>(null);
   const [showAllRankings, setShowAllRankings] = useState(false);
+  const [pocoTaxRate, setPocoTaxRate] = usePocoTaxRate();
   const [, forceUpdate] = useState(0);
 
   // Stable key so we only re-fetch when the set of characters actually changes.
@@ -238,7 +240,7 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
 
   useEffect(() => {
     if (!piCharacters.length) return;
-    setLoading(true); setError(null); setPartialErrors([]); setMarketError(null);
+    setLoading(true); setError(null); setPartialErrors([]);
 
     // Fetch PI colonies for every character in parallel, then merge.
     Promise.allSettled(
@@ -285,13 +287,19 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
       }
       setLoading(false);
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [charKey]);
 
-    // Market rankings only need one call (not character-specific)
-    apiGet<MarketData>('/api/pi/market', piCharacters[0].token)
+  // Market rankings only need one call (not character-specific) — refetches when the
+  // POCO tax rate changes so rankings reflect the user's real rate.
+  useEffect(() => {
+    if (!piCharacters.length) return;
+    setMarketError(null);
+    apiGet<MarketData>(`/api/pi/market?pocoTaxRate=${pocoTaxRate}`, piCharacters[0].token)
       .then(d  => setMarket(d))
       .catch(e => setMarketError(e.message || 'Failed to load market data'));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [charKey]);
+  }, [charKey, pocoTaxRate]);
 
   useEffect(() => {
     const id = setInterval(() => forceUpdate(n => n + 1), 60_000);
@@ -302,8 +310,8 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
   // (hooks must be called the same number of times on every render).
   // When data is null (loading / error), this safely returns an empty array.
   const allYieldLines = useMemo(
-    () => !data ? [] : data.colonies.flatMap(c => colonyYield(c, data, groupFactories(c.pins))),
-    [data],
+    () => !data ? [] : data.colonies.flatMap(c => colonyYield(c, data, groupFactories(c.pins), pocoTaxRate)),
+    [data, pocoTaxRate],
   );
 
   if (!piCharacters.length) return <div className="pi-state-msg">Log in to view PI colonies.</div>;
@@ -363,11 +371,20 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
             <span className="pi-summary-tax">−{formatISK(totalTax)} tax</span>
             <span className="pi-summary-sep">·</span>
             <span className="pi-summary-net">{formatISK(totalNet)} ISK/day</span>
-            <span className="pi-summary-note">Jita · 10% POCO · est.</span>
+            <span className="pi-summary-note">Jita · est.</span>
           </>
         ) : (
           <span className="pi-summary-note">Prices not yet loaded — check back shortly</span>
         )}
+        <label className="pi-poco-input" title="Your actual POCO export tax rate — varies by structure/owner, not available live">
+          POCO tax
+          <input
+            type="number" min={0} max={100} step={0.5}
+            value={Math.round(pocoTaxRate * 1000) / 10}
+            onChange={e => setPocoTaxRate((parseFloat(e.target.value) || 0) / 100)}
+          />
+          %
+        </label>
       </div>
 
       {partialErrors.length > 0 && (
@@ -390,7 +407,7 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
           const typeLabel = PLANET_LABELS[colony.planet_type]   ?? colony.planet_type;
           const extractors = colony.pins.filter(p => p.extractor_details);
           const grouped    = groupFactories(colony.pins);
-          const yieldLines = colonyYield(colony, data, grouped);
+          const yieldLines = colonyYield(colony, data, grouped, pocoTaxRate);
           const colonyNet  = yieldLines.reduce((s, l) => s + l.netISK, 0);
           const colonyHasPrices = yieldLines.some(l => l.hasPrices);
 
@@ -571,7 +588,7 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
         <div className="pi-rankings">
           <div className="pi-rankings-header">
             <span className="pi-rankings-title">Schematic Market Rankings</span>
-            <span className="pi-rankings-sub">net ISK/day per single factory slot · Jita sell · 10% POCO tax</span>
+            <span className="pi-rankings-sub">net ISK/day per single factory slot · Jita sell · {Math.round(pocoTaxRate * 100)}% POCO tax</span>
           </div>
           <div className="pi-rankings-table">
             <div className="pi-rankings-thead">
@@ -652,7 +669,7 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
       )}
 
       <p className="pi-footnote">
-        Colony layouts cached ~10 min by ESI · Prices: Jita sell · POCO export tax assumed 10% · Self-contained planets (extractor + factory) show both P0 and processed values separately
+        Colony layouts cached ~10 min by ESI · Prices: Jita sell · POCO export tax {Math.round(pocoTaxRate * 100)}% (your rate, set above) · Self-contained planets (extractor + factory) show both P0 and processed values separately
       </p>
     </div>
   );

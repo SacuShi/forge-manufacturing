@@ -24,11 +24,12 @@ const ICON_BASE = 'https://images.evetech.net/types';
 type SortKey = 'saving' | 'pct' | 'time' | 'projected';
 
 interface ResearchTabProps {
-  blueprints:   EsiBlueprint[];
+  blueprints:      EsiBlueprint[];
   /** Selected market hub region id — drives material prices. */
-  regionId:     number;
+  regionId:        number;
   /** Open an item in the right sidebar. */
-  onSelectItem: (typeId: number, name: string) => void;
+  onSelectItem:    (typeId: number, name: string) => void;
+  selectedTypeId?: number | null;
 }
 
 /** Day/hour-aware duration formatter (research times run to days). */
@@ -42,7 +43,7 @@ function formatDuration(seconds: number | null): string {
   return `${m}m`;
 }
 
-const ResearchTab: FC<ResearchTabProps> = ({ blueprints, regionId, onSelectItem }) => {
+const ResearchTab: FC<ResearchTabProps> = ({ blueprints, regionId, onSelectItem, selectedTypeId }) => {
   const [data, setData]       = useState<ResearchRoiResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState<string | null>(null);
@@ -178,6 +179,7 @@ const ResearchTab: FC<ResearchTabProps> = ({ blueprints, regionId, onSelectItem 
                   key={it.blueprintTypeId}
                   role="button"
                   tabIndex={0}
+                  aria-selected={it.productId === selectedTypeId ? 'true' : undefined}
                   onClick={() => onSelectItem(it.productId, it.productName)}
                   onKeyDown={(e) => e.key === 'Enter' && onSelectItem(it.productId, it.productName)}
                 >

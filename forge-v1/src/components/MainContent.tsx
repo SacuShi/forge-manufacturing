@@ -1,4 +1,42 @@
-// FORGE v1.0 — MainContent: market/blueprints/assets/jobs/corp tabs
+/**
+ * FORGE — MainContent
+ *
+ * The central pane of the app. Renders one of 13 tabs depending on which nav item
+ * the user has selected in the LeftSidebar:
+ *
+ *   market      — Market Opportunities: ranked list of items to manufacture for profit
+ *   blueprints  — My Blueprints: the user's owned BPOs/BPCs with per-blueprint profit metrics
+ *   research    — Research ROI: blueprints worth researching to higher ME/TE levels
+ *   assets      — My Assets: everything in the character's hangars
+ *   jobs        — Active Jobs: manufacturing/research jobs currently running
+ *   queue       — Queue Planner: builds a job queue across all characters' spare slots
+ *   pi          — PI Colonies: Planetary Industry colonies across all characters
+ *   piplanner   — PI Planner: recommends which planet in a region to use for a PI chain
+ *   corp        — Corp: corporation-level blueprints and assets (Director access required)
+ *   trading     — Station Trading: live buy/sell order management
+ *   interhub    — Inter-Hub Arb: items priced differently at different trade hubs
+ *   lpstore     — LP Store: converts Loyalty Points earned from NPC corps into ISK
+ *   help        — Guide
+ *
+ * All data comes from App.tsx as props — this component owns display state only
+ * (sort order, search text, filter selections). It never fetches auth-gated data
+ * directly; the only fetches here are for blueprint metadata (icons + meta level)
+ * and blueprint profitability (ISK/hr, margin), which are not user-sensitive.
+ *
+ * GLOSSARY (for readers who don't play EVE)
+ * ──────────────────────────────────────────
+ *   BPO / BPC   — Blueprint Original / Blueprint Copy. Originals last forever;
+ *                 copies have a fixed number of uses (runs). BPOs are far more
+ *                 valuable and usually take months to earn or hundreds of billions
+ *                 of ISK to buy.
+ *   PI          — Planetary Industry. Characters can place extractors and factories
+ *                 on planets to harvest raw materials and process them into
+ *                 manufactured goods (P0 → P1 → P2 → P3 → P4).
+ *   LP          — Loyalty Points. Earned by running NPC missions. Spent in the LP
+ *                 store to buy exclusive items (faction ships, implants, etc.).
+ *   ISK/hr      — ISK per hour: the key profitability metric. Accounts for both
+ *                 margin and how quickly a job completes.
+ */
 
 import { useState, useMemo, useEffect, type FC } from 'react';
 import type {
@@ -18,6 +56,7 @@ import ItemTable    from './ItemTable';
 import CorpTab      from './CorpTab';
 import ResearchTab  from './ResearchTab';
 import PiTab           from './PiTab';
+import PiPlannerTab    from './PiPlannerTab';
 import QueuePlannerTab from './QueuePlannerTab';
 import TradingTab      from './TradingTab';
 import InterHubTab     from './InterHubTab';
@@ -25,8 +64,9 @@ import LPStoreTab      from './LPStoreTab';
 import ForgeWait       from './ForgeWait';
 import {
   IconMarket, IconBlueprint, IconResearch, IconAssets, IconJobs,
-  IconQueue, IconPI, IconCorp, IconTrading, IconInterhub, IconLPStore,
+  IconQueue, IconPI, IconPIPlanner, IconCorp, IconTrading, IconInterhub, IconLPStore, IconHelp,
 } from './NavIcons';
+import HelpTab from './HelpTab';
 import { formatISK, formatMargin } from '../utils/format';
 
 // Per-blueprint profitability (from /api/blueprint-profits — same data as Market Opps)
@@ -104,6 +144,8 @@ interface MainContentProps {
   blueprintOwnerMap?: Map<number, string>;
   /** Whether the primary character has docking rights at C-J6MT Keepstar. Defaults true (fail-open). */
   canDockKeestar?: boolean;
+  /** Blueprint typeId → { metaLevel, productTypeId } — fetched at login time in App.tsx */
+  bpMetadataProp?: Record<number, { metaLevel: number; productTypeId: number | null }>;
 }
 
 // Stable empty map used as the default for blueprintOwnerMap.
@@ -114,6 +156,7 @@ const EMPTY_BP_OWNER_MAP = new Map<number, string>();
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const TABS = [
+  { key: 'help',       Icon: IconHelp,      label: 'Guide' },
   { key: 'market',     Icon: IconMarket,    label: 'Market Opportunities' },
   { key: 'blueprints', Icon: IconBlueprint, label: 'Your Blueprints' },
   { key: 'research',   Icon: IconResearch,  label: 'Research ROI' },
@@ -121,6 +164,7 @@ const TABS = [
   { key: 'jobs',       Icon: IconJobs,      label: 'Jobs' },
   { key: 'queue',      Icon: IconQueue,     label: 'Queue Planner' },
   { key: 'pi',         Icon: IconPI,        label: 'PI Colonies' },
+  { key: 'piplanner',  Icon: IconPIPlanner, label: 'PI Planner' },
   { key: 'corp',       Icon: IconCorp,      label: 'Corp' },
   { key: 'trading',    Icon: IconTrading,   label: 'Station Trading' },
   { key: 'interhub',   Icon: IconInterhub,  label: 'Inter-Hub Arb' },
@@ -168,13 +212,16 @@ const MainContent: FC<MainContentProps> = ({
   primaryToken      = null,
   lpPoints          = [],
   canDockKeestar    = true,
+  bpMetadataProp    = {},
 }) => {
   const [sortField, setSortField] = useState<SortField>('rank');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
   const [filterOwned, setFilterOwned] = useState<string>('all');
   const [bpSearch, setBpSearch] = useState('');
   const [bpFilter, setBpFilter] = useState<'all' | 'bpo' | 'bpc'>('all');
-  const [bpMetadata, setBpMetadata] = useState<Record<number, number>>({});
+  // Use prop when available (fetched at login in App.tsx), fall back to local fetch
+  const [bpMetadataLocal, setBpMetadataLocal] = useState<Record<number, { metaLevel: number; productTypeId: number | null }>>({});
+  const bpMetadata = Object.keys(bpMetadataProp).length > 0 ? bpMetadataProp : bpMetadataLocal;
   // v1.15.0 — My Blueprints profitability + sorting (mirrors Market Opportunities)
   const [bpProfits, setBpProfits] = useState<Record<number, BlueprintProfit>>({});
   const [bpSort,    setBpSort]    = useState<BpSortField>('iskPerHour');
@@ -186,15 +233,15 @@ const MainContent: FC<MainContentProps> = ({
   const getBpName = (typeId: number) =>
     itemNames.get(typeId) ?? `Blueprint #${typeId}`;
 
-  // Reverse name→typeId map for icon lookups
+  // Fallback name-based lookup for LP BPCs not in the blueprints DB table.
+  // Used only when bpMetadata doesn't supply a productTypeId.
   const nameToTypeId = useMemo(() => {
     const m = new Map<string, number>();
-    itemNames.forEach((name, typeId) => m.set(name.toLowerCase(), typeId));
+    itemNames.forEach((name, id) => m.set(name.toLowerCase(), id));
     return m;
   }, [itemNames]);
 
-  // Blueprint type_id → product type_id (strips " Blueprint" suffix for icon lookup)
-  const getProductTypeId = (bpTypeId: number): number | null => {
+  const getProductTypeIdByName = (bpTypeId: number): number | null => {
     const bpName = itemNames.get(bpTypeId);
     if (!bpName) return null;
     const productName = bpName.replace(/ Blueprint$/i, '').toLowerCase();
@@ -215,6 +262,9 @@ const MainContent: FC<MainContentProps> = ({
   };
 
   useEffect(() => {
+    // Skip the local fetch when App.tsx already fetched at login (bpMetadataProp is populated).
+    // This prevents a redundant duplicate request on every render where both paths would fire.
+    if (Object.keys(bpMetadataProp).length > 0) return;
     if (!blueprints || blueprints.length === 0) return;
 
     const typeIds = blueprints.map(b => b.type_id);
@@ -225,9 +275,9 @@ const MainContent: FC<MainContentProps> = ({
       body: JSON.stringify({ blueprintTypeIds: typeIds })
     })
       .then(res => res.json())
-      .then(metadata => setBpMetadata(metadata))
+      .then(metadata => setBpMetadataLocal(metadata))
       .catch(err => console.error('Failed to load blueprint metadata:', err));
-  }, [blueprints]);
+  }, [blueprints, bpMetadataProp]);
 
   // v1.15.0 — fetch per-blueprint profitability for the selected hub (same source
   // as Market Opportunities). Refetches when the blueprint set or hub changes.
@@ -342,8 +392,8 @@ const MainContent: FC<MainContentProps> = ({
     entries.sort(([a], [b]) => {
       if (bpSort === 'name') return dir * getBpName(a).localeCompare(getBpName(b));
       if (bpSort === 'level') {
-        const la = bpMetadata[a] ?? 0;
-        const lb = bpMetadata[b] ?? 0;
+        const la = bpMetadata[a]?.metaLevel ?? 0;
+        const lb = bpMetadata[b]?.metaLevel ?? 0;
         return la !== lb
           ? (la - lb) * dir
           : getBpName(a).localeCompare(getBpName(b));
@@ -356,7 +406,7 @@ const MainContent: FC<MainContentProps> = ({
     });
     return entries;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [blueprints, bpSearch, bpFilter, bpBuildableOnly, itemNames, bpProfits, bpSort, bpSortDir]);
+  }, [blueprints, bpSearch, bpFilter, bpBuildableOnly, itemNames, bpProfits, bpMetadata, bpSort, bpSortDir]);
 
   const assetGroups = useMemo(() => {
     const g = new Map<string, { qty: number; typeId: number }>();
@@ -599,9 +649,9 @@ const MainContent: FC<MainContentProps> = ({
               const name          = getBpName(typeId);
               // BPO = all copies have runs===-1 (originals never mix with BPCs in same type_id group)
               const isBpo         = copies[0].runs === -1;
-              const metaLevel     = bpMetadata[typeId] ?? 0;
+              const metaLevel     = bpMetadata[typeId]?.metaLevel ?? 0;
               const isT2          = metaLevel === 1;
-              const productTypeId = getProductTypeId(typeId);
+              const productTypeId = bpMetadata[typeId]?.productTypeId ?? getProductTypeIdByName(typeId);
               const selectId      = productTypeId ?? typeId;
               const selectName    = name.replace(/ Blueprint$/i, '');
 
@@ -614,29 +664,24 @@ const MainContent: FC<MainContentProps> = ({
                   className="bp-card"
                   role="button"
                   tabIndex={0}
+                  data-selected={selectId === selectedTypeId ? 'true' : undefined}
                   onClick={() => onSelectItem(selectId, selectName)}
                   onKeyDown={(e) => e.key === 'Enter' && onSelectItem(selectId, selectName)}
                 >
                   {/* Product icon */}
                   <div className={`bp-icon ${isT2 ? 'bp-icon-t2' : (isBpo ? 'bp-icon-bpo' : 'bp-icon-bpc')}`}>
-                    {productTypeId ? (
+                    {productTypeId && (
                       <img
                         src={`https://images.evetech.net/types/${productTypeId}/icon?size=32`}
-                        alt={name}
+                        alt=""
                         width={32}
                         height={32}
                         crossOrigin="anonymous"
                         onError={(e) => {
-                          const el = e.currentTarget as HTMLImageElement;
-                          el.style.display = 'none';
-                          const next = el.nextSibling as HTMLElement | null;
-                          if (next) next.style.display = 'inline';
+                          (e.currentTarget as HTMLImageElement).style.visibility = 'hidden';
                         }}
                       />
-                    ) : null}
-                    <span style={{ fontSize: 18, fontWeight: 700, display: productTypeId ? 'none' : 'inline' }}>
-                      ◇
-                    </span>
+                    )}
                   </div>
 
                   {/* Name + badges + per-copy runs */}
@@ -750,16 +795,29 @@ const MainContent: FC<MainContentProps> = ({
             aria-label="Search assets"
           />
           <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 220px)' }}>
-            {assetGroups.map(([name, { qty, typeId }]) => (
+            {assetGroups.map(([name, { qty, typeId }], i) => {
+              const isAssetSelected = typeId === selectedTypeId;
+              return (
               <div
                 key={typeId}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'space-between',
-                  padding: '8px 4px',
+                  padding: '7px 12px',
                   borderBottom: '0.5px solid var(--color-border-light)',
                   cursor: 'pointer',
+                  background: isAssetSelected
+                    ? 'rgba(212, 150, 14, 0.20)'
+                    : i % 2 === 0 ? 'var(--color-bg-primary)' : 'var(--color-bg-secondary)',
+                  boxShadow: isAssetSelected ? 'inset 0 0 0 1px rgba(212, 150, 14, 0.55)' : undefined,
+                  transition: 'box-shadow 0.1s',
+                }}
+                onMouseEnter={e => {
+                  if (!isAssetSelected) (e.currentTarget as HTMLDivElement).style.boxShadow = 'inset 0 0 0 1px rgba(212, 150, 14, 0.55)';
+                }}
+                onMouseLeave={e => {
+                  if (!isAssetSelected) (e.currentTarget as HTMLDivElement).style.boxShadow = '';
                 }}
                 onClick={() => onSelectItem(typeId, name)}
               >
@@ -792,7 +850,8 @@ const MainContent: FC<MainContentProps> = ({
                   ×{qty.toLocaleString()}
                 </span>
               </div>
-            ))}
+              );
+            })}
             {assetGroups.length === 0 && (
               <div style={{ color: 'var(--color-text-tertiary)', fontSize: 12,
                 padding: 24, textAlign: 'center' }}>
@@ -814,6 +873,7 @@ const MainContent: FC<MainContentProps> = ({
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {activeJobs.map((job) => {
                 const label = activityLabel(job.activityId);
+                const isJobSelected = job.typeId === selectedTypeId;
                 return (
                 <div
                   key={`${job.name}-${job.remaining}-${job.activityId ?? 0}`}
@@ -823,23 +883,23 @@ const MainContent: FC<MainContentProps> = ({
                   onClick={() => onSelectItem(job.typeId, job.name)}
                   onKeyDown={(e) => e.key === 'Enter' && onSelectItem(job.typeId, job.name)}
                   style={{
-                    background: 'var(--color-bg-tertiary)',
-                    border: '0.5px solid var(--color-border-light)',
+                    background: isJobSelected ? 'rgba(212, 150, 14, 0.20)' : 'var(--color-bg-tertiary)',
+                    border: '0.5px solid',
+                    borderColor: isJobSelected ? 'rgba(212, 150, 14, 0.55)' : 'var(--color-border-light)',
+                    boxShadow: isJobSelected ? 'inset 0 0 0 1px rgba(212, 150, 14, 0.55)' : undefined,
                     borderRadius: 4,
                     padding: '10px 14px',
                     display: 'flex',
                     justifyContent: 'space-between',
                     alignItems: 'center',
                     cursor: 'pointer',
-                    transition: 'border-color 0.1s, background 0.1s',
+                    transition: 'border-color 0.1s, box-shadow 0.1s',
                   }}
                   onMouseEnter={(e) => {
-                    (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--color-accent-primary)';
-                    (e.currentTarget as HTMLDivElement).style.background  = 'var(--color-bg-secondary)';
+                    if (!isJobSelected) (e.currentTarget as HTMLDivElement).style.boxShadow = 'inset 0 0 0 1px rgba(212, 150, 14, 0.55)';
                   }}
                   onMouseLeave={(e) => {
-                    (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--color-border-light)';
-                    (e.currentTarget as HTMLDivElement).style.background  = 'var(--color-bg-tertiary)';
+                    if (!isJobSelected) (e.currentTarget as HTMLDivElement).style.boxShadow = '';
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 }}>
@@ -886,6 +946,7 @@ const MainContent: FC<MainContentProps> = ({
           blueprints={blueprints}
           regionId={regionId}
           onSelectItem={onSelectItem}
+          selectedTypeId={selectedTypeId}
         />
       )}
 
@@ -902,6 +963,11 @@ const MainContent: FC<MainContentProps> = ({
       {/* v1.25.0 — PI Colonies tab */}
       {activeTab === 'pi' && (
         <PiTab piCharacters={piCharacters} />
+      )}
+
+      {/* PI Planner — recommends system/planet layout for a target PI chain */}
+      {activeTab === 'piplanner' && (
+        <PiPlannerTab />
       )}
 
       {/* v1.4.0 — Corp tab */}
@@ -945,6 +1011,13 @@ const MainContent: FC<MainContentProps> = ({
           sellRegionId={regionId}
           token={primaryToken}
         />
+      )}
+
+      {/* Pilot's Guide */}
+      {activeTab === 'help' && (
+        <div style={{ flex: 1, overflowY: 'auto' }}>
+          <HelpTab />
+        </div>
       )}
 
     </main>

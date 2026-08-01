@@ -1,13 +1,34 @@
 /**
- * FORGE Security Middleware — v1.5.4
+ * FORGE Security Middleware — v1.5.5
  *
  * Rate limits, token verification (with JWKS), and input validation.
+ *
+ * HOW EVE AUTHENTICATION WORKS (for readers unfamiliar with EVE SSO)
+ * ────────────────────────────────────────────────────────────────────
+ * EVE uses standard OAuth2 (the same protocol as "Login with Google"). When the
+ * user authenticates, CCP issues a JWT (JSON Web Token) — a short cryptographically
+ * signed string that encodes the user's character ID. FORGE verifies this signature
+ * against CCP's public key (fetched from the JWKS endpoint) before trusting any
+ * claim in the token. This is called RS256 verification.
+ *
+ * Why verify the signature? A JWT without signature verification is just a
+ * base64-encoded JSON blob — anyone could forge one. The signature ensures
+ * only CCP could have issued it.
  *
  * Rate-limit budget (per IP window):
  *   apiLimiter   — 300 req / 5 min   (generous for multi-char combined re-POSTs)
  *   authLimiter  — 20  req / 15 min  (EVE SSO callbacks)
  *   adminLimiter — 10  req / 15 min  (admin key endpoints — brute-force protection)
  *   aiLimiter    — 30  req / 10 min  (AI chat completions)
+ *
+ * Note on rate-limit storage: the limiters use express-rate-limit's default
+ * in-memory store, which resets on server restart. Acceptable for a personal
+ * tool; a Redis store would be needed for a multi-process/multi-server deployment.
+ *
+ * Note on unauthenticated PI planner routes: /api/pi-planner/regions, /targets,
+ * and /plan use only apiLimiter and no verifyEveToken. This is deliberate — they
+ * return no user-specific data (only SDE geography and chain topology), so there
+ * is no sensitive data to protect. apiLimiter prevents resource abuse.
  */
 
 'use strict';
@@ -174,10 +195,18 @@ async function extractCharacterFromToken(authHeader) {
   try {
     payload = await verifyEveJwt(token);
   } catch (verifyErr) {
-    // Only transient JWKS network failures use the decode-only fallback;
-    // local errors (bad sig, expired, wrong Node) are hard rejects.
-    if (verifyErr.message.startsWith('JWKS fetch failed')) {
-      console.warn('⚠ JWKS unavailable — using decode-only fallback:', verifyErr.message);
+    // Only genuine network/timeout failures trigger the decode-only fallback.
+    // HTTP errors from CCP (403 rate-limit, 500 outage) are NOT network failures —
+    // they must hard-reject, or a CCP-side rate-limit becomes an auth bypass window.
+    // Local errors (bad signature, expired token, wrong Node version) also hard-reject.
+    const isNetworkFailure =
+      verifyErr.code === 'ECONNRESET' ||
+      verifyErr.code === 'ECONNREFUSED' ||
+      verifyErr.code === 'ETIMEDOUT' ||
+      verifyErr.name === 'AbortError' ||
+      verifyErr.message === 'fetch failed';  // generic Node fetch network error
+    if (isNetworkFailure) {
+      console.warn('⚠ JWKS network failure — using decode-only fallback:', verifyErr.message);
       payload = _decodeJwtUnsafe(token);
     } else {
       throw Object.assign(new Error('Invalid or expired token'), { status: 401 });
@@ -315,6 +344,10 @@ function validateChatMessage(req, res, next) {
  */
 // eslint-disable-next-line no-unused-vars
 function errorHandler(err, req, res, next) {
+  // Client disconnected mid-request (closed tab, navigated away, network drop).
+  // Not a server bug — log nothing, nothing to send back.
+  if (err.code === 'ECONNABORTED' || err.type === 'request.aborted') return;
+
   console.error('Unhandled server error:', err);
   const status = typeof err.status === 'number' ? err.status :
                  typeof err.statusCode === 'number' ? err.statusCode : 500;

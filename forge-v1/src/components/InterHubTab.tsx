@@ -355,18 +355,17 @@ const InterHubTab: FC<InterHubTabProps> = ({
                     style={{
                       borderBottom: '0.5px solid var(--color-border-light)',
                       background: isSelected
-                        ? 'var(--color-accent-primary-faint, rgba(96,165,250,0.08))'
+                        ? 'rgba(212, 150, 14, 0.20)'
                         : i % 2 === 0 ? 'var(--color-bg-primary)' : 'var(--color-bg-secondary)',
+                      boxShadow: isSelected ? 'inset 0 0 0 1px rgba(212, 150, 14, 0.55)' : undefined,
                       cursor: 'pointer',
                       transition: 'background 0.1s',
                     }}
                     onMouseEnter={e => {
-                      if (!isSelected) (e.currentTarget as HTMLTableRowElement).style.background = 'var(--color-bg-tertiary)';
+                      if (!isSelected) (e.currentTarget as HTMLTableRowElement).style.boxShadow = 'inset 0 0 0 1px rgba(212, 150, 14, 0.55)';
                     }}
                     onMouseLeave={e => {
-                      (e.currentTarget as HTMLTableRowElement).style.background = isSelected
-                        ? 'var(--color-accent-primary-faint, rgba(96,165,250,0.08))'
-                        : i % 2 === 0 ? 'var(--color-bg-primary)' : 'var(--color-bg-secondary)';
+                      if (!isSelected) (e.currentTarget as HTMLTableRowElement).style.boxShadow = '';
                     }}
                   >
                     <td style={tdStyle()}>

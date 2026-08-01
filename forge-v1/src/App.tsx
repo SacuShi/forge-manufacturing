@@ -1,4 +1,46 @@
-// FORGE v1.0 — App root. Auth states: idle/exchanging/loading → authed | error
+/**
+ * FORGE v1.5 — Application Root
+ *
+ * WHAT THIS FILE DOES
+ * ───────────────────
+ * This is the top of the React component tree. Everything the user sees lives inside
+ * the `AppShell` component defined here. It:
+ *
+ *   1. Owns authentication state via `useAuth` — detects whether the user is logged in,
+ *      handles the EVE SSO redirect callback, and stores the bearer token.
+ *
+ *   2. Aggregates data from the primary character plus any alt characters the user adds,
+ *      producing combined lists (allBlueprints, combinedAssets, bestSkillsArray) that
+ *      the rest of the app treats as a single merged view.
+ *
+ *   3. Owns the selected item — when the user clicks on a row in any tab, `selectedTypeId`
+ *      and `selectedName` are set here, and the RightSidebar (info panel) opens.
+ *
+ *   4. Owns the market data lifecycle — loads the first page on login, paginates on
+ *      "load more", and re-fetches when the user changes sell/source hub.
+ *
+ *   5. Manages the AI chat panel — sends messages, saves history to the server, and
+ *      auto-opens the panel on first login so the user gets a welcome summary.
+ *
+ * LAYOUT (left → right)
+ * ─────────────────────
+ *   LeftSidebar | [resize handle] | MainContent | [resize handle] | RightSidebar
+ *
+ *   RightSidebar is 0-width when no item is selected (detailOpen = false).
+ *   ChatPanel slides in from the right, overlapping the content area.
+ *   TickerBar is pinned to the bottom of the viewport.
+ *
+ * EVE CONCEPTS FOR READERS WHO DON'T PLAY EVE
+ * ─────────────────────────────────────────────
+ *   ISK           — EVE's in-game currency (analogous to gold in other games)
+ *   Blueprint     — a recipe that lets you manufacture an item. BPO (original,
+ *                   unlimited) vs BPC (copy, limited runs).
+ *   ESI           — EVE's official REST API (like a real-time game data feed)
+ *   Market hub    — a star system with a busy player-run market (like a stock exchange)
+ *   Jita          — the most active trade hub in the game (~70% of all EVE trade)
+ *   ME/TE         — Material/Time Efficiency: blueprint research levels that reduce
+ *                   build costs and build time respectively
+ */
 
 import { useState, useEffect, useCallback, useMemo, useRef, type FC } from 'react';
 import type {
@@ -242,6 +284,22 @@ const AppShell: FC = () => {
     ...(primaryInScope ? auth.blueprints : []),
     ...activeAltCharacters.flatMap((a) => a.blueprints),
   ], [primaryInScope, auth.blueprints, activeAltCharacters]);
+
+  // Fetch blueprint metadata (metaLevel + productTypeId) eagerly at login so icons
+  // are ready before the user opens the My Blueprints tab.
+  const [bpMetadataApp, setBpMetadataApp] = useState<Record<number, { metaLevel: number; productTypeId: number | null }>>({});
+  useEffect(() => {
+    if (allBlueprints.length === 0) return;
+    const typeIds = [...new Set(allBlueprints.map(b => b.type_id))];
+    fetch('/api/blueprint-metadata', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ blueprintTypeIds: typeIds }),
+    })
+      .then(res => res.json())
+      .then(data => setBpMetadataApp(data))
+      .catch(() => {});
+  }, [allBlueprints]);
 
   // Combined assets summed by type_id — used by useItemDetail for have/needed
   const combinedAssets = useMemo<EsiAsset[]>(() => {
@@ -1223,6 +1281,7 @@ const AppShell: FC = () => {
           ]}
           onInterHubHaulSaved={() => setInterHubHaulRefreshKey(k => k + 1)}
           canDockKeestar={auth.canDockKeestar}
+          bpMetadataProp={bpMetadataApp}
         />
 
         {/* Drag handle: resize the info panel — only when it's open (desktop only) */}

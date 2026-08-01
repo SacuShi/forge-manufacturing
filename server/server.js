@@ -637,6 +637,46 @@ async function runMigrations() {
   try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN invention_system_id INTEGER DEFAULT NULL`); } catch (_) {}
   try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN invention_system_name TEXT DEFAULT NULL`); } catch (_) {}
 
+  // PI Planner: system/planet/region geography + PI schematic recipes (populated by sde-import.js)
+  await dbRun(`CREATE TABLE IF NOT EXISTS sde_regions (
+    region_id INTEGER PRIMARY KEY,
+    name      TEXT
+  )`);
+  await dbRun(`CREATE TABLE IF NOT EXISTS sde_systems (
+    system_id         INTEGER PRIMARY KEY,
+    name              TEXT,
+    region_id         INTEGER,
+    constellation_id  INTEGER,
+    security_status   REAL
+  )`);
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_sde_systems_region ON sde_systems (region_id)`);
+  await dbRun(`CREATE TABLE IF NOT EXISTS sde_planets (
+    planet_id        INTEGER PRIMARY KEY,
+    system_id        INTEGER,
+    planet_index     INTEGER,
+    type_id          INTEGER,
+    planet_type_name TEXT
+  )`);
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_sde_planets_system ON sde_planets (system_id)`);
+  await dbRun(`CREATE TABLE IF NOT EXISTS pi_planet_resources (
+    planet_type_name TEXT NOT NULL,
+    resource_type_id INTEGER NOT NULL,
+    PRIMARY KEY (planet_type_name, resource_type_id)
+  )`);
+  await dbRun(`CREATE TABLE IF NOT EXISTS pi_schematics (
+    schematic_id      INTEGER PRIMARY KEY,
+    product_type_id   INTEGER,
+    product_quantity  INTEGER,
+    cycle_time        INTEGER
+  )`);
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_pi_schematics_product ON pi_schematics (product_type_id)`);
+  await dbRun(`CREATE TABLE IF NOT EXISTS pi_schematic_materials (
+    schematic_id     INTEGER NOT NULL,
+    material_type_id INTEGER NOT NULL,
+    quantity         INTEGER NOT NULL,
+    PRIMARY KEY (schematic_id, material_type_id)
+  )`);
+
   // Migrate token captured by test flow (one-time, no-op if already done or test skipped)
   try {
     const testTok = await dbGet(`SELECT * FROM test_structure_token WHERE structure_id = ?`, [1049588174021]);
@@ -2911,20 +2951,28 @@ app.post('/api/resolve-type-names', security.apiLimiter, async (req, res) => {
         );
         if (esiRes.ok) {
           const esiItems = await esiRes.json();
-          await dbRun('BEGIN TRANSACTION');
-          for (const item of esiItems) {
-            if (item.category === 'inventory_type' && item.name) {
-              names[item.id] = item.name;
-              // Persist to DB so future calls (and next /api/item-names load) get it from the table
-              await dbRun(
-                `INSERT INTO items (type_id, name) VALUES (?, ?)
-                 ON CONFLICT(type_id) DO UPDATE SET name = excluded.name
-                   WHERE items.name IS NULL OR items.name = ''`,
-                [item.id, item.name]
-              ).catch(() => {});
+          await dbTxMutex.lock();
+          try {
+            await dbRun('BEGIN TRANSACTION');
+            for (const item of esiItems) {
+              if (item.category === 'inventory_type' && item.name) {
+                names[item.id] = item.name;
+                // Persist to DB so future calls (and next /api/item-names load) get it from the table
+                await dbRun(
+                  `INSERT INTO items (type_id, name) VALUES (?, ?)
+                   ON CONFLICT(type_id) DO UPDATE SET name = excluded.name
+                     WHERE items.name IS NULL OR items.name = ''`,
+                  [item.id, item.name]
+                ).catch(() => {});
+              }
             }
+            await dbRun('COMMIT');
+          } catch (txErr) {
+            await dbRun('ROLLBACK').catch(() => {});
+            throw txErr;
+          } finally {
+            dbTxMutex.unlock();
           }
-          await dbRun('COMMIT');
           // Invalidate the item_names cache so the next /api/item-names reload includes new names
           if (missingIds.length > 0) cache.delete('item_names');
         }
@@ -4288,16 +4336,23 @@ app.post('/api/blueprint-metadata', security.apiLimiter, async (req, res) => {
       return res.json({});
     }
 
-    // Single bulk query — items.meta_level populated by sde-import.js
     const limited = blueprintTypeIds.slice(0, 500);
     const placeholders = limited.map(() => '?').join(',');
-    const rows = await new Promise((res, rej) =>
-      db.all(`SELECT type_id, meta_level FROM items WHERE type_id IN (${placeholders})`, limited, (e, r) => e ? rej(e) : res(r))
-    );
+
+    // Run both queries in parallel
+    const [itemRows, bpRows] = await Promise.all([
+      new Promise((res, rej) =>
+        db.all(`SELECT type_id, meta_level FROM items WHERE type_id IN (${placeholders})`, limited, (e, r) => e ? rej(e) : res(r))
+      ),
+      new Promise((res, rej) =>
+        db.all(`SELECT blueprint_id, product_id FROM blueprints WHERE blueprint_id IN (${placeholders})`, limited, (e, r) => e ? rej(e) : res(r))
+      ),
+    ]);
 
     const metadata = {};
-    limited.forEach(id => { metadata[id] = 0; });
-    rows.forEach(r => { metadata[r.type_id] = r.meta_level ?? 0; });
+    limited.forEach(id => { metadata[id] = { metaLevel: 0, productTypeId: null }; });
+    itemRows.forEach(r => { metadata[r.type_id].metaLevel = r.meta_level ?? 0; });
+    bpRows.forEach(r => { if (metadata[r.blueprint_id]) metadata[r.blueprint_id].productTypeId = r.product_id; });
 
     res.json(metadata);
   } catch (err) {
@@ -4548,6 +4603,38 @@ function looksLikeInjection(text) {
   return typeof text === 'string' && AI_INJECTION_PATTERNS.some(re => re.test(text));
 }
 
+// Off-topic pre-filter — blocks questions that are clearly unrelated to EVE manufacturing /
+// profitability BEFORE they reach the Claude API, protecting tokens from bad actors.
+// Patterns are conservative: only things that could not plausibly be EVE questions.
+const AI_OFFTOPIC_PATTERNS = [
+  // Other games
+  /\b(minecraft|world\s+of\s+warcraft|wow|fortnite|valorant|league\s+of\s+legends|dota|counter[\s-]?strike|call\s+of\s+duty|apex\s+legends|overwatch|pokemon|roblox|genshin|final\s+fantasy(?!\s+xiv.*corp)|star\s+wars(?!\s+galaxies)|runescape|hearthstone|warframe|destiny\s+2|elder\s+scrolls(?!\s+online.*industry)|skyrim|diablo|path\s+of\s+exile|baldur|terraria|stardew|hades|elden\s+ring|dark\s+souls)\b/i,
+  // Real-world food / cooking
+  /\b(recipe|ingredient|cook(ing)?|bake|baking|oven|microwave|boil|fry|roast|saute|grill|simmer)\b.{0,60}\b(how|what|step|time|temperature|degree|minute|cup|gram|ounce|tablespoon|teaspoon)\b/i,
+  // Coding / programming help (not EVE-related)
+  /\b(write\s+(me\s+)?(a\s+)?(python|javascript|java|c\+\+|c#|php|ruby|golang|rust|typescript|sql|html|css|bash|powershell)\s+(script|code|program|function|class|snippet))/i,
+  /\b(debug|fix|refactor)\s+(my|this|the)\s+(code|script|function|class|program|bug)\b/i,
+  // Real-world homework / essays
+  /\b(write\s+(me\s+)?(an?\s+)?(essay|paragraph|letter|email|report|summary|thesis|assignment|homework))\b/i,
+  /\b(summarize|summarise)\s+(this\s+)?(article|book|paper|document|text|chapter)\b/i,
+  // Weather / news / sports
+  /\b(weather|forecast|temperature)\s+(in|for|at|today|tomorrow|this\s+week)\b/i,
+  /\b(who\s+won|what\s+is\s+the\s+score|latest\s+news|breaking\s+news|headline)\b/i,
+  /\b(nfl|nba|nhl|mlb|fifa|premier\s+league|champions\s+league|world\s+cup)\s+(score|result|winner|game|match|season)\b/i,
+  // Medical / legal / financial (real world)
+  /\b(diagnose|symptom|medication|drug\s+interaction|dosage|prescription)\b/i,
+  /\b(legal\s+advice|is\s+it\s+legal|lawsuit|sue|attorney|lawyer)\b/i,
+  /\b(invest\s+in\s+(stock|share|crypto|bitcoin|ethereum)|buy\s+(bitcoin|eth|crypto|stock))\b/i,
+  // Generic chatbot / AI requests
+  /\b(tell\s+me\s+a\s+(joke|story|poem|riddle|fact))\b/i,
+  /\b(translate\s+(this\s+)?(to|into)\s+(english|french|spanish|german|chinese|japanese|korean|russian|italian|portuguese))\b/i,
+  /\b(what\s+is\s+the\s+meaning\s+of\s+life|are\s+you\s+(sentient|conscious|alive|human|a\s+real)|do\s+you\s+have\s+feelings)\b/i,
+];
+
+function looksOffTopic(text) {
+  return typeof text === 'string' && AI_OFFTOPIC_PATTERNS.some(re => re.test(text));
+}
+
 app.post('/api/ai-chat',
   security.aiLimiter,
   security.verifyEveToken,
@@ -4577,6 +4664,10 @@ app.post('/api/ai-chat',
     if (lastUserMsg && looksLikeInjection(lastUserMsg.content)) {
       console.warn(`⚠ AI guardrail: blocked injection/override attempt from character ${characterId}`);
       return res.json({ content: [{ type: "text", text: AI_REFUSAL }], guardrail: "blocked" });
+    }
+    if (lastUserMsg && looksOffTopic(lastUserMsg.content)) {
+      console.warn(`⚠ AI guardrail: blocked off-topic request from character ${characterId}: "${lastUserMsg.content.slice(0, 120)}"`);
+      return res.json({ content: [{ type: "text", text: AI_REFUSAL }], guardrail: "off_topic" });
     }
 
     // Load session data from cache
@@ -6317,8 +6408,16 @@ app.get('/api/pi/market', security.apiLimiter, security.verifyEveToken, async (r
   try {
     const characterId = req.characterId;
 
+    // POCO tax varies by structure/owner and isn't available live — the user enters
+    // their actual rate; default to the flat 10% assumption when not provided.
+    const parsedTaxRate = parseFloat(req.query.pocoTaxRate);
+    const pocoTaxRate = Number.isFinite(parsedTaxRate) ? Math.min(Math.max(parsedTaxRate, 0), 1) : 0.10;
+
+    // Cache key includes the tax rate so different rates don't collide.
+    const cacheKey = `${characterId}:${pocoTaxRate}`;
+
     // Return cached result if still fresh (5-minute TTL matches Jita price cadence).
-    const cached = piMarketCache.get(characterId);
+    const cached = piMarketCache.get(cacheKey);
     if (cached && (Date.now() - cached.fetchedAt) < 300_000) {
       return res.json(cached.data);
     }
@@ -6348,8 +6447,8 @@ app.get('/api/pi/market', security.apiLimiter, security.verifyEveToken, async (r
       const buy         = jita[p.type_id]?.buy  ?? 0;
       const grossPerDay = unitsPerDay * sell;
       // POCO export tax: CCP defines a base ISK value per unit; player POCO owners
-      // add their own % on top, but we model a flat 10% of base value here.
-      const taxPerDay   = unitsPerDay * (PI_POCO_BASE_VALUE[tier] ?? 400) * 0.10;
+      // set their own % on top — pocoTaxRate is user-entered (see above), default 10%.
+      const taxPerDay   = unitsPerDay * (PI_POCO_BASE_VALUE[tier] ?? 400) * pocoTaxRate;
       return {
         typeId: p.type_id, name: p.name, tier,
         unitsPerDay: Math.round(unitsPerDay),
@@ -6417,11 +6516,11 @@ app.get('/api/pi/market', security.apiLimiter, security.verifyEveToken, async (r
 
     const result = { rankings, bpPiReqs };
 
-    // Store in per-character cache (evict oldest entry if cache grows beyond 200 characters).
+    // Store in per-character+tax-rate cache (evict oldest entry if cache grows beyond 200 entries).
     if (piMarketCache.size >= 200) {
       piMarketCache.delete(piMarketCache.keys().next().value);
     }
-    piMarketCache.set(characterId, { data: result, fetchedAt: Date.now() });
+    piMarketCache.set(cacheKey, { data: result, fetchedAt: Date.now() });
 
     res.json(result);
   } catch (err) {
@@ -7223,6 +7322,27 @@ app.post('/api/invalidate-session',
 // Calculates profitability for ALL blueprints, stores in DB
 // Replaces real-time AI calculations for common queries
 
+// ── DB transaction mutex ──────────────────────────────────────────────────────
+// SQLite rejects concurrent BEGIN TRANSACTION calls with
+// "cannot start a transaction within a transaction".
+// All background jobs must acquire this lock before BEGIN and release after
+// COMMIT/ROLLBACK. SELECT reads are unaffected — no lock needed for reads.
+class DbTxMutex {
+  constructor() { this._locked = false; this._queue = []; }
+  lock() {
+    if (!this._locked) { this._locked = true; return Promise.resolve(); }
+    return new Promise(resolve => this._queue.push(resolve));
+  }
+  unlock() {
+    if (this._queue.length > 0) {
+      this._queue.shift()();
+    } else {
+      this._locked = false;
+    }
+  }
+}
+const dbTxMutex = new DbTxMutex();
+
 let preComputeRunning = false;
 
 async function ensureJitaPrices() {
@@ -7342,29 +7462,37 @@ async function ingestRegionContracts(regionId = CONTRACT_INGEST_REGION) {
     await dbRun('DELETE FROM contract_prices WHERE region_id = ?', [regionId]);
     const now = new Date().toISOString();
     let written = 0;
-    await dbRun('BEGIN TRANSACTION');
-    for (const [typeId, prices] of samples) {
-      const sorted = prices.slice().sort((a, b) => a - b);
-      const med0 = medianAsc(sorted);
-      // Drop obvious scams / mispriced bundles: keep within [0.3×, 4×] of the median.
-      const filtered = sorted.filter(p => p >= med0 * 0.3 && p <= med0 * 4);
-      if (filtered.length === 0) continue;
-      const low  = filtered[0];
-      const high = filtered[filtered.length - 1];
-      const med  = medianAsc(filtered);
-      const n    = filtered.length;
-      const spread = low > 0 ? (high - low) / low : 0;
-      // Wide + well-sampled → lean toward the 35th percentile (price to actually sell).
-      const suggested = (n >= 5 && spread > 1.0) ? percentileAsc(filtered, 0.35) : med;
-      await dbRun(
-        `INSERT OR REPLACE INTO contract_prices
-           (type_id, region_id, low, high, median, suggested, sample_count, source, computed_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'single', ?)`,
-        [typeId, regionId, low, high, med, suggested, n, now]
-      );
-      written++;
+    await dbTxMutex.lock();
+    try {
+      await dbRun('BEGIN TRANSACTION');
+      for (const [typeId, prices] of samples) {
+        const sorted = prices.slice().sort((a, b) => a - b);
+        const med0 = medianAsc(sorted);
+        // Drop obvious scams / mispriced bundles: keep within [0.3×, 4×] of the median.
+        const filtered = sorted.filter(p => p >= med0 * 0.3 && p <= med0 * 4);
+        if (filtered.length === 0) continue;
+        const low  = filtered[0];
+        const high = filtered[filtered.length - 1];
+        const med  = medianAsc(filtered);
+        const n    = filtered.length;
+        const spread = low > 0 ? (high - low) / low : 0;
+        // Wide + well-sampled → lean toward the 35th percentile (price to actually sell).
+        const suggested = (n >= 5 && spread > 1.0) ? percentileAsc(filtered, 0.35) : med;
+        await dbRun(
+          `INSERT OR REPLACE INTO contract_prices
+             (type_id, region_id, low, high, median, suggested, sample_count, source, computed_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'single', ?)`,
+          [typeId, regionId, low, high, med, suggested, n, now]
+        );
+        written++;
+      }
+      await dbRun('COMMIT');
+    } catch (txErr) {
+      await dbRun('ROLLBACK').catch(() => {});
+      throw txErr;
+    } finally {
+      dbTxMutex.unlock();
     }
-    await dbRun('COMMIT');
 
     const secs = ((Date.now() - start) / 1000).toFixed(0);
     console.log(`✓ Contract ingest ${regionId}: ${written} items priced from ${singles} single-item contracts (${processed} fetched) in ${secs}s`);
@@ -7444,9 +7572,10 @@ async function runPreCompute() {
         continue;
       }
 
-      await dbRun('BEGIN TRANSACTION');
-
+      await dbTxMutex.lock();
       let regionProcessed = 0;
+      try {
+      await dbRun('BEGIN TRANSACTION');
 
       for (const bp of allBlueprints) {
         const materials = materialsByBp[bp.blueprint_id] || [];
@@ -7510,6 +7639,12 @@ async function runPreCompute() {
       }
 
       await dbRun('COMMIT');
+      } catch (txErr) {
+        await dbRun('ROLLBACK').catch(() => {});
+        throw txErr;
+      } finally {
+        dbTxMutex.unlock();
+      }
       totalProcessed += regionProcessed;
       console.log(`✓ Region ${regionId}: ${regionProcessed} blueprints processed`);
     }
@@ -7529,6 +7664,8 @@ async function runPreCompute() {
     // Jita data OK: clean profits + rebuild strategies in one transaction so both tables
     // stay consistent — if the strategies INSERT throws, the profits DELETE rolls back too.
     console.log('⟳ Building cross-hub strategy table...');
+    await dbTxMutex.lock();
+    try {
     await dbRun('BEGIN TRANSACTION');
     await dbRun(`DELETE FROM precomputed_profits WHERE run_id IS NULL OR run_id != ?`, [runId]);
     await dbRun(`
@@ -7593,6 +7730,12 @@ async function runPreCompute() {
     `, [runId, runId, runId]);
     await dbRun(`DELETE FROM precomputed_strategies WHERE run_id IS NULL OR run_id != ?`, [runId]);
     await dbRun('COMMIT');
+    } catch (txErr) {
+      await dbRun('ROLLBACK').catch(() => {});
+      throw txErr;
+    } finally {
+      dbTxMutex.unlock();
+    }
     console.log('✓ Cross-hub strategy table built');
     } // end Jita-guard block
 
@@ -11019,6 +11162,10 @@ setInterval(async () => {
 // ── Push notification routes ──────────────────────────────────────────────────
 const pushRoutes = require('./routes/push');
 app.use(pushRoutes({ security, dbRun, dbAll, webpush }));
+
+// ── PI Planner routes ──────────────────────────────────────────────────────────
+const piPlannerRoutes = require('./routes/pi-planner');
+app.use(piPlannerRoutes({ dbAll, dbGet, security }));
 
 // ── Keepstar token test routes (development only) ────────────────────────────
 // These two routes let the test-keepstar-poll.js script capture a real EVE

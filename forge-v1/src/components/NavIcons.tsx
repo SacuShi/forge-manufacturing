@@ -52,6 +52,14 @@ export const IconPI: FC = () => <Ico>
   <ellipse cx="8" cy="8" rx="7" ry="2.5"/>
 </Ico>;
 
+export const IconPIPlanner: FC = () => <Ico>
+  <circle cx="3" cy="12.5" r="1.8"/>
+  <circle cx="13" cy="3.5" r="1.8"/>
+  <circle cx="8" cy="8" r="1.8"/>
+  <line x1="4.5" y1="11.5" x2="6.7" y2="9.3"/>
+  <line x1="9.3" y1="6.7" x2="11.5" y2="4.5"/>
+</Ico>;
+
 export const IconCorp: FC = () => <Ico>
   <rect x="3" y="6" width="10" height="9"/>
   <path d="M1.5 15h13M6.5 6V4.5a1.5 1.5 0 0 1 3 0V6"/>
@@ -74,4 +82,10 @@ export const IconInterhub: FC = () => <Ico>
 
 export const IconLPStore: FC = () => <Ico>
   <path d="M8 1.5l1.8 3.6 4 .6-2.9 2.8.7 4L8 10.4l-3.6 1.9.7-4-2.9-2.8 4-.6L8 1.5z"/>
+</Ico>;
+
+export const IconHelp: FC = () => <Ico>
+  <circle cx="8" cy="8" r="6.5"/>
+  <path d="M5.8 6.2a2.2 2.2 0 0 1 4.3.7c0 1.5-2.1 1.8-2.1 3.1"/>
+  <circle cx="8" cy="12.5" r="0.6" fill="currentColor" stroke="none"/>
 </Ico>;

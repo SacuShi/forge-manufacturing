@@ -12,6 +12,8 @@
  *   8. Imports T1→T2 invention chains                 (blueprint_invention, invention_materials)
  *   9. Imports LP store offers                        (npc_corporations, lp_offers, lp_offer_required_items)
  *  10. Verification report
+ *  11. Imports PI Planner geography + schematics      (sde_regions, sde_systems, sde_planets,
+ *                                                       pi_planet_resources, pi_schematics, pi_schematic_materials)
  *
  * Usage:  node sde-import.js
  * IMPORTANT: Stop the server first — pm2 stop forge
@@ -44,6 +46,9 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
   if (err) { console.error('❌ Cannot open database:', err.message); process.exit(1); }
   console.log('✓ Connected to', DB_PATH);
 });
+// Retry on SQLITE_BUSY for up to 10s instead of failing immediately — guards against
+// a stray concurrent connection (e.g. the watchdog cron restarting pm2 mid-import).
+db.configure('busyTimeout', 10000);
 
 const dbRun = (sql, p = []) => new Promise((res, rej) => db.run(sql, p, function(e) { e ? rej(e) : res(this); }));
 const dbGet = (sql, p = []) => new Promise((res, rej) => db.get(sql, p, (e, r) => e ? rej(e) : res(r)));
@@ -437,6 +442,11 @@ async function importAllTypes(typesData) {
 // If CCP renames a PI item in future, re-run this step to refresh the tags.
 
 const PI_TIER_NAMES = {
+  // P0 — Raw Materials (15 items, one of 5 per planet type — see PLANET_TYPE_RESOURCES below)
+  'Aqueous Liquids': 0, 'Autotrophs': 0, 'Base Metals': 0, 'Carbon Compounds': 0,
+  'Complex Organisms': 0, 'Felsic Magma': 0, 'Heavy Metals': 0, 'Ionic Solutions': 0,
+  'Microorganisms': 0, 'Noble Gas': 0, 'Noble Metals': 0, 'Non-CS Crystals': 0,
+  'Planktic Colonies': 0, 'Reactive Gas': 0, 'Suspended Plasma': 0,
   // P1 — Basic Commodities (15 items)
   'Bacteria': 1, 'Biofuels': 1, 'Biomass': 1, 'Chiral Structures': 1,
   'Electrolytes': 1, 'Industrial Fibers': 1, 'Oxidizing Compound': 1,
@@ -498,9 +508,9 @@ async function tagPiTiers(typesData) {
   await dbRun('COMMIT');
 
   // Summary by tier
-  const counts = { 1: 0, 2: 0, 3: 0, 4: 0 };
+  const counts = { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0 };
   for (const [tier] of updates) counts[tier] = (counts[tier] || 0) + 1;
-  for (const t of [1, 2, 3, 4]) {
+  for (const t of [0, 1, 2, 3, 4]) {
     console.log(`  P${t}: ${counts[t]} items tagged`);
   }
   console.log('  ✓ PI tagging complete');
@@ -641,10 +651,16 @@ async function verify() {
   const invLinks    = await dbGet(`SELECT COUNT(*) as c FROM blueprint_invention`);
   const invT1s      = await dbGet(`SELECT COUNT(DISTINCT t1_blueprint_id) as c FROM blueprint_invention`);
   const invMats     = await dbGet(`SELECT COUNT(*) as c FROM invention_materials`);
+  const piRegions   = await dbGet(`SELECT COUNT(*) as c FROM sde_regions`);
+  const piSystems   = await dbGet(`SELECT COUNT(*) as c FROM sde_systems`);
+  const piPlanets   = await dbGet(`SELECT COUNT(*) as c FROM sde_planets`);
+  const piResources = await dbGet(`SELECT COUNT(*) as c FROM pi_planet_resources`);
+  const piSchematics = await dbGet(`SELECT COUNT(*) as c FROM pi_schematics`);
+  const piSchemMats  = await dbGet(`SELECT COUNT(*) as c FROM pi_schematic_materials`);
 
   console.log(`  total items in DB:              ${totalItems.c}`);
   console.log(`  items with meta_level=1 (T2):  ${t2.c}`);
-  console.log(`  PI items tagged (P1–P4):        ${piTagged.c}`);
+  console.log(`  PI items tagged (P0–P4):        ${piTagged.c}`);
   console.log(`  blueprint_skills rows:          ${sk.c}`);
   console.log(`  blueprints — manufacturing:     ${mfgCount.c}`);
   console.log(`  blueprints — reactions:         ${rxCount.c}`);
@@ -654,6 +670,13 @@ async function verify() {
   console.log(`  blueprints without a name:      ${unnamed.c}${unnamed.c > 0 ? ' ⚠' : ' ✓'}`);
   if (sample?.names) console.log(`  Sample reaction products: ${sample.names}`);
   else console.log('  ⚠ No reaction products found — check blueprints.json reaction data');
+
+  console.log(`  PI Planner — regions:           ${piRegions.c}`);
+  console.log(`  PI Planner — solar systems:     ${piSystems.c}`);
+  console.log(`  PI Planner — planets:           ${piPlanets.c}`);
+  console.log(`  PI Planner — resource mappings: ${piResources.c}`);
+  console.log(`  PI Planner — schematics:        ${piSchematics.c}`);
+  console.log(`  PI Planner — schematic mats:    ${piSchemMats.c}`);
 }
 
 // ── Step 10: LP Store (Fuzzwork CSVs + ESI) ──────────────────────────────────
@@ -895,6 +918,190 @@ async function importLPStore() {
   console.log(`  ✓ ${offerCount} LP offers, ${reqCount} required-item rows`);
 }
 
+// ── Step 11: PI Planner geography + schematics ─────────────────────────────────
+// CCP's own reference-data bundle (data.everef.net, used for typesData/bpData above)
+// only ships item/blueprint/dogma/region/schematic data — no solar systems, planets,
+// or constellations (confirmed by inspecting the live tarball's contents). That
+// geography lives in Fuzzwork's SDE CSV mirror instead, same source already used
+// above for invGroups/invCategories/crpNPCCorporations/chrFactions.
+//
+// Which P0 raw resources a planet can produce is determined entirely by planet
+// TYPE (8 types, 5 resources each) — this is NOT published as SDE or ESI data at
+// all (it's baked into client-side extraction mechanics), so it's hardcoded here
+// from EVE University's planet resource matrix (wiki.eveuniversity.org/Planet),
+// cross-checked against that page's per-planet-type text description and its
+// resource-distribution table independently — both agree exactly.
+
+const PLANET_TYPE_RESOURCES = {
+  'Barren':    ['Aqueous Liquids', 'Base Metals', 'Carbon Compounds', 'Microorganisms', 'Noble Metals'],
+  'Gas':       ['Aqueous Liquids', 'Base Metals', 'Ionic Solutions', 'Noble Gas', 'Reactive Gas'],
+  'Ice':       ['Aqueous Liquids', 'Heavy Metals', 'Microorganisms', 'Noble Gas', 'Planktic Colonies'],
+  'Lava':      ['Base Metals', 'Felsic Magma', 'Heavy Metals', 'Non-CS Crystals', 'Suspended Plasma'],
+  'Oceanic':   ['Aqueous Liquids', 'Carbon Compounds', 'Complex Organisms', 'Microorganisms', 'Planktic Colonies'],
+  'Plasma':    ['Base Metals', 'Heavy Metals', 'Noble Metals', 'Non-CS Crystals', 'Suspended Plasma'],
+  'Storm':     ['Aqueous Liquids', 'Base Metals', 'Ionic Solutions', 'Noble Gas', 'Suspended Plasma'],
+  'Temperate': ['Aqueous Liquids', 'Autotrophs', 'Carbon Compounds', 'Complex Organisms', 'Microorganisms'],
+};
+
+async function importPiPlannerData(typesData) {
+  console.log('\n═══ Step 11: PI Planner geography + schematics ═══');
+
+  const FUZZWORK = 'https://www.fuzzwork.co.uk/dump/latest/csv/';
+
+  // -- Regions --
+  console.log('  Fetching mapRegions.csv...');
+  const regionRows = parseCSV(await fetchText(FUZZWORK + 'mapRegions.csv'));
+  await dbRun('BEGIN TRANSACTION');
+  await dbRun('DELETE FROM sde_regions');
+  let regionCount = 0;
+  for (const r of regionRows) {
+    const id = parseInt(r.regionID, 10);
+    if (!id || !r.regionName) continue;
+    await dbRun('INSERT OR REPLACE INTO sde_regions (region_id, name) VALUES (?, ?)', [id, r.regionName]);
+    regionCount++;
+  }
+  await dbRun('COMMIT');
+  console.log(`  ✓ ${regionCount} regions`);
+
+  // -- Solar systems --
+  console.log('  Fetching mapSolarSystems.csv...');
+  const systemRows = parseCSV(await fetchText(FUZZWORK + 'mapSolarSystems.csv'));
+  await dbRun('BEGIN TRANSACTION');
+  await dbRun('DELETE FROM sde_systems');
+  let systemCount = 0;
+  for (const s of systemRows) {
+    const id = parseInt(s.solarSystemID, 10);
+    if (!id || !s.solarSystemName) continue;
+    await dbRun(
+      `INSERT OR REPLACE INTO sde_systems (system_id, name, region_id, constellation_id, security_status)
+       VALUES (?, ?, ?, ?, ?)`,
+      [id, s.solarSystemName, parseInt(s.regionID, 10) || null, parseInt(s.constellationID, 10) || null, parseFloat(s.security) || null]
+    );
+    systemCount++;
+  }
+  await dbRun('COMMIT');
+  console.log(`  ✓ ${systemCount} solar systems`);
+
+  // -- Planets -- (filtered out of mapDenormalize.csv, ~83MB / groupID=7 = Planet)
+  console.log('  Fetching mapDenormalize.csv (large file — filtering for planets)...');
+  const denormText = await fetchText(FUZZWORK + 'mapDenormalize.csv');
+  const denormLines = denormText.split('\n');
+  const denormHeader = parseCSVRow(denormLines[0]).map(h => h.trim());
+  const col = (name) => denormHeader.indexOf(name);
+  const cItem = col('itemID'), cType = col('typeID'), cGroup = col('groupID'),
+        cSystem = col('solarSystemID'), cName = col('itemName'), cIndex = col('celestialIndex');
+
+  // Planet type_id → canonical type name ("Barren", "Temperate", etc.), derived from
+  // the "Planet (X)" type names already loaded in typesData (same source as PI_TIER_NAMES).
+  const planetTypeNameById = new Map();
+  for (const type of Object.values(typesData)) {
+    const name = typeof type.name === 'string' ? type.name : (type.name?.en ?? null);
+    const m = name && name.match(/^Planet \((.+)\)$/);
+    if (m) planetTypeNameById.set(type.type_id, m[1]);
+  }
+
+  const planetRows = [];
+  for (let i = 1; i < denormLines.length; i++) {
+    const line = denormLines[i];
+    if (!line || line.indexOf('","7",') === -1) continue; // cheap pre-filter before full CSV parse
+    const f = parseCSVRow(line);
+    if (f[cGroup] !== '7') continue; // confirm — pre-filter can false-match other columns
+    planetRows.push({
+      planetId: parseInt(f[cItem], 10),
+      typeId: parseInt(f[cType], 10),
+      systemId: parseInt(f[cSystem], 10),
+      name: f[cName],
+      index: parseInt(f[cIndex], 10) || null,
+    });
+  }
+
+  await dbRun('DELETE FROM sde_planets');
+  let planetCount = 0;
+  for (let i = 0; i < planetRows.length; i += 500) {
+    const chunk = planetRows.slice(i, i + 500);
+    await dbRun('BEGIN TRANSACTION');
+    for (const p of chunk) {
+      if (!p.planetId || !p.systemId) continue;
+      await dbRun(
+        `INSERT OR REPLACE INTO sde_planets (planet_id, system_id, planet_index, type_id, planet_type_name)
+         VALUES (?, ?, ?, ?, ?)`,
+        [p.planetId, p.systemId, p.index, p.typeId, planetTypeNameById.get(p.typeId) || null]
+      );
+      planetCount++;
+    }
+    await dbRun('COMMIT');
+  }
+  console.log(`  ✓ ${planetCount} planets`);
+
+  // -- Planet type → P0 resource mapping (hardcoded, see PLANET_TYPE_RESOURCES above) --
+  const resourceNameToTypeId = new Map();
+  const allResourceNames = new Set(Object.values(PLANET_TYPE_RESOURCES).flat());
+  for (const type of Object.values(typesData)) {
+    const name = typeof type.name === 'string' ? type.name : (type.name?.en ?? null);
+    if (name && allResourceNames.has(name)) resourceNameToTypeId.set(name, type.type_id);
+  }
+
+  await dbRun('BEGIN TRANSACTION');
+  await dbRun('DELETE FROM pi_planet_resources');
+  let resourceCount = 0;
+  for (const [planetTypeName, resourceNames] of Object.entries(PLANET_TYPE_RESOURCES)) {
+    for (const resourceName of resourceNames) {
+      const typeId = resourceNameToTypeId.get(resourceName);
+      if (!typeId) { console.log(`  ⚠ Could not resolve type_id for resource "${resourceName}"`); continue; }
+      await dbRun(
+        'INSERT OR REPLACE INTO pi_planet_resources (planet_type_name, resource_type_id) VALUES (?, ?)',
+        [planetTypeName, typeId]
+      );
+      resourceCount++;
+    }
+  }
+  await dbRun('COMMIT');
+  console.log(`  ✓ ${resourceCount} planet-type → P0 resource mappings (${Object.keys(PLANET_TYPE_RESOURCES).length} planet types)`);
+
+  // -- PI Schematics (P1–P4 recipes) --
+  console.log('  Fetching planetSchematics.csv + planetSchematicsTypeMap.csv...');
+  const schemRows    = parseCSV(await fetchText(FUZZWORK + 'planetSchematics.csv'));
+  const typeMapRows  = parseCSV(await fetchText(FUZZWORK + 'planetSchematicsTypeMap.csv'));
+
+  const products  = new Map(); // schematicId -> { typeId, qty }
+  const materials = [];        // { schematicId, typeId, qty }
+  for (const row of typeMapRows) {
+    const schematicId = parseInt(row.schematicID, 10);
+    const typeId       = parseInt(row.typeID, 10);
+    const qty          = parseInt(row.quantity, 10) || 1;
+    if (row.isInput === '1') materials.push({ schematicId, typeId, qty });
+    else                     products.set(schematicId, { typeId, qty });
+  }
+
+  await dbRun('BEGIN TRANSACTION');
+  await dbRun('DELETE FROM pi_schematics');
+  await dbRun('DELETE FROM pi_schematic_materials');
+
+  let schemCount = 0, skippedSchems = 0;
+  for (const row of schemRows) {
+    const schematicId = parseInt(row.schematicID, 10);
+    const product = products.get(schematicId);
+    if (!product) { skippedSchems++; continue; }
+    await dbRun(
+      `INSERT OR REPLACE INTO pi_schematics (schematic_id, product_type_id, product_quantity, cycle_time)
+       VALUES (?, ?, ?, ?)`,
+      [schematicId, product.typeId, product.qty, parseInt(row.cycleTime, 10) || null]
+    );
+    schemCount++;
+  }
+
+  let matCount = 0;
+  for (const m of materials) {
+    await dbRun(
+      `INSERT OR REPLACE INTO pi_schematic_materials (schematic_id, material_type_id, quantity) VALUES (?, ?, ?)`,
+      [m.schematicId, m.typeId, m.qty]
+    );
+    matCount++;
+  }
+  await dbRun('COMMIT');
+  console.log(`  ✓ ${schemCount} schematics, ${matCount} material rows${skippedSchems ? ` (${skippedSchems} schematics skipped — no product found)` : ''}`);
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -942,6 +1149,7 @@ async function main() {
     await importInventionChains(bpData);
     await importItemCategories(typesData);
     await importLPStore();
+    await importPiPlannerData(typesData);
     await verify();
 
     console.log('\n✅ Done. Next steps:');

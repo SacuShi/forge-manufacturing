@@ -615,12 +615,12 @@ const LPStoreTab: FC<LPStoreTabProps> = ({ onSelectItem, selectedTypeId, lpPoint
                 const canAfford  = showMyLPCols && hasMyLP && (o.maxBuys ?? 0) >= 1;
                 const cantAfford = showMyLPCols && hasMyLP && (o.maxBuys ?? 0) === 0;
                 const rowBg = isSelected
-                  ? 'var(--color-selected-row, rgba(0,200,255,0.08))'
+                  ? 'rgba(212, 150, 14, 0.20)'
                   : canAfford
                     ? 'rgba(0,255,100,0.13)'
                     : cantAfford
                       ? 'rgba(255,50,30,0.11)'
-                      : i % 2 === 0 ? 'transparent' : 'var(--color-bg-stripe, rgba(255,255,255,0.02))';
+                      : i % 2 === 0 ? 'var(--color-bg-primary)' : 'var(--color-bg-secondary)';
                 return (
                   <tr
                     key={`${o.corp_id}:${o.offer_id}`}
@@ -628,6 +628,7 @@ const LPStoreTab: FC<LPStoreTabProps> = ({ onSelectItem, selectedTypeId, lpPoint
                     style={{
                       cursor: 'pointer',
                       background: rowBg,
+                      boxShadow: isSelected ? 'inset 0 0 0 1px rgba(212, 150, 14, 0.55)' : undefined,
                       opacity: cantAfford ? 0.55 : 1,
                     }}
                   >

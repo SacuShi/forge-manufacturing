@@ -392,6 +392,13 @@ const RightSidebar: FC<RightSidebarProps> = ({
     return { productToBlueprintMap: ptbMap, ownedProductTypeIds: ownedSet };
   }, [blueprints, itemNames, nameToTypeId]);
 
+  // If the user owns a blueprint for this item, a server "Not manufacturable" error
+  // is a false negative (LP-sourced BPCs not in SDE manufacturing table).
+  const userHasBlueprint = !!selectedTypeId && ownedProductTypeIds.has(selectedTypeId);
+  const effectiveTrueCostError = (trueCostError?.startsWith('Not manufacturable') && userHasBlueprint)
+    ? 'Manufacturing cost data unavailable for this item — recipe not in database.'
+    : trueCostError;
+
   /**
    * Detect blueprint:
    *   1. Direct match — selectedTypeId is a blueprint type_id (legacy/edge case)
@@ -1597,7 +1604,8 @@ const RightSidebar: FC<RightSidebarProps> = ({
                   ))}
                 </select>
               )}
-              {/* v1.9.1 — Free-entry build runs input */}
+              {/* v1.9.1 — Free-entry build runs input (hidden for non-manufacturable items) */}
+              {!effectiveTrueCostError?.startsWith('Not manufacturable') && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 'auto' }}>
                 <span style={{ fontSize: 10, color: 'var(--color-text-tertiary)' }}>×</span>
                 <input
@@ -1615,6 +1623,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
                 />
                 <span style={{ fontSize: 10, color: 'var(--color-text-tertiary)' }}>runs</span>
               </div>
+              )}
             </div>
 
             {/* v1.22 — Honesty badge: True Profit assumes you OWN the blueprint (ME-researched,
@@ -1634,10 +1643,8 @@ const RightSidebar: FC<RightSidebarProps> = ({
               </div>
             )}
 
-            {/* v1.17.1 — Implant selector. Default = none (no implant applied to ISK/hr).
-                Lets the user opt into seeing the throughput effect of their current
-                clone's implant, or a what-if BX-80x. */}
-            {(() => {
+            {/* v1.17.1 — Implant selector (hidden for non-manufacturable items) */}
+            {!effectiveTrueCostError?.startsWith('Not manufacturable') && (() => {
               const opts: Array<{ value: string; label: string; ids: number[] }> = [
                 { value: '', label: 'No implants (default)', ids: [] },
               ];

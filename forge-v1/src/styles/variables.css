@@ -61,6 +61,7 @@
   --color-text-muted: var(--text-tertiary);
 
   /* Domain-specific semantic colors */
+  --color-amber-t2:  #D4960E;            /* EVE T2 item amber — nav hover glow */
   --color-reaction:  #fbbf24;            /* Amber gold — reaction blueprints */
   --color-contract:  #ab47bc;            /* Purple — contract-only market items */
   --color-owned-bp:  var(--accent-purple); /* Purple — owned blueprints in chains */
