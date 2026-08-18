@@ -6,7 +6,7 @@ import type { LPOffer, LPFaction, LPCorp, LPStoreResponse, LPPoint } from '../ty
 import { formatISK } from '../utils/format';
 import ForgeWait from './ForgeWait';
 
-const ICON = 'https://images.evetech.net/types';
+import { itemIconUrl } from '../utils/icons';
 
 const LS_FACTION  = 'forge_lp_faction';
 const LS_CORP     = 'forge_lp_corp';
@@ -634,7 +634,7 @@ const LPStoreTab: FC<LPStoreTabProps> = ({ onSelectItem, selectedTypeId, lpPoint
                   >
                     <td style={{ padding: '4px 8px', whiteSpace: 'nowrap' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <img src={`${ICON}/${o.type_id}/icon`} alt="" width={24} height={24}
+                        <img src={itemIconUrl(o.type_id)} alt="" width={24} height={24}
                           style={{ borderRadius: 3, flexShrink: 0 }}
                           onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
                         <span style={{ color: 'var(--color-accent)' }}>{o.item_name}</span>

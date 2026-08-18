@@ -1,0 +1,739 @@
+/**
+ * FORGE v1.0 — Shared TypeScript interfaces
+ *
+ * Central type definitions for all data shapes flowing through the app.
+ * Split into four sections:
+ *   1. UI types   — consumed by React components
+ *   2. ESI types  — raw responses from EVE Swagger Interface
+ *   3. API types  — responses from the FORGE backend endpoints
+ *   4. Auth types — authentication state machine
+ */
+
+// ══════════════════════════════════════════════════════════════════════════
+// 1. UI TYPES
+// ══════════════════════════════════════════════════════════════════════════
+
+export type OwnedStatus = 'BPO' | 'BPC' | '—';
+
+export interface Market {
+  id: number;
+  name: string;
+  region: string;
+  type: 'hisec' | 'nullsec';
+}
+
+export type RegionalPriceEntry = { sell: number; buy: number; median: number };
+export type RegionalPrices = Record<number, RegionalPriceEntry>;
+
+export interface MarketItem {
+  rank: number;
+  typeId: number;
+  name: string;
+  category: string;
+  profitPerRun: number;
+  margin: number;
+  iskPerHour: number;
+  buildTime: string;
+  /** Numeric minutes — used for column sorting */
+  buildTimeMinutes: number;
+  owned: OwnedStatus;
+  canBuild: boolean;
+  /** 'jita' | 'history_30d' | 'no_data' | region string — price source for sell price */
+  priceSource?: string | null;
+  /** 30-day average price when sell orders are absent (display reference only) */
+  avg30dPrice?: number | null;
+  /** v1.20 — mean daily units traded on the market (from ESI 30-day history). Liquidity signal. */
+  avgDailyVolume?: number | null;
+  /** v1.20 — liquidity classification from the precompute: 'low_volume' | 'contract_only' | 'extreme_margin' | 'no_buy_orders' | 'suspicious_spread' | null (liquid) */
+  liquidityRisk?: string | null;
+  /** v1.7 — haul cost for 1 finished unit (goods-out leg) */
+  haulCostPerUnit?: number;
+  /** v1.7 — effective ISK/m³ for the goods-out leg */
+  haulIskPerM3?: number;
+  /** v1.7 — packaged volume of the product in m³ */
+  haulVolumeM3?: number;
+}
+
+export interface Material {
+  typeId: number;
+  name: string;
+  quantity: string;
+}
+
+export interface ItemDetail {
+  typeId: number;
+  name: string;
+  category: string;
+  owned: OwnedStatus;
+  profitPerRun: number;
+  margin: number;
+  iskPerHour: number;
+  buildTime: string;
+  sellPrice: number;
+  matCost: number;
+  materials: Material[];
+}
+
+export type ChatRole = 'user' | 'assistant';
+
+/**
+ * A single message in the AI advisor conversation.
+ * content may contain [[Name|typeId]] tokens parsed by ChatPanel.
+ * id and timestamp are optional for backward compatibility.
+ */
+export interface ChatMessage {
+  role: ChatRole;
+  content: string;
+  id?: string;
+  timestamp?: Date;
+}
+
+export type TabId = 'market' | 'blueprints';
+export type SortField = 'rank' | 'profitPerRun' | 'margin' | 'iskPerHour' | 'buildTimeMinutes' | 'avgDailyVolume';
+export type SortDirection = 'asc' | 'desc';
+
+export interface ActiveJob {
+  name: string;
+  typeId: number;       // product type_id — used to open the detail panel on click
+  quantity: number;
+  remaining: string;
+  done: boolean;
+  /** ESI activity_id: 1=Mfg, 3=TE Research, 4=ME Research, 5=Copy, 8=Invention, 9=Reactions, 11=Rev.Eng */
+  activityId?: number;
+}
+
+export interface CharacterInfo {
+  characterId: number;
+  name: string;
+  walletISK: number;
+  activeJobCount: number;
+  blueprintCount: number;
+  bpoCount: number;
+  activeJobs: ActiveJob[];
+}
+
+/** Loading log entry for the LoadingScreen */
+export interface DataLogItem {
+  label: string;
+  status: 'ok' | 'warn' | 'err';
+  detail: string;
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// 2. ESI TYPES (raw EVE Swagger Interface responses)
+// ══════════════════════════════════════════════════════════════════════════
+
+/** ESI blueprint entry from /characters/{id}/blueprints/ */
+export interface EsiBlueprint {
+  type_id: number;
+  /** -1 means BPO (original); positive integer means BPC runs remaining */
+  quantity: number;
+  runs: number;
+  material_efficiency: number;
+  time_efficiency: number;
+  location_id: number;
+  location_flag: string;
+  item_id: number;
+  is_singleton: boolean;
+}
+
+/** ESI asset entry from /characters/{id}/assets/ */
+export interface EsiAsset {
+  type_id: number;
+  quantity: number;
+  location_id: number;
+  location_flag: string;
+  item_id: number;
+  is_singleton: boolean;
+}
+
+/** ESI industry job from /characters/{id}/industry/jobs/ */
+export interface EsiJob {
+  job_id: number;
+  product_type_id: number;
+  blueprint_type_id: number;
+  activity_id: number;
+  runs: number;
+  status: 'active' | 'delivered' | 'cancelled' | 'paused';
+  end_date: string; // ISO 8601
+  facility_id: number;
+}
+
+/** ESI character public info from /characters/{id}/ */
+export interface EsiCharacter {
+  name: string;
+  corporation_id: number;
+  security_status: number;
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// 3. FORGE BACKEND API TYPES
+// ══════════════════════════════════════════════════════════════════════════
+
+/** One row from GET /api/top-profitable */
+export interface TopProfitableItem {
+  blueprint_id: number;
+  product_id: number;
+  product_name: string;
+  material_cost: number;
+  sell_price: number;
+  buy_price: number;
+  profit: number;
+  profit_margin: number;
+  isk_per_hour: number;
+  /** Build time in seconds */
+  build_time: number;
+  material_count: number;
+  computed_at: string;
+  avg_daily_volume: number | null;
+  market_group_id: number | null;
+  liquidity_risk: string | null;
+  /** 'jita' | 'history_30d' | 'no_data' | 'region_XXXXXXX' — indicates which price source was used */
+  price_source?: string | null;
+  /** 30-day average trade price from ESI history (0 if unavailable) */
+  avg_30d_price?: number | null;
+  /** v1.7 — haul cost per unit of finished product (goods-out leg) */
+  haul_cost_per_unit?: number;
+  haul_isk_per_m3?: number;
+  haul_volume_m3?: number;
+}
+
+export interface TopProfitableResponse {
+  results: TopProfitableItem[];
+  meta: {
+    count: number;
+    sort: string;
+    minProfit: number;
+    lastComputed: string | null;
+    lastRunStatus: string;
+    riskBreakdown: Record<string, number>;
+    hasMore?: boolean;
+    offset?: number;
+  };
+}
+
+/** Response from POST /api/ai-chat */
+export interface AiChatResponse {
+  id?: string;
+  type?: string;
+  role?: string;
+  content?: Array<{ type: string; text?: string }>;
+  stop_reason?: string;
+  usage?: { input_tokens: number; output_tokens: number };
+  error?: string;
+  code?: string;
+}
+
+/** Material row in /api/item-details response */
+export interface ItemDetailMaterial {
+  materialId: number;
+  name: string;
+  needed: number;
+  have: number;
+  shortage: number;
+  unitCost?: number;
+  totalCost?: number;
+  shortfallCost?: number;
+  /** True if a blueprint exists in the game DB for this material (chain drill-down available) */
+  canManufacture?: boolean;
+  /** PI tier if this is a planetary commodity: 1=P1 2=P2 3=P3 4=P4. Null/absent if not PI. */
+  piTier?: number | null;
+}
+
+/** Full response from POST /api/item-details */
+export interface ItemDetailApiResponse {
+  name?: string;
+  description?: string;
+  iconUrl?: string;
+  priceHistory?: Array<{
+    date: string;
+    average: number;
+    highest: number;
+    lowest: number;
+    volume: number;
+    orderCount: number;
+  }>;
+  currentPrice?: {
+    sell: number;
+    buy: number;
+    median: number;
+    /** 30-day average trade price from ESI history — non-zero when no live sell orders */
+    avg30d?: number;
+  };
+  buildInfo?: {
+    blueprintOwned: boolean;
+    canBuild: boolean;
+    materials: ItemDetailMaterial[];
+    totalCost: number;
+    profit: number;
+    profitMargin: number;
+    /** 'live' | 'history_30d' | 'no_data' — indicates whether sell price came from live orders or historical average */
+    sellPriceSource?: string;
+  };
+  /** v1.12.0 — pricing derived from public single-item exchange contracts in-region. */
+  contractPricing?: ContractPricing;
+}
+
+/** Contract-derived price range for an item (POST /api/item-details, v1.12.0). */
+export interface ContractPricing {
+  regionId:    number;
+  regionName:  string;
+  /** Lowest qualifying single-item contract unit price. */
+  low:         number;
+  /** Highest. */
+  high:        number;
+  median:      number;
+  /** Suggested sell price (median, nudged toward low end on wide spreads). */
+  suggested:   number;
+  /** Number of qualifying contracts behind these figures. */
+  sampleCount: number;
+  /** 'single' (v1) — single-item contracts. */
+  source:      string;
+  /** ISO timestamp of the ingest that produced this. */
+  computedAt:  string;
+  /** Human, data-derived explanation of the suggested price. */
+  rationale:   string;
+}
+
+/** One sub-material in a chain breakdown (POST /api/material-breakdown). */
+export interface BreakdownMaterial {
+  materialId: number;
+  name: string;
+  /** Raw quantity per blueprint run (ME 0 — sub-levels are not ME-reduced in v1). */
+  quantity: number;
+  /** Buy-from-market unit price (sell-sourced, matching True Profit). */
+  unitCost: number;
+  buyPricePerUnit: number;
+  /** Cheapest per-unit build cost (recursive). Null when not producible. */
+  mfgCostPerUnit: number | null;
+  /** True if a blueprint/reaction produces this sub-material (further expandable). */
+  canManufacture: boolean;
+  /** Activity of the sub-material's own blueprint: 1=manufacturing, 9=reaction. Null if not producible. */
+  activityId: number | null;
+  /** True if the user personally owns a blueprint for this sub-material. */
+  blueprintOwned: boolean;
+  /** PI tier 1–4, or null. */
+  piTier: number | null;
+  /** Cheaper sourcing for this node given current prices. */
+  recommendation: 'build' | 'buy';
+}
+
+/** Full response from POST /api/material-breakdown (one chain level). */
+export interface MaterialBreakdownResponse {
+  typeId: number;
+  manufacturable: boolean;
+  /** Activity of the blueprint producing this node: 1=manufacturing, 9=reaction. */
+  activityId?: number;
+  productQuantity?: number;
+  buildTime?: number;
+  materials: BreakdownMaterial[];
+}
+
+/** One ranked blueprint in the ME Research ROI table (POST /api/me-research-roi). */
+export interface ResearchRoiItem {
+  blueprintTypeId: number;
+  productId:       number;
+  productName:     string;
+  /** Current researched ME of the owned BPO. */
+  currentME:       number;
+  /** Target ME used for the saving calc (default 10). */
+  targetME:        number;
+  /** Material cost for one run at current ME (sell-sourced). */
+  matCostNow:      number;
+  /** Material cost for one run at target ME. */
+  matCostTarget:   number;
+  /** ISK saved per run by researching current → target ME. */
+  savingPerRun:    number;
+  /** Saving as a % of current material cost. */
+  pctSaving:       number;
+  productQuantity: number;
+  /** Estimated seconds to research current → target ME. Null until SDE research_time imported. */
+  researchTimeSec: number | null;
+}
+
+/** Full response from POST /api/me-research-roi. */
+export interface ResearchRoiResponse {
+  items: ResearchRoiItem[];
+  /** True when at least one blueprint had research_time (SDE imported). */
+  research_time_available: boolean;
+  target_me?: number;
+  region_id?: number;
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// 4. AUTH TYPES
+// ══════════════════════════════════════════════════════════════════════════
+
+export type AuthStatus = 'idle' | 'exchanging' | 'loading' | 'authed' | 'error';
+
+/**
+ * v1.5 — An additional EVE character loaded alongside the primary.
+ * Data is loaded from ESI just like the primary character and stored
+ * in sessionStorage under forge_alt_tokens.
+ */
+export interface AltCharacter {
+  characterId:       number;
+  name:              string;
+  token:             string;
+  blueprints:        EsiBlueprint[];
+  assets:            EsiAsset[];
+  skills:            Array<{ skill_id: number; active_skill_level: number }>;
+  activeJobs:        ActiveJob[];
+  walletISK:         number;
+  blueprintCount:    number;
+  bpoCount:          number;
+  activeJobCount:    number;
+  hasStandingsScope: boolean;
+  /** True while this alt's ESI data is being fetched */
+  loading:           boolean;
+  error:             string | null;
+}
+
+/** Minimal per-character identity needed for PI fetching */
+export interface PiCharacter {
+  characterId: number;
+  name:        string;
+  token:       string;
+}
+
+/** Per-character slot summary passed to the Queue Planner */
+export interface QueueCharacter {
+  characterId: number;
+  name:        string;
+  token:       string;
+  totalSlots:  number;
+  freeSlots:   number;
+  activeJobs:  ActiveJob[];
+  /** skill_id → trained level, used for per-character blueprint skill checks */
+  skills:      Record<number, number>;
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// 5. v1.2.0 — TRUE PROFIT TYPES
+// ══════════════════════════════════════════════════════════════════════════
+
+/** System autocomplete result from GET /api/system-search */
+export interface SystemSearchResult {
+  system_id:   number;
+  system_name: string;
+}
+
+export type HaulMethod = 'user_defined' | 'red_frog' | 'black_frog' | 'pushx' | 'self_haul';
+
+/** Character manufacturing setup — stored in character_industry_settings */
+export interface IndustrySettings {
+  system_id:            number | null;
+  system_name:          string | null;
+  structure_type_id:    number | null;
+  /** JSON-encoded array of rig type_ids */
+  rig_ids:              string;
+  /** Stored as percentage 0–100 */
+  facility_tax:         number;
+  /** Region ID of the hub where materials are sourced (default 10000002 = Jita) */
+  material_region_id?:   number;
+  material_region_name?: string | null;
+  /** v1.6 — Haulage (Phase 1 compat) */
+  haul_enabled:          boolean;
+  leg1_haul_rate:        number;   // ISK/m³ (user_defined)
+  leg2_haul_rate:        number;
+  /** v1.7 — Phase 2 method + per-method params */
+  leg1_method?:          HaulMethod;
+  leg2_method?:          HaulMethod;
+  leg1_collateral?:      number;
+  leg2_collateral?:      number;
+  leg1_isk_per_jump?:    number;
+  leg2_isk_per_jump?:    number;
+  leg1_flat_total?:      number;
+  leg2_flat_total?:      number;
+  leg1_service_label?:   string | null;
+  leg2_service_label?:   string | null;
+  leg1_self_char_id?:    number | null;
+  leg1_self_ship?:       string | null;
+  leg1_self_fuel?:       number;
+  leg2_self_char_id?:    number | null;
+  leg2_self_ship?:       string | null;
+  leg2_self_fuel?:       number;
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// 6. v1.5.1 — FEE RATES (used to align Market Opportunities with True Profit)
+// ══════════════════════════════════════════════════════════════════════════
+
+/** Response from GET /api/character-fee-rates */
+export interface FeeRates {
+  /** Broker fee as a decimal fraction (e.g. 0.025 = 2.5%) */
+  broker_fee_rate:      number;
+  /** Transaction tax as a decimal fraction (e.g. 0.0375 = 3.75%) */
+  transaction_tax_rate: number;
+  /** System Cost Index for the character's configured manufacturing system */
+  sci:                  number;
+  /** SCC surcharge — always 0.02 */
+  scc_rate:             number;
+  /** Facility tax as a decimal fraction */
+  facility_tax:         number;
+  /** True if the character has configured a manufacturing system */
+  setup_configured:     boolean;
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// 7. v1.4.0 — CORP TYPES
+// ══════════════════════════════════════════════════════════════════════════
+
+/** Response from GET /api/corp/status */
+export interface CorpStatus {
+  configured:          boolean;
+  corp_id?:            number;
+  corp_name?:          string;
+  director_char_name?: string;
+  last_refresh_at?:    string | null;
+  last_refresh_status?: string | null;
+}
+
+/** Response from GET /api/corp/access-status */
+export interface CorpAccessStatus {
+  hasAccess: boolean;
+  method?:   'admin' | 'director' | 'ceo';
+}
+
+/** One corp blueprint row from GET /api/corp/blueprints */
+export interface CorpBlueprint {
+  item_id:             number;
+  type_id:             number;
+  name:                string;
+  bp_type:             'BPO' | 'BPC';
+  quantity:            number;
+  runs:                number;
+  me:                  number;
+  te:                  number;
+  location_id:         number | null;
+  location_flag:       string | null;
+  fetched_at:          string;
+}
+
+/** One corp asset row (aggregated by type_id) from GET /api/corp/assets */
+export interface CorpAsset {
+  type_id:         number;
+  name:            string;
+  total_quantity:  number;
+  fetched_at:      string;
+}
+
+/** One corp industry job row from GET /api/corp/jobs */
+export interface CorpJob {
+  job_id:              number;
+  installer_id:        number | null;
+  installer_name:      string;
+  blueprint_type_id:   number | null;
+  blueprint_name:      string;
+  product_type_id:     number | null;
+  product_name:        string;
+  activity_id:         number | null;
+  runs:                number | null;
+  status:              string | null;
+  start_date:          string | null;
+  end_date:            string | null;
+  duration:            number | null;
+  fetched_at:          string;
+}
+
+/** Response from GET /api/corp/blueprints */
+export interface CorpBlueprintsResponse {
+  blueprints: CorpBlueprint[];
+  meta: { total: number; limit: number; offset: number; last_refresh_at: string | null };
+}
+
+/** Response from GET /api/corp/assets */
+export interface CorpAssetsResponse {
+  assets: CorpAsset[];
+  meta: { total: number; limit: number; offset: number; last_refresh_at: string | null };
+}
+
+/** Response from GET /api/corp/jobs */
+export interface CorpJobsResponse {
+  jobs: CorpJob[];
+  meta: { count: number; last_refresh_at: string | null };
+}
+
+/** Full response from POST /api/true-cost */
+export interface TrueCostResponse {
+  product_id:          number;
+  runs:                number;
+  sell_price:          number;
+
+  total_material_cost: number;
+
+  mfg_fees: {
+    total:                number;
+    system_cost_index:    number;
+    system_cost_bonuses:  number;
+    facility_tax:         number;
+    scc_surcharge:        number;
+    alpha_clone_tax:      number;
+    estimated_item_value: number;
+  };
+
+  sales_tax: {
+    total:                  number;
+    broker_fee:             number;
+    broker_fee_rate:        number;
+    broker_relations_level: number;
+    faction_standing:       number;
+    corp_standing:          number;
+    transaction_tax:        number;
+    transaction_tax_rate:   number;
+    accounting_level:       number;
+  };
+
+  /** v1.6/v1.7 — Haulage (Box 5). Zero values when haul not configured. */
+  haul_cost: {
+    total:          number;
+    leg1_cost:      number;
+    leg2_cost:      number;
+    leg1_volume_m3: number;
+    leg2_volume_m3: number;
+    /** Phase 1 compat — raw ISK/m³ for user_defined; 0 for provider methods */
+    leg1_rate:      number;
+    leg2_rate:      number;
+    /** Phase 2 */
+    leg1_method:               string;
+    leg2_method:               string;
+    leg1_jumps:                number;
+    leg2_jumps:                number;
+    leg1_isk_per_m3_effective: number;
+    leg2_isk_per_m3_effective: number;
+    leg1_contracts:            number;
+    leg2_contracts:            number;
+    leg1_collateral:           number;
+    leg2_collateral:           number;
+    leg1_service_label:        string | null;
+    leg2_service_label:        string | null;
+    leg1_self_ship:            string | null;
+    leg2_self_ship:            string | null;
+    provider_rates_as_of:      string | null;
+  };
+
+  true_profit:  number;
+  true_margin:  number;
+  region_id:    number;
+  prices_warm:  boolean;
+  /** True when the lowest sell order is >3× median — profit calculated using median instead. */
+  sell_price_anomaly?: boolean;
+  setup_configured: boolean;
+
+  /** v1.17.0 — effective build time + ISK/hr (incl. TE, Industry skills, structure TE, implant) */
+  time?: {
+    base_build_seconds:      number;
+    effective_build_seconds: number;
+    isk_per_hour:            number;
+    te_pct:                  number;
+    industry_level:          number;
+    advanced_industry_level: number;
+    structure_te_bonus_pct:  number;
+    mfg_implant:    { name: string; pct: number } | null;
+    reproc_implant: { name: string; pct: number } | null;
+  };
+
+  manufacturing_setup: {
+    system_id:         number | null;
+    system_name:       string;
+    structure_type_id: number | null;
+    structure_label:   string;
+    rig_ids:           number[];
+    facility_tax_pct:  number;
+    sci_raw:           number;
+    /** v1.9.3 — Effective ME breakdown */
+    blueprint_me?:       number;
+    structure_me_bonus?: number;
+    rig_me_bonus?:       number;
+    effective_me?:       number;
+  };
+}
+
+// ── 7. STATION TRADING TYPES (v1.27.0) ──────────────────────────────────────
+
+export interface TradingDepthLevel {
+  price: number;
+  qty:   number;
+}
+
+export interface TradingScanItem {
+  typeId:        number;
+  name:          string;
+  sell:          number;
+  buy:           number;
+  netProfit:     number;
+  netMarginPct:  number;
+  brokerFeeBuy:  number;
+  brokerFeeSell: number;
+  transTax:      number;
+  sellOrders:    number;
+  buyOrders:     number;
+  sellQtyTop:    number;
+  buyQtyTop:     number;
+  avgDailyVol:   number;
+  sampleDays:    number;
+  iskPerDay:     number;
+  sellDepth:     TradingDepthLevel[];
+  buyDepth:      TradingDepthLevel[];
+}
+
+export interface TradeHub {
+  id:    string;
+  name:  string;
+  label: string;
+}
+
+export interface TradingMeta {
+  hubId:        string;
+  station:      string;
+  stationLabel: string;
+  stationId:    number;
+  regionId:     number;
+  updatedAt:    number | null;
+  ageSec:       number | null;
+  expiresInSec: number | null;
+  types:        number;
+  warming:      boolean;
+  lastError:    string | null;
+}
+
+export interface TradingScanResponse {
+  results:            TradingScanItem[];
+  total:              number;
+  totalMatched:       number;   // before 500-result cap
+  jitaBookSize:       number;
+  coveredWithVolume:  number;
+  hubVolumeEnriched?: boolean;
+  brokerFeeRate:      number;
+  transactionTaxRate: number;
+  sessionCached?:     boolean;  // false = session not yet pushed, fees are defaults
+  meta:               TradingMeta;
+}
+
+export interface TradingWatchlistEntry {
+  typeId: number;
+  name:   string;
+}
+
+export interface CharacterOrder {
+  order_id:      number;
+  type_id:       number;
+  name:          string;
+  price:         number;
+  volume_remain: number;
+  volume_total:  number;
+  is_buy_order:  boolean;
+  duration:      number;
+  issued:        string;
+  location_id:   number;
+  range:         string;
+  isUndercut:    boolean;
+  undercutBy:    number;
+  bookBest:      number | null;
+}
+
+export interface CharacterOrdersResponse {
+  orders: CharacterOrder[];
+  meta:   TradingMeta;
+}
+

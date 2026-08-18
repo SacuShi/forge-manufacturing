@@ -99,7 +99,7 @@ interface RightSidebarProps {
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const ICON_BASE = 'https://images.evetech.net/types';
+import { itemIconUrl } from '../utils/icons';
 
 // v1.17.1 — manufacturing-time implants offered in the True Profit implant selector.
 // Mirrors the server's INDUSTRY_IMPLANTS (mfg_time entries). type_id → {short, pct}.
@@ -242,7 +242,7 @@ const ChainRow: FC<ChainRowProps> = ({ mat, regionId, ownedBlueprints, depth, on
         )}
 
         <img
-          src={`${ICON_BASE}/${mat.materialId}/icon?size=32`}
+          src={itemIconUrl(mat.materialId)}
           alt="" width={14} height={14} crossOrigin="anonymous"
           onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = 'hidden'; }}
           style={{ flexShrink: 0, opacity: 0.85 }}
@@ -536,7 +536,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
   const rawName     = selectedName || apiDetail?.name || fallbackDetail?.name
                       || (selectedTypeId ? `Item #${selectedTypeId}` : '');
   const displayName = rawName.replace(/ Blueprint$/i, '');
-  const iconUrl     = selectedTypeId ? `${ICON_BASE}/${selectedTypeId}/icon?size=64` : '';
+  const iconUrl     = selectedTypeId ? itemIconUrl(selectedTypeId, 64) : '';
 
   /* ── Empty state — rendered AFTER all hooks ──────────────────────────────── */
   if (!selectedTypeId) {
@@ -1167,7 +1167,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
                         {/* Material icon */}
                         <span className="mat-icon">
                           <img
-                            src={`${ICON_BASE}/${mat.materialId}/icon?size=32`}
+                            src={itemIconUrl(mat.materialId)}
                             alt=""
                             width={16}
                             height={16}

@@ -38,8 +38,9 @@ interface LeftSidebarProps {
   altCharacters:      AltCharacter[];
   addingAlt:          boolean;
   onAddCharacter:     () => void;
-  onRemoveCharacter:  (characterId: number) => void;
-  viewCharacterId:    number | null;
+  onRemoveCharacter:    (characterId: number) => void;
+  onManageCharacters:   () => void;
+  viewCharacterId:      number | null;
   onViewChange:       (characterId: number | null) => void;
   /** Combined total wallet across all in-scope characters */
   totalWalletISK:     number;
@@ -166,6 +167,7 @@ const LeftSidebar: FC<LeftSidebarProps> = ({
   addingAlt,
   onAddCharacter,
   onRemoveCharacter,
+  onManageCharacters,
   viewCharacterId,
   onViewChange,
   totalWalletISK,
@@ -278,7 +280,7 @@ const LeftSidebar: FC<LeftSidebarProps> = ({
       {/* ── Alt characters section ───────────────────────────────────────── */}
       <div style={{ padding: '0 12px' }}>
 
-        {/* Section heading with "Add" button inline */}
+        {/* Section heading with "Manage" link inline */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           marginTop: 10, marginBottom: 6 }}>
           <div className="section-heading" style={{ margin: 0 }} aria-hidden="true">
@@ -286,14 +288,16 @@ const LeftSidebar: FC<LeftSidebarProps> = ({
           </div>
           <button
             type="button"
-            className="char-add-btn"
-            style={{ width: 'auto', padding: '2px 8px', margin: 0, fontSize: 10 }}
-            disabled={addingAlt}
-            onClick={onAddCharacter}
-            title="Add another EVE character"
-            aria-label="Add another character"
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer',
+              fontSize: 10, color: 'var(--color-text-secondary)',
+              padding: '2px 0', letterSpacing: 0.5,
+            }}
+            onClick={onManageCharacters}
+            title="Manage characters"
+            aria-label="Manage characters"
           >
-            {addingAlt ? '…' : '+ Add'}
+            Manage
           </button>
         </div>
 

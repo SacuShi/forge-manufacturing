@@ -19,7 +19,7 @@ import type {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const ICON = 'https://images.evetech.net/types';
+import { itemIconUrl } from '../utils/icons';
 
 const TRADE_HUBS: TradeHub[] = [
   { id: 'jita',     name: 'Jita IV-4',      label: 'Jita IV - Moon 4 - Caldari Navy Assembly Plant' },
@@ -105,7 +105,7 @@ const ItemDetail: FC<{
       <div className="td-detail-header">
         <img
           className="td-detail-icon"
-          src={`${ICON}/${item.typeId}/icon?size=32`}
+          src={itemIconUrl(item.typeId)}
           alt=""
           onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
         />
@@ -246,7 +246,7 @@ const Calculator: FC<{ scanItems: TradingScanItem[]; brokerFeeRate: number; tran
       {item && calc && (
         <div className="td-calc-result">
           <div className="td-cr-item">
-            <img src={`${ICON}/${item.typeId}/icon?size=22`} alt="" width={16} height={16}
+            <img src={itemIconUrl(item.typeId, 22)} alt="" width={16} height={16}
               onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
             {item.name}
           </div>
@@ -318,7 +318,7 @@ const MyOrders: FC<{ token: string | null }> = ({ token }) => {
 
   const renderOrder = (o: CharacterOrder) => (
     <div key={o.order_id} className={`td-order-row${o.isUndercut ? ' td-order-undercut' : ''}`}>
-      <img src={`${ICON}/${o.type_id}/icon?size=22`} alt="" width={16} height={16}
+      <img src={itemIconUrl(o.type_id, 22)} alt="" width={16} height={16}
         onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
       <span className="td-order-name">{o.name}</span>
       <span className={`td-order-side ${o.is_buy_order ? 'td-order-buy' : 'td-order-sell'}`}>
@@ -479,7 +479,7 @@ const TradingTab: FC<TradingTabProps> = ({ token, canDockKeestar = true }) => {
     >
       <span className="td-col-rank">{rank}</span>
       <span className="td-col-name">
-        <img src={`${ICON}/${item.typeId}/icon?size=22`} alt="" width={16} height={16}
+        <img src={itemIconUrl(item.typeId, 22)} alt="" width={16} height={16}
           onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
         {item.name}
       </span>

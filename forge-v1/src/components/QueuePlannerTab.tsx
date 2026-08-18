@@ -90,7 +90,7 @@ const LIQ_DOT: Record<string, string> = {
   suspect:       'var(--color-danger)',
 };
 
-const ICON = 'https://images.evetech.net/types';
+import { itemIconUrl } from '../utils/icons';
 
 const HORIZON_OPTIONS = [
   { value: 24,  label: '24 hours' },
@@ -335,7 +335,7 @@ const QueuePlannerTab: FC<QueuePlannerTabProps> = ({ queueCharacters, primaryTok
                         <div className="qp-slot-label">SLOT {i + 1} — active</div>
                         <div className="qp-slot-item">
                           {slot.job.typeId ? (
-                            <img className="qp-slot-icon" src={`${ICON}/${slot.job.typeId}/icon?size=22`}
+                            <img className="qp-slot-icon" src={itemIconUrl(slot.job.typeId, 22)}
                               alt="" width={16} height={16}
                               onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
                           ) : null}
@@ -351,7 +351,7 @@ const QueuePlannerTab: FC<QueuePlannerTabProps> = ({ queueCharacters, primaryTok
                       <div key={i} className="qp-slot qp-slot-planned">
                         <div className="qp-slot-label">SLOT {i + 1} — planned</div>
                         <div className="qp-slot-item">
-                          <img className="qp-slot-icon" src={`${ICON}/${rec.productId}/icon?size=22`}
+                          <img className="qp-slot-icon" src={itemIconUrl(rec.productId, 22)}
                             alt="" width={16} height={16}
                             onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
                           {rec.productName} ×{rec.runs}
@@ -399,7 +399,7 @@ const QueuePlannerTab: FC<QueuePlannerTabProps> = ({ queueCharacters, primaryTok
                     <div key={rec.blueprintId} className="qp-rec-row">
                       <span className="qp-col-rank qp-rank-num">{i + 1}</span>
                       <span className="qp-col-name">
-                        <img className="qp-rec-icon" src={`${ICON}/${rec.productId}/icon?size=32`}
+                        <img className="qp-rec-icon" src={itemIconUrl(rec.productId)}
                           alt="" width={18} height={18}
                           onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
                         <button className="qp-item-link" onClick={() => onSelectItem(rec.productId, rec.productName)}>

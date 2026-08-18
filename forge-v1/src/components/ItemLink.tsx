@@ -24,8 +24,7 @@ interface ItemLinkProps {
   onClick?: (typeId: number) => void;
 }
 
-/** Base URL for CCP's official item icon CDN (no authentication required) */
-const ICON_BASE = 'https://images.evetech.net/types';
+import { itemIconUrl } from '../utils/icons';
 
 /**
  * ItemLink — inline item name + 18px icon.
@@ -34,7 +33,7 @@ const ICON_BASE = 'https://images.evetech.net/types';
  * the action ("Select") with the item name for screen-reader clarity.
  */
 const ItemLink: FC<ItemLinkProps> = ({ typeId, name, onClick }) => {
-  const iconUrl = `${ICON_BASE}/${typeId}/icon?size=32`;
+  const iconUrl = itemIconUrl(typeId);
 
   return (
     <button

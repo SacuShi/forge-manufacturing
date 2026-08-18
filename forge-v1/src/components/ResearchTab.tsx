@@ -19,7 +19,7 @@ import { apiPost } from '../api/client';
 import { formatISK } from '../utils/format';
 import ForgeWait from './ForgeWait';
 
-const ICON_BASE = 'https://images.evetech.net/types';
+import { itemIconUrl } from '../utils/icons';
 
 type SortKey = 'saving' | 'pct' | 'time' | 'projected';
 
@@ -186,7 +186,7 @@ const ResearchTab: FC<ResearchTabProps> = ({ blueprints, regionId, onSelectItem,
                   <td>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
                       <img
-                        src={`${ICON_BASE}/${it.productId}/icon?size=32`}
+                        src={itemIconUrl(it.productId)}
                         alt="" width={24} height={24} crossOrigin="anonymous"
                         onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = 'hidden'; }}
                         style={{ flexShrink: 0, borderRadius: 2 }}

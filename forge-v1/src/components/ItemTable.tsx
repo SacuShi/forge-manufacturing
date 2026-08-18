@@ -71,7 +71,7 @@ const VOL_HINT =
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const ICON_BASE = 'https://images.evetech.net/types';
+import { itemIconUrl } from '../utils/icons';
 
 const BASE_COLUMNS: ColDef[] = [
   { label: '#',            field: 'rank',            align: 'center' },
@@ -155,7 +155,7 @@ const ItemTable: FC<ItemTableProps> = ({
       <tbody>
         {items.map((item) => {
           const isSelected  = item.typeId === selectedTypeId;
-          const iconUrl     = `${ICON_BASE}/${item.typeId}/icon?size=32`;
+          const iconUrl     = itemIconUrl(item.typeId);
           const profitClass = profitColourClass(item.profitPerRun);
           const marginClass = marginColourClass(item.margin);
           const iskHrClass  = profitColourClass(item.iskPerHour);

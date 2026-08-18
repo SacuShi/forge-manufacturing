@@ -68,6 +68,8 @@ import {
 } from './NavIcons';
 import HelpTab from './HelpTab';
 import { formatISK, formatMargin } from '../utils/format';
+import { itemIconUrl } from '../utils/icons';
+import { useLocationNames } from '../hooks/useLocationNames';
 
 // Per-blueprint profitability (from /api/blueprint-profits — same data as Market Opps)
 interface BlueprintProfit {
@@ -106,6 +108,8 @@ interface MainContentProps {
   // Blueprints/Assets/Jobs tabs
   blueprints: EsiBlueprint[];
   assets: EsiAsset[];
+  /** Raw per-item assets (with real location_ids) — used by the Assets tab */
+  rawAssets?: EsiAsset[];
   activeJobs: ActiveJob[];
   itemNames: Map<number, string>;
   /** v1.33.0 — combined wallet ISK across in-scope characters, for the "✓ Can Build Now" pill */
@@ -187,6 +191,7 @@ const MainContent: FC<MainContentProps> = ({
   haulConfigured = false,
   blueprints,
   assets,
+  rawAssets = [],
   activeJobs,
   itemNames,
   walletISK,
@@ -228,7 +233,10 @@ const MainContent: FC<MainContentProps> = ({
   const [bpSortDir, setBpSortDir] = useState<'asc' | 'desc'>('desc');
   // v1.33.0 — "Can Build Now" filter: owned materials + wallet ISK cover the shortfall
   const [bpBuildableOnly, setBpBuildableOnly] = useState(false);
-  const [assetSearch, setAssetSearch] = useState('');
+  const [assetSearch,      setAssetSearch]      = useState('');
+  const [assetSort,        setAssetSort]        = useState<'qty' | 'name' | 'location'>('location');
+  const [assetSortDir,     setAssetSortDir]     = useState<1 | -1>(1);
+  const [collapsedLocs,    setCollapsedLocs]    = useState<Set<number>>(new Set());
 
   const getBpName = (typeId: number) =>
     itemNames.get(typeId) ?? `Blueprint #${typeId}`;
@@ -409,22 +417,60 @@ const MainContent: FC<MainContentProps> = ({
   }, [blueprints, bpSearch, bpFilter, bpBuildableOnly, itemNames, bpProfits, bpMetadata, bpSort, bpSortDir]);
 
   const assetGroups = useMemo(() => {
-    const g = new Map<string, { qty: number; typeId: number }>();
-    assets.forEach((a) => {
-      const name = itemNames.get(a.type_id) ?? `Item #${a.type_id}`;
-      const prev = g.get(name);
+    // Map each item_id → its direct location_id so we can walk the parent chain.
+    // Items inside ships/containers have location_id = the ship/container's item_id.
+    // We walk up until we reach an ID that is NOT another asset's item_id —
+    // that will be the actual station or structure.
+    const itemToLocation = new Map<number, number>();
+    rawAssets.forEach((a) => itemToLocation.set(a.item_id, a.location_id));
+
+    function resolveStation(locationId: number): number {
+      const visited = new Set<number>();
+      let cur = locationId;
+      while (itemToLocation.has(cur) && !visited.has(cur)) {
+        visited.add(cur);
+        cur = itemToLocation.get(cur)!;
+      }
+      return cur;
+    }
+
+    const g = new Map<string, { name: string; qty: number; typeId: number; locationId: number }>();
+    rawAssets.forEach((a) => {
+      const name       = itemNames.get(a.type_id) ?? `Item #${a.type_id}`;
+      const locationId = resolveStation(a.location_id);
+      // Skip items whose resolved location is 0 (no real location data)
+      if (!locationId) return;
+      const key  = `${a.type_id}:${locationId}`;
+      const prev = g.get(key);
       if (prev) {
         prev.qty += a.quantity;
       } else {
-        g.set(name, { qty: a.quantity, typeId: a.type_id });
+        g.set(key, { name, qty: a.quantity, typeId: a.type_id, locationId });
       }
     });
-    return Array.from(g.entries())
-      .sort(([, a], [, b]) => b.qty - a.qty)
-      .filter(([name]) =>
+    return Array.from(g.values())
+      .filter(({ name }) =>
         !assetSearch || name.toLowerCase().includes(assetSearch.toLowerCase())
       );
-  }, [assets, itemNames, assetSearch]);
+  }, [rawAssets, itemNames, assetSearch]);
+
+  const assetLocationIds = useMemo(
+    () => [...new Set(assetGroups.map((g) => g.locationId))],
+    [assetGroups],
+  );
+  const locationNames = useLocationNames(assetLocationIds, primaryToken);
+
+  // Group the flat assetGroups list into per-location buckets for the collapsed view
+  type AssetGroup = (typeof assetGroups)[number];
+  const locationGroups = useMemo(() => {
+    const map = new Map<number, { locationId: number; items: AssetGroup[] }>();
+    for (const item of assetGroups) {
+      const bucket = map.get(item.locationId);
+      if (bucket) bucket.items.push(item);
+      else map.set(item.locationId, { locationId: item.locationId, items: [item] });
+    }
+    return Array.from(map.values());
+  }, [assetGroups]);
 
   return (
     <main className="main-content" aria-label="Manufacturing data">
@@ -672,7 +718,7 @@ const MainContent: FC<MainContentProps> = ({
                   <div className={`bp-icon ${isT2 ? 'bp-icon-t2' : (isBpo ? 'bp-icon-bpo' : 'bp-icon-bpc')}`}>
                     {productTypeId && (
                       <img
-                        src={`https://images.evetech.net/types/${productTypeId}/icon?size=32`}
+                        src={itemIconUrl(productTypeId)}
                         alt=""
                         width={32}
                         height={32}
@@ -791,71 +837,144 @@ const MainContent: FC<MainContentProps> = ({
             onChange={(e) => setAssetSearch(e.target.value)}
             placeholder="Search assets…"
             className="filter-input"
-            style={{ width: '100%', marginBottom: 10 }}
+            style={{ width: '100%', marginBottom: 8 }}
             aria-label="Search assets"
           />
-          <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 220px)' }}>
-            {assetGroups.map(([name, { qty, typeId }], i) => {
-              const isAssetSelected = typeId === selectedTypeId;
+          {/* Sort pills — Location/Qty sorts groups; Item sorts within each group */}
+          <div style={{ display: 'flex', gap: 4, marginBottom: 10 }}>
+            {(['location', 'qty', 'name'] as const).map((field) => {
+              const labels = { location: 'Location', qty: 'Quantity', name: 'Item' };
+              const active = assetSort === field;
               return (
-              <div
-                key={typeId}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  padding: '7px 12px',
-                  borderBottom: '0.5px solid var(--color-border-light)',
-                  cursor: 'pointer',
-                  background: isAssetSelected
-                    ? 'rgba(212, 150, 14, 0.20)'
-                    : i % 2 === 0 ? 'var(--color-bg-primary)' : 'var(--color-bg-secondary)',
-                  boxShadow: isAssetSelected ? 'inset 0 0 0 1px rgba(212, 150, 14, 0.55)' : undefined,
-                  transition: 'box-shadow 0.1s',
-                }}
-                onMouseEnter={e => {
-                  if (!isAssetSelected) (e.currentTarget as HTMLDivElement).style.boxShadow = 'inset 0 0 0 1px rgba(212, 150, 14, 0.55)';
-                }}
-                onMouseLeave={e => {
-                  if (!isAssetSelected) (e.currentTarget as HTMLDivElement).style.boxShadow = '';
-                }}
-                onClick={() => onSelectItem(typeId, name)}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', flex: 1, gap: 8, minWidth: 0 }}>
-                  <img
-                    src={`https://images.evetech.net/types/${typeId}/icon?size=32`}
-                    alt={name}
-                    loading="lazy"
-                    crossOrigin="anonymous"
-                    style={{
-                      width: 32,
-                      height: 32,
-                      flexShrink: 0,
-                      borderRadius: 2,
-                    }}
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).style.visibility = 'hidden';
-                    }}
-                  />
-                  <span style={{
-                    fontSize: 12, color: 'var(--color-text-secondary)',
-                    overflow: 'hidden', textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap', flex: 1,
-                  }}>
-                    {name}
-                  </span>
-                </div>
-                <span style={{ fontSize: 12, color: 'var(--color-accent-primary)',
-                  fontWeight: 500, flexShrink: 0, marginLeft: 8 }}>
-                  ×{qty.toLocaleString()}
-                </span>
-              </div>
+                <button
+                  key={field}
+                  type="button"
+                  className={`pill-filter${active ? ' active' : ''}`}
+                  aria-pressed={active}
+                  onClick={() => {
+                    if (active) setAssetSortDir(d => (d === -1 ? 1 : -1));
+                    else { setAssetSort(field); setAssetSortDir(field === 'qty' ? -1 : 1); }
+                  }}
+                >
+                  {labels[field]}
+                  {active && <span className="sort-arrow">{assetSortDir === -1 ? '↓' : '↑'}</span>}
+                </button>
               );
             })}
-            {assetGroups.length === 0 && (
+          </div>
+          <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 250px)' }}>
+            {[...locationGroups].sort((a, b) => {
+              const dir = assetSortDir;
+              if (assetSort === 'qty') {
+                const qa = a.items.reduce((s, it) => s + it.qty, 0);
+                const qb = b.items.reduce((s, it) => s + it.qty, 0);
+                return (qa - qb) * dir;
+              }
+              // Location sort (default) and Item sort both sort groups by location name
+              const la = locationNames.get(a.locationId) ?? '';
+              const lb = locationNames.get(b.locationId) ?? '';
+              return la.localeCompare(lb) * (assetSort === 'name' ? 1 : dir);
+            }).map(({ locationId, items }) => {
+              const locationLabel = locationNames.get(locationId);
+              const isCollapsed   = collapsedLocs.has(locationId);
+              const sortedItems   = assetSort === 'name'
+                ? [...items].sort((a, b) => a.name.localeCompare(b.name) * assetSortDir)
+                : [...items].sort((a, b) => b.qty - a.qty);
+              const totalItems = items.length;
+
+              return (
+                <div key={locationId}>
+                  {/* Location section header */}
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '8px 12px',
+                      background: 'var(--color-bg-tertiary)',
+                      borderBottom: '1px solid var(--color-border)',
+                      borderTop: '1px solid var(--color-border)',
+                      cursor: 'pointer',
+                      userSelect: 'none',
+                      position: 'sticky',
+                      top: 0,
+                      zIndex: 1,
+                    }}
+                    onClick={() => setCollapsedLocs(prev => {
+                      const next = new Set(prev);
+                      if (next.has(locationId)) next.delete(locationId);
+                      else next.add(locationId);
+                      return next;
+                    })}
+                  >
+                    <span style={{ fontSize: 9, color: 'var(--color-text-tertiary)', minWidth: 10 }}>
+                      {isCollapsed ? '▶' : '▼'}
+                    </span>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-accent-primary)', flex: 1 }}>
+                      {locationLabel ?? '…'}
+                    </span>
+                    <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>
+                      {totalItems} {totalItems === 1 ? 'item' : 'items'}
+                    </span>
+                  </div>
+
+                  {/* Item rows within this location */}
+                  {!isCollapsed && sortedItems.map(({ name, qty, typeId }, i) => {
+                    const isAssetSelected = typeId === selectedTypeId;
+                    return (
+                      <div
+                        key={`${typeId}:${locationId}`}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 10,
+                          padding: '6px 12px 6px 28px',
+                          borderBottom: '0.5px solid var(--color-border-light)',
+                          cursor: 'pointer',
+                          background: isAssetSelected
+                            ? 'rgba(212, 150, 14, 0.20)'
+                            : i % 2 === 0 ? 'var(--color-bg-primary)' : 'var(--color-bg-secondary)',
+                          boxShadow: isAssetSelected ? 'inset 0 0 0 1px rgba(212, 150, 14, 0.55)' : undefined,
+                        }}
+                        onMouseEnter={e => {
+                          if (!isAssetSelected) (e.currentTarget as HTMLDivElement).style.boxShadow = 'inset 0 0 0 1px rgba(212, 150, 14, 0.55)';
+                        }}
+                        onMouseLeave={e => {
+                          if (!isAssetSelected) (e.currentTarget as HTMLDivElement).style.boxShadow = '';
+                        }}
+                        onClick={() => onSelectItem(typeId, name)}
+                      >
+                        <img
+                          src={itemIconUrl(typeId)}
+                          alt={name}
+                          loading="lazy"
+                          crossOrigin="anonymous"
+                          style={{ width: 28, height: 28, flexShrink: 0, borderRadius: 2 }}
+                          onError={(e) => { (e.target as HTMLImageElement).style.visibility = 'hidden'; }}
+                        />
+                        <div style={{
+                          flex: 1,
+                          fontSize: 12,
+                          color: 'var(--color-text-secondary)',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}>
+                          {name}
+                        </div>
+                        <span style={{ fontSize: 12, color: 'var(--color-accent-primary)', fontWeight: 500, flexShrink: 0 }}>
+                          ×{qty.toLocaleString()}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+            {locationGroups.length === 0 && (
               <div style={{ color: 'var(--color-text-tertiary)', fontSize: 12,
                 padding: 24, textAlign: 'center' }}>
-                {assets.length === 0 ? 'No assets found.' : 'No assets match your search.'}
+                {rawAssets.length === 0 ? 'No assets found.' : 'No assets match your search.'}
               </div>
             )}
           </div>
@@ -904,7 +1023,7 @@ const MainContent: FC<MainContentProps> = ({
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 }}>
                     <img
-                      src={`https://images.evetech.net/types/${job.typeId}/icon?size=32`}
+                      src={itemIconUrl(job.typeId)}
                       alt={job.name}
                       loading="lazy"
                       crossOrigin="anonymous"

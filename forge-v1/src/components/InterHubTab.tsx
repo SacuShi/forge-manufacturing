@@ -6,6 +6,7 @@ import { useState, useEffect, useCallback, useRef, type FC } from 'react';
 import type { InterHubArbRow, InterHubArbResponse } from '../types';
 import { MARKETS } from './MarketSelector';
 import ForgeWait from './ForgeWait';
+import { itemIconUrl } from '../utils/icons';
 import InterHubHaulConfig from './InterHubHaulConfig';
 
 interface CharacterSkillData {
@@ -371,7 +372,7 @@ const InterHubTab: FC<InterHubTabProps> = ({
                     <td style={tdStyle()}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <img
-                          src={`https://images.evetech.net/types/${row.product_id}/icon?size=32`}
+                          src={itemIconUrl(row.product_id)}
                           alt=""
                           width={24} height={24}
                           loading="lazy"

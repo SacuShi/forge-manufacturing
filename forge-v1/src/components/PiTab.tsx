@@ -5,6 +5,7 @@
 import { useState, useEffect, useMemo, type FC } from 'react';
 import { apiGet } from '../api/client';
 import { formatISK } from '../utils/format';
+import { itemIconUrl } from '../utils/icons';
 import type { PiCharacter } from '../types';
 import { usePocoTaxRate } from '../hooks/usePocoTaxRate';
 import ForgeWait       from './ForgeWait';
@@ -561,7 +562,7 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
                       {i > 0 && <span className="pi-bp-sep">, </span>}
                       <img
                         className="pi-bp-icon"
-                        src={`https://images.evetech.net/types/${bp.productTypeId}/icon?size=22`}
+                        src={itemIconUrl(bp.productTypeId, 22)}
                         alt={bp.productName}
                         width={18}
                         height={18}
@@ -637,7 +638,7 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
                   <div className="pi-bpreq-header">
                     <img
                       className="pi-bpreq-icon"
-                      src={`https://images.evetech.net/types/${bp.productId}/icon?size=32`}
+                      src={itemIconUrl(bp.productId)}
                       alt={bp.productName}
                       width={22} height={22}
                       crossOrigin="anonymous"

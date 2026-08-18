@@ -76,7 +76,9 @@ const SCOPES =
   // v1.28.0 — C-J6MT Keepstar structure market (alliance trade hub).
   'esi-markets.structure_markets.v1 ' +
   // v1.36.0 — LP balances per corp (LP Store tab).
-  'esi-characters.read_loyalty.v1';
+  'esi-characters.read_loyalty.v1 ' +
+  // v1.37.0 — structure names for Assets tab (requires docking access).
+  'esi-universe.read_structures.v1';
 
 const SESSION_TOKEN_KEY = 'forge_token';
 const SESSION_STATE_KEY = 'forge_oauth_state';
@@ -122,6 +124,7 @@ export interface AuthState {
   dataLog:          LoadStep[];
   altCharacters:    AltCharacter[];
   addingAlt:        boolean;
+  makePrimary:      (characterId: number) => void;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -830,6 +833,27 @@ export function useAuth(): AuthState & {
     });
   }, []);
 
+  // ── makePrimary ───────────────────────────────────────────────────────────
+
+  const makePrimary = useCallback((characterId: number) => {
+    const currentPrimaryToken = sessionStorage.getItem(SESSION_TOKEN_KEY);
+    const altTokens           = getSavedAltTokens();
+    const targetIdx           = altTokens.findIndex((t) => {
+      try { return characterIdFromJwt(t) === characterId; }
+      catch { return false; }
+    });
+    if (targetIdx === -1 || !currentPrimaryToken) return;
+
+    // Swap: new primary token replaces forge_token, old primary goes into alts
+    const newPrimaryToken         = altTokens[targetIdx];
+    const updatedAlts             = [...altTokens];
+    updatedAlts[targetIdx]        = currentPrimaryToken;
+    sessionStorage.setItem(SESSION_TOKEN_KEY, newPrimaryToken);
+    saveAltTokens(updatedAlts);
+
+    window.location.reload();
+  }, []);
+
   // ── login ─────────────────────────────────────────────────────────────────
 
   const login = useCallback(() => {
@@ -901,5 +925,6 @@ export function useAuth(): AuthState & {
     logout,
     addCharacter,
     removeCharacter,
+    makePrimary,
   };
 }

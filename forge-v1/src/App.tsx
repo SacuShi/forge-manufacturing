@@ -74,7 +74,9 @@ import RightSidebar          from './components/RightSidebar';
 import ChatPanel             from './components/ChatPanel';
 import LoginScreen           from './components/LoginScreen';
 import LoadingScreen         from './components/LoadingScreen';
-import IndustrySettingsModal from './components/IndustrySettings';
+import IndustrySettingsModal      from './components/IndustrySettings';
+import CharacterManagementModal  from './components/CharacterManagementModal';
+import HelpTab                   from './components/HelpTab';
 import TradingStandalone     from './components/TradingStandalone';
 import TickerBar             from './components/TickerBar';
 import TickerIntro, { shouldShowTickerIntro } from './components/TickerIntro';
@@ -250,7 +252,8 @@ const AppShell: FC = () => {
   // v1.5 — Multi-character: view isolation + fee character selection
   // viewCharacterId: null = combined view; a characterId = isolated single-char view
   // feeCharacterId:  null = use primary character's token for fee/true-cost calls
-  const [viewCharacterId, setViewCharacterId] = useState<number | null>(null);
+  const [viewCharacterId,  setViewCharacterId]  = useState<number | null>(null);
+  const [charModalOpen,    setCharModalOpen]    = useState(false);
   const [feeCharacterId,  setFeeCharacterId]  = useState<number | null>(null);
   const [buildRuns,       setBuildRuns]       = useState(1);
   // v1.17.1 — implant set the user chose to apply to True Profit ISK/hr (default none)
@@ -300,6 +303,15 @@ const AppShell: FC = () => {
       .then(data => setBpMetadataApp(data))
       .catch(() => {});
   }, [allBlueprints]);
+
+  // Raw assets from all in-scope characters, preserving per-item location_id.
+  // Used by the Assets tab to show per-location grouping.
+  const allRawAssets = useMemo<EsiAsset[]>(() => {
+    const result: EsiAsset[] = [];
+    if (primaryInScope) result.push(...auth.assets);
+    activeAltCharacters.forEach((a) => result.push(...a.assets));
+    return result;
+  }, [primaryInScope, auth.assets, activeAltCharacters]);
 
   // Combined assets summed by type_id — used by useItemDetail for have/needed
   const combinedAssets = useMemo<EsiAsset[]>(() => {
@@ -666,7 +678,10 @@ const AppShell: FC = () => {
 
   // Reset expiry flag once the user successfully logs in again
   useEffect(() => {
-    if (auth.status === 'authed') setSessionExpired(false);
+    if (auth.status === 'authed') {
+      setSessionExpired(false);
+      localStorage.setItem('forge_ever_authed', '1');
+    }
   }, [auth.status]);
 
   // v1.2.0 — Load saved industry settings on login
@@ -1113,9 +1128,57 @@ const AppShell: FC = () => {
   }, [auth.character, auth.token]);
 
   if (auth.status === 'idle' || auth.status === 'error') {
+    const everAuthed = !!localStorage.getItem('forge_ever_authed');
+
+    // Returning users who explicitly logged out or expired: go straight to login screen
+    if (everAuthed) {
+      return (
+        <div className="app" data-theme={theme} style={{ alignItems: 'center', justifyContent: 'center' }}>
+          <LoginScreen onLogin={auth.login} error={auth.error} sessionExpired={sessionExpired} />
+        </div>
+      );
+    }
+
+    // First-time visitors: show the Guide as the landing page with a login CTA
     return (
-      <div className="app" data-theme={theme} style={{ alignItems: 'center', justifyContent: 'center' }}>
-        <LoginScreen onLogin={auth.login} error={auth.error} sessionExpired={sessionExpired} />
+      <div className="app" data-theme={theme} style={{ flexDirection: 'column', overflowY: 'auto' }}>
+        <div style={{
+          background: 'var(--color-bg-secondary)',
+          borderBottom: '1px solid var(--color-border)',
+          padding: '16px 28px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 16,
+          flexShrink: 0,
+        }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--color-accent)', letterSpacing: 2, textTransform: 'uppercase' }}>
+              FORGE
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 2 }}>
+              EVE Online Manufacturing Intelligence
+            </div>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+            {auth.error && (
+              <div style={{ fontSize: 11, color: 'var(--color-warn)', textAlign: 'right' }}>
+                {auth.error}
+              </div>
+            )}
+            <button
+              type="button"
+              className="login-btn"
+              onClick={auth.login}
+              style={{ fontSize: 13, padding: '8px 20px', whiteSpace: 'nowrap' }}
+            >
+              Link EVE Character →
+            </button>
+          </div>
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto' }}>
+          <HelpTab />
+        </div>
       </div>
     );
   }
@@ -1213,6 +1276,7 @@ const AppShell: FC = () => {
           addingAlt={auth.addingAlt}
           onAddCharacter={auth.addCharacter}
           onRemoveCharacter={auth.removeCharacter}
+          onManageCharacters={() => setCharModalOpen(true)}
           viewCharacterId={viewCharacterId}
           onViewChange={setViewCharacterId}
           totalWalletISK={totalWalletISK}
@@ -1220,6 +1284,21 @@ const AppShell: FC = () => {
           onPushEnable={pushEnable}
           onPushDisable={pushDisable}
         />
+
+        {charModalOpen && (
+          <CharacterManagementModal
+            character={character}
+            altCharacters={auth.altCharacters}
+            addingAlt={auth.addingAlt}
+            onAddCharacter={auth.addCharacter}
+            onRemoveCharacter={(id) => {
+              auth.removeCharacter(id);
+              if (viewCharacterId === id) setViewCharacterId(null);
+            }}
+            onMakePrimary={auth.makePrimary}
+            onClose={() => setCharModalOpen(false)}
+          />
+        )}
 
         {/* Drag handle: resize left sidebar (desktop only) */}
         <div
@@ -1242,6 +1321,7 @@ const AppShell: FC = () => {
           onMarketSearch={handleMarketSearch}
           blueprints={allBlueprints}
           assets={combinedAssets}
+          rawAssets={allRawAssets}
           activeJobs={allActiveJobs}
           itemNames={itemNames}
           walletISK={totalWalletISK}

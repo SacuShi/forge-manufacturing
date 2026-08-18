@@ -18,6 +18,7 @@ import type {
 import ForgeWait from './ForgeWait';
 import { apiGet, apiPost } from '../api/client';
 import { formatISK, formatMargin, formatBuildTime } from '../utils/format';
+import { itemIconUrl } from '../utils/icons';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -265,7 +266,7 @@ const CorpBlueprintsView: FC<CorpBlueprintsProps> = ({ token, regionId, onSelect
                 {/* Icon */}
                 <div className={`bp-icon ${isBpo ? 'bp-icon-bpo' : 'bp-icon-bpc'}`}>
                   <img
-                    src={`https://images.evetech.net/types/${typeId}/icon?size=32`}
+                    src={itemIconUrl(typeId)}
                     alt={bp.name}
                     width={32} height={32}
                     crossOrigin="anonymous"
