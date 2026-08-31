@@ -22,6 +22,7 @@ import TickerPinButton from './TickerPinButton';
 import {
   IconMarket, IconBlueprint, IconResearch, IconAssets, IconJobs,
   IconQueue, IconPI, IconPIPlanner, IconCorp, IconTrading, IconInterhub, IconLPStore, IconHelp,
+  IconAppraise,
 } from './NavIcons';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -59,6 +60,7 @@ const NAV_ITEMS = [
   { key: 'blueprints', Icon: IconBlueprint, label: 'My Blueprints' },
   { key: 'research',   Icon: IconResearch,  label: 'Research ROI' },
   { key: 'assets',     Icon: IconAssets,    label: 'My Assets' },
+  { key: 'appraise',   Icon: IconAppraise,  label: 'Appraise' },
   { key: 'jobs',       Icon: IconJobs,      label: 'Active Jobs' },
   { key: 'queue',      Icon: IconQueue,     label: 'Queue Planner' },
   { key: 'pi',         Icon: IconPI,        label: 'PI Colonies' },

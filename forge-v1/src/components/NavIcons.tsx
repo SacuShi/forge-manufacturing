@@ -84,6 +84,14 @@ export const IconLPStore: FC = () => <Ico>
   <path d="M8 1.5l1.8 3.6 4 .6-2.9 2.8.7 4L8 10.4l-3.6 1.9.7-4-2.9-2.8 4-.6L8 1.5z"/>
 </Ico>;
 
+export const IconAppraise: FC = () => <Ico>
+  <line x1="8" y1="2" x2="8" y2="14.5"/>
+  <line x1="4" y1="14.5" x2="12" y2="14.5"/>
+  <line x1="1.5" y1="5" x2="14.5" y2="5"/>
+  <path d="M1.5 5 C 1.5 8.5 5.5 8.5 5.5 5"/>
+  <path d="M10.5 5 C 10.5 8.5 14.5 8.5 14.5 5"/>
+</Ico>;
+
 export const IconHelp: FC = () => <Ico>
   <circle cx="8" cy="8" r="6.5"/>
   <path d="M5.8 6.2a2.2 2.2 0 0 1 4.3.7c0 1.5-2.1 1.8-2.1 3.1"/>

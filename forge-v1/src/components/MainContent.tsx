@@ -65,8 +65,10 @@ import ForgeWait       from './ForgeWait';
 import {
   IconMarket, IconBlueprint, IconResearch, IconAssets, IconJobs,
   IconQueue, IconPI, IconPIPlanner, IconCorp, IconTrading, IconInterhub, IconLPStore, IconHelp,
+  IconAppraise,
 } from './NavIcons';
 import HelpTab from './HelpTab';
+import AppraisalTab from './AppraisalTab';
 import { formatISK, formatMargin } from '../utils/format';
 import { itemIconUrl } from '../utils/icons';
 import { useLocationNames } from '../hooks/useLocationNames';
@@ -165,6 +167,7 @@ const TABS = [
   { key: 'blueprints', Icon: IconBlueprint, label: 'Your Blueprints' },
   { key: 'research',   Icon: IconResearch,  label: 'Research ROI' },
   { key: 'assets',     Icon: IconAssets,    label: 'Assets' },
+  { key: 'appraise',   Icon: IconAppraise,  label: 'Appraise' },
   { key: 'jobs',       Icon: IconJobs,      label: 'Jobs' },
   { key: 'queue',      Icon: IconQueue,     label: 'Queue Planner' },
   { key: 'pi',         Icon: IconPI,        label: 'PI Colonies' },
@@ -224,9 +227,10 @@ const MainContent: FC<MainContentProps> = ({
   const [filterOwned, setFilterOwned] = useState<string>('all');
   const [bpSearch, setBpSearch] = useState('');
   const [bpFilter, setBpFilter] = useState<'all' | 'bpo' | 'bpc'>('all');
-  // Use prop when available (fetched at login in App.tsx), fall back to local fetch
-  const [bpMetadataLocal, setBpMetadataLocal] = useState<Record<number, { metaLevel: number; productTypeId: number | null }>>({});
-  const bpMetadata = Object.keys(bpMetadataProp).length > 0 ? bpMetadataProp : bpMetadataLocal;
+  // App.tsx fetches blueprint metadata at login and passes it down as bpMetadataProp.
+  // Do NOT maintain a local fallback fetch — that caused a duplicate /api/blueprint-metadata
+  // POST every time MainContent mounted, racing the App.tsx request.
+  const bpMetadata = bpMetadataProp;
   // v1.15.0 — My Blueprints profitability + sorting (mirrors Market Opportunities)
   const [bpProfits, setBpProfits] = useState<Record<number, BlueprintProfit>>({});
   const [bpSort,    setBpSort]    = useState<BpSortField>('iskPerHour');
@@ -236,7 +240,13 @@ const MainContent: FC<MainContentProps> = ({
   const [assetSearch,      setAssetSearch]      = useState('');
   const [assetSort,        setAssetSort]        = useState<'qty' | 'name' | 'location'>('location');
   const [assetSortDir,     setAssetSortDir]     = useState<1 | -1>(1);
-  const [collapsedLocs,    setCollapsedLocs]    = useState<Set<number>>(new Set());
+  // Tracks which location sections the user has opened. Empty = all collapsed (default).
+  const [expandedLocs,     setExpandedLocs]     = useState<Set<number>>(new Set());
+  // Multi-select export (Ctrl+click / Shift+click rows, then appraise)
+  const [assetExportSet,   setAssetExportSet]   = useState<Set<string>>(new Set());
+  const [lastExportIdx,    setLastExportIdx]     = useState<number | null>(null);
+  // Items sent to the Appraise tab
+  const [appraisalItems,   setAppraisalItems]   = useState<Array<{ typeId: number; name: string; qty: number }>>([]);
 
   const getBpName = (typeId: number) =>
     itemNames.get(typeId) ?? `Blueprint #${typeId}`;
@@ -269,23 +279,6 @@ const MainContent: FC<MainContentProps> = ({
     }
   };
 
-  useEffect(() => {
-    // Skip the local fetch when App.tsx already fetched at login (bpMetadataProp is populated).
-    // This prevents a redundant duplicate request on every render where both paths would fire.
-    if (Object.keys(bpMetadataProp).length > 0) return;
-    if (!blueprints || blueprints.length === 0) return;
-
-    const typeIds = blueprints.map(b => b.type_id);
-
-    fetch('/api/blueprint-metadata', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ blueprintTypeIds: typeIds })
-    })
-      .then(res => res.json())
-      .then(metadata => setBpMetadataLocal(metadata))
-      .catch(err => console.error('Failed to load blueprint metadata:', err));
-  }, [blueprints, bpMetadataProp]);
 
   // v1.15.0 — fetch per-blueprint profitability for the selected hub (same source
   // as Market Opportunities). Refetches when the blueprint set or hub changes.
@@ -460,6 +453,17 @@ const MainContent: FC<MainContentProps> = ({
   );
   const locationNames = useLocationNames(assetLocationIds, primaryToken);
 
+  // BPO/BPC lookup — built from the full blueprints list (quantity === -1 → BPO).
+  // Used by the Assets tab to pick the correct CCP icon variant per item.
+  const bpoTypeIds = useMemo(
+    () => new Set(blueprints.filter((b) => b.quantity === -1).map((b) => b.type_id)),
+    [blueprints],
+  );
+  const bpcTypeIds = useMemo(
+    () => new Set(blueprints.filter((b) => b.quantity !== -1).map((b) => b.type_id)),
+    [blueprints],
+  );
+
   // Group the flat assetGroups list into per-location buckets for the collapsed view
   type AssetGroup = (typeof assetGroups)[number];
   const locationGroups = useMemo(() => {
@@ -471,6 +475,54 @@ const MainContent: FC<MainContentProps> = ({
     }
     return Array.from(map.values());
   }, [assetGroups]);
+
+  // Fast key→{name,qty,typeId} lookup used by the appraise function
+  const assetItemMap = useMemo(() => {
+    const map = new Map<string, { name: string; qty: number; typeId: number }>();
+    for (const item of assetGroups) {
+      map.set(`${item.typeId}:${item.locationId}`, { name: item.name, qty: item.qty, typeId: item.typeId });
+    }
+    return map;
+  }, [assetGroups]);
+
+  // Flat list of visible item keys in render order — used for Shift+click range selection.
+  // Mirrors the sort logic in the render loop exactly.
+  const visibleItemKeys = useMemo(() => {
+    const keys: string[] = [];
+    const sorted = [...locationGroups].sort((a, b) => {
+      if (assetSort === 'qty') {
+        const qa = a.items.reduce((s, it) => s + it.qty, 0);
+        const qb = b.items.reduce((s, it) => s + it.qty, 0);
+        return (qa - qb) * assetSortDir;
+      }
+      const la = locationNames.get(a.locationId) ?? '';
+      const lb = locationNames.get(b.locationId) ?? '';
+      return la.localeCompare(lb) * (assetSort === 'name' ? 1 : assetSortDir);
+    });
+    for (const { locationId, items } of sorted) {
+      if (!expandedLocs.has(locationId)) continue;
+      const sortedItems = assetSort === 'name'
+        ? [...items].sort((a, b) => a.name.localeCompare(b.name) * assetSortDir)
+        : [...items].sort((a, b) => b.qty - a.qty);
+      for (const item of sortedItems) {
+        keys.push(`${item.typeId}:${locationId}`);
+      }
+    }
+    return keys;
+  }, [locationGroups, expandedLocs, assetSort, assetSortDir, locationNames]);
+
+  const sendToAppraise = () => {
+    const agg = new Map<number, { name: string; qty: number }>();
+    for (const key of assetExportSet) {
+      const item = assetItemMap.get(key);
+      if (!item) continue;
+      const prev = agg.get(item.typeId);
+      if (prev) prev.qty += item.qty;
+      else agg.set(item.typeId, { name: item.name, qty: item.qty });
+    }
+    setAppraisalItems([...agg.entries()].map(([typeId, { name, qty }]) => ({ typeId, name, qty })));
+    onTabChange('appraise');
+  };
 
   return (
     <main className="main-content" aria-label="Manufacturing data">
@@ -714,20 +766,16 @@ const MainContent: FC<MainContentProps> = ({
                   onClick={() => onSelectItem(selectId, selectName)}
                   onKeyDown={(e) => e.key === 'Enter' && onSelectItem(selectId, selectName)}
                 >
-                  {/* Product icon */}
+                  {/* Blueprint icon — /bp for BPO (blue), /bpc for BPC (pale), or T2 tint via CSS */}
                   <div className={`bp-icon ${isT2 ? 'bp-icon-t2' : (isBpo ? 'bp-icon-bpo' : 'bp-icon-bpc')}`}>
-                    {productTypeId && (
-                      <img
-                        src={itemIconUrl(productTypeId)}
-                        alt=""
-                        width={32}
-                        height={32}
-                        crossOrigin="anonymous"
-                        onError={(e) => {
-                          (e.currentTarget as HTMLImageElement).style.visibility = 'hidden';
-                        }}
-                      />
-                    )}
+                    <img
+                      src={itemIconUrl(typeId, 32, isBpo ? 'bp' : 'bpc')}
+                      alt=""
+                      width={32}
+                      height={32}
+                      crossOrigin="anonymous"
+                      onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                    />
                   </div>
 
                   {/* Name + badges + per-copy runs */}
@@ -831,6 +879,14 @@ const MainContent: FC<MainContentProps> = ({
 
       {activeTab === 'assets' && (
         <div className="main-panel">
+          {/* Usage hint */}
+          <div style={{
+            fontSize: 11, color: 'var(--color-text-tertiary)',
+            marginBottom: 8, lineHeight: 1.5,
+          }}>
+            Click a line to select it · <strong style={{ color: 'var(--color-text-secondary)' }}>Shift+click</strong> to extend the selection · <strong style={{ color: 'var(--color-text-secondary)' }}>Ctrl+click</strong> to add or remove individual lines · then click <strong style={{ color: 'var(--color-accent-primary)' }}>Appraise →</strong> to value them using FORGE's live market data.
+          </div>
+
           <input
             type="text"
             value={assetSearch}
@@ -840,6 +896,44 @@ const MainContent: FC<MainContentProps> = ({
             style={{ width: '100%', marginBottom: 8 }}
             aria-label="Search assets"
           />
+          {/* Appraise toolbar — appears when items are selected via Ctrl/Shift+click */}
+          {assetExportSet.size > 0 && (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8,
+              padding: '6px 10px', borderRadius: 4,
+              background: 'rgba(212, 150, 14, 0.07)',
+              border: '0.5px solid rgba(212, 150, 14, 0.3)',
+            }}>
+              <span style={{ fontSize: 11, color: 'var(--color-text-secondary)', flex: 1 }}>
+                {assetExportSet.size} item{assetExportSet.size !== 1 ? 's' : ''} selected
+              </span>
+              <button
+                onClick={sendToAppraise}
+                title="Appraise selected items using FORGE's live market data"
+                style={{
+                  background: 'rgba(79,195,247,0.12)',
+                  color: 'var(--color-accent-primary)',
+                  border: '0.5px solid var(--color-accent-primary)',
+                  borderRadius: 3, padding: '3px 12px', fontSize: 10,
+                  cursor: 'pointer', fontFamily: 'inherit',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                Appraise →
+              </button>
+              <button
+                onClick={() => { setAssetExportSet(new Set()); setLastExportIdx(null); }}
+                title="Clear selection"
+                style={{
+                  background: 'transparent', color: 'var(--color-text-tertiary)',
+                  border: '0.5px solid var(--color-border-light)',
+                  borderRadius: 3, padding: '3px 8px', fontSize: 10,
+                  cursor: 'pointer', fontFamily: 'inherit',
+                }}
+              >✕</button>
+            </div>
+          )}
+
           {/* Sort pills — Location/Qty sorts groups; Item sorts within each group */}
           <div style={{ display: 'flex', gap: 4, marginBottom: 10 }}>
             {(['location', 'qty', 'name'] as const).map((field) => {
@@ -876,7 +970,7 @@ const MainContent: FC<MainContentProps> = ({
               return la.localeCompare(lb) * (assetSort === 'name' ? 1 : dir);
             }).map(({ locationId, items }) => {
               const locationLabel = locationNames.get(locationId);
-              const isCollapsed   = collapsedLocs.has(locationId);
+              const isCollapsed   = !expandedLocs.has(locationId);
               const sortedItems   = assetSort === 'name'
                 ? [...items].sort((a, b) => a.name.localeCompare(b.name) * assetSortDir)
                 : [...items].sort((a, b) => b.qty - a.qty);
@@ -900,7 +994,7 @@ const MainContent: FC<MainContentProps> = ({
                       top: 0,
                       zIndex: 1,
                     }}
-                    onClick={() => setCollapsedLocs(prev => {
+                    onClick={() => setExpandedLocs(prev => {
                       const next = new Set(prev);
                       if (next.has(locationId)) next.delete(locationId);
                       else next.add(locationId);
@@ -920,10 +1014,12 @@ const MainContent: FC<MainContentProps> = ({
 
                   {/* Item rows within this location */}
                   {!isCollapsed && sortedItems.map(({ name, qty, typeId }, i) => {
-                    const isAssetSelected = typeId === selectedTypeId;
+                    const itemKey     = `${typeId}:${locationId}`;
+                    const isSelected  = assetExportSet.has(itemKey);
                     return (
                       <div
-                        key={`${typeId}:${locationId}`}
+                        key={itemKey}
+                        title="Click to select · Shift+click to range-select · Ctrl+click to add/remove"
                         style={{
                           display: 'flex',
                           alignItems: 'center',
@@ -931,40 +1027,75 @@ const MainContent: FC<MainContentProps> = ({
                           padding: '6px 12px 6px 28px',
                           borderBottom: '0.5px solid var(--color-border-light)',
                           cursor: 'pointer',
-                          background: isAssetSelected
+                          userSelect: 'none',
+                          background: isSelected
                             ? 'rgba(212, 150, 14, 0.20)'
                             : i % 2 === 0 ? 'var(--color-bg-primary)' : 'var(--color-bg-secondary)',
-                          boxShadow: isAssetSelected ? 'inset 0 0 0 1px rgba(212, 150, 14, 0.55)' : undefined,
+                          boxShadow: isSelected
+                            ? 'inset 0 0 0 1px rgba(212, 150, 14, 0.55)'
+                            : undefined,
                         }}
                         onMouseEnter={e => {
-                          if (!isAssetSelected) (e.currentTarget as HTMLDivElement).style.boxShadow = 'inset 0 0 0 1px rgba(212, 150, 14, 0.55)';
+                          if (!isSelected)
+                            (e.currentTarget as HTMLDivElement).style.boxShadow = 'inset 0 0 0 1px rgba(212, 150, 14, 0.55)';
                         }}
                         onMouseLeave={e => {
-                          if (!isAssetSelected) (e.currentTarget as HTMLDivElement).style.boxShadow = '';
+                          if (!isSelected)
+                            (e.currentTarget as HTMLDivElement).style.boxShadow = '';
                         }}
-                        onClick={() => onSelectItem(typeId, name)}
+                        onClick={(e) => {
+                          const idx = visibleItemKeys.indexOf(itemKey);
+                          if (e.shiftKey && lastExportIdx !== null) {
+                            // Shift+click: range-select from the last clicked item
+                            const lo = Math.min(lastExportIdx, idx);
+                            const hi = Math.max(lastExportIdx, idx);
+                            setAssetExportSet(prev => {
+                              const next = new Set(prev);
+                              for (let j = lo; j <= hi; j++) next.add(visibleItemKeys[j]);
+                              return next;
+                            });
+                          } else if (e.ctrlKey || e.metaKey) {
+                            // Ctrl+click: toggle this item without affecting others
+                            setAssetExportSet(prev => {
+                              const next = new Set(prev);
+                              if (next.has(itemKey)) next.delete(itemKey); else next.add(itemKey);
+                              return next;
+                            });
+                            setLastExportIdx(idx);
+                          } else {
+                            // Plain click: single-select this item, open detail panel
+                            setAssetExportSet(new Set([itemKey]));
+                            setLastExportIdx(idx);
+                            onSelectItem(typeId, name);
+                          }
+                        }}
                       >
-                        <img
-                          src={itemIconUrl(typeId)}
-                          alt={name}
-                          loading="lazy"
-                          crossOrigin="anonymous"
-                          style={{ width: 28, height: 28, flexShrink: 0, borderRadius: 2 }}
-                          onError={(e) => { (e.target as HTMLImageElement).style.visibility = 'hidden'; }}
-                        />
-                        <div style={{
-                          flex: 1,
-                          fontSize: 12,
-                          color: 'var(--color-text-secondary)',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}>
-                          {name}
+                        {/* Fixed-size wrapper preserves layout even when the icon 404s */}
+                        <div style={{ width: 28, height: 28, flexShrink: 0, borderRadius: 2, overflow: 'hidden', background: 'var(--color-bg-tertiary)' }}>
+                          <img
+                            src={itemIconUrl(typeId, 32, bpoTypeIds.has(typeId) ? 'bp' : bpcTypeIds.has(typeId) ? 'bpc' : 'icon')}
+                            alt=""
+                            loading="lazy"
+                            crossOrigin="anonymous"
+                            style={{ width: 28, height: 28, display: 'block' }}
+                            onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                          />
                         </div>
-                        <span style={{ fontSize: 12, color: 'var(--color-accent-primary)', fontWeight: 500, flexShrink: 0 }}>
-                          ×{qty.toLocaleString()}
-                        </span>
+                        {/* Name + quantity grouped left so qty sits beside the name */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, overflow: 'hidden' }}>
+                          <div style={{
+                            fontSize: 12,
+                            color: 'var(--color-text-secondary)',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}>
+                            {name}
+                          </div>
+                          <span style={{ fontSize: 12, color: 'var(--color-accent-primary)', fontWeight: 500, flexShrink: 0 }}>
+                            ×{qty.toLocaleString()}
+                          </span>
+                        </div>
                       </div>
                     );
                   })}
@@ -978,6 +1109,13 @@ const MainContent: FC<MainContentProps> = ({
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Item Appraisal */}
+      {activeTab === 'appraise' && (
+        <div className="main-panel">
+          <AppraisalTab seedItems={appraisalItems} canDockKeestar={canDockKeestar} />
         </div>
       )}
 

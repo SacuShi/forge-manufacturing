@@ -458,21 +458,21 @@ const PI_TIER_NAMES = {
   'Genetically Enhanced Livestock': 2, 'Livestock': 2, 'Mechanical Parts': 2,
   'Microfiber Shielding': 2, 'Miniature Electronics': 2, 'Nanites': 2,
   'Oxides': 2, 'Polyaramids': 2, 'Polytextiles': 2, 'Rocket Fuel': 2,
-  'Silicon Diborite': 2, 'Silicate Glass': 2, 'Supertensile Plastics': 2,
-  'Synthetic Oil': 2, 'Test Cultures': 2, 'Transcranial Microcontrollers': 2,
+  'Silicate Glass': 2, 'Superconductors': 2, 'Supertensile Plastics': 2,
+  'Synthetic Oil': 2, 'Test Cultures': 2,
   'Transmitter': 2, 'Viral Agent': 2, 'Water-Cooled CPU': 2,
-  // P3 — Specialized Commodities (19 items)
-  'Biotech Research Reports': 3, 'Camera Drones': 3, 'Cryoprotectant Solution': 3,
-  'Data Chips': 3, 'Gel-Matrix Biopaste': 3, 'Guidance Systems': 3,
-  'Hazmat Detection Systems': 3, 'Hermetic Membranes': 3, 'High-Tech Transmitters': 3,
-  'Industrial Explosives': 3, 'Neocoms': 3, 'Nuclear Reactors': 3,
-  'Planetary Vehicles': 3, 'Robotics': 3, 'Smart Fabric': 3,
-  'Sterile Conduits': 3, 'Synthetic Synapses': 3, 'Ukomi Superconductors': 3,
-  'Vaccines': 3,
-  // P4 — Advanced Commodities (7 items — all verified, required for capital/structure manufacturing)
+  // P3 — Specialized Commodities (21 items)
+  'Biotech Research Reports': 3, 'Camera Drones': 3, 'Condensates': 3,
+  'Cryoprotectant Solution': 3, 'Data Chips': 3, 'Gel-Matrix Biopaste': 3,
+  'Guidance Systems': 3, 'Hazmat Detection Systems': 3, 'Hermetic Membranes': 3,
+  'High-Tech Transmitters': 3, 'Industrial Explosives': 3, 'Neocoms': 3,
+  'Nuclear Reactors': 3, 'Planetary Vehicles': 3, 'Robotics': 3,
+  'Smartfab Units': 3, 'Supercomputers': 3, 'Synthetic Synapses': 3,
+  'Transcranial Microcontrollers': 3, 'Ukomi Superconductors': 3, 'Vaccines': 3,
+  // P4 — Advanced Commodities (8 items — all verified, required for capital/structure manufacturing)
   'Broadcast Node': 4, 'Integrity Response Drones': 4, 'Nano-Factory': 4,
   'Organic Mortar Applicators': 4, 'Recursive Computing Module': 4,
-  'Self-Harmonizing Power Core': 4, 'Wetware Mainframe': 4,
+  'Self-Harmonizing Power Core': 4, 'Sterile Conduits': 4, 'Wetware Mainframe': 4,
 };
 
 async function tagPiTiers(typesData) {

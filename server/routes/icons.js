@@ -38,14 +38,17 @@ module.exports = function iconRoutes() {
   // Cached icons are plain disk reads so there is no meaningful resource to protect.
   // The apiLimiter budget must stay available for real API endpoints.
   router.get('/api/icon/:typeId', async (req, res) => {
-    const typeId = parseInt(req.params.typeId, 10);
-    const size   = parseInt(req.query.size || '32', 10);
+    const typeId  = parseInt(req.params.typeId, 10);
+    const size    = parseInt(req.query.size || '32', 10);
+    // 'icon' = normal item, 'bp' = blueprint original, 'bpc' = blueprint copy
+    const ALLOWED_VARIANTS = new Set(['icon', 'bp', 'bpc']);
+    const variant = ALLOWED_VARIANTS.has(req.query.variant) ? req.query.variant : 'icon';
 
     // Validate inputs — only numeric typeIds and known sizes are allowed
     if (!typeId || typeId <= 0 || isNaN(typeId)) return res.status(400).end();
     if (!ALLOWED_SIZES.has(size))                 return res.status(400).end();
 
-    const filename  = `${typeId}_${size}.png`;
+    const filename  = `${typeId}_${size}_${variant}.png`;
     const cachePath = path.join(CACHE_DIR, filename);
 
     // Fast path: serve from disk without touching CCP's CDN
@@ -61,7 +64,7 @@ module.exports = function iconRoutes() {
       const timeout    = setTimeout(() => controller.abort(), 8000);
 
       const upstream = await fetch(
-        `${CCP_CDN}/types/${typeId}/icon?size=${size}`,
+        `${CCP_CDN}/types/${typeId}/${variant}?size=${size}`,
         {
           signal:  controller.signal,
           headers: { 'User-Agent': 'FORGE Manufacturing Intelligence / forge-ukc.com' },

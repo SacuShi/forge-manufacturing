@@ -1458,11 +1458,14 @@ async function loadHistoryPriceMap() {
 
 // Global typeId→name map for all items. Replaces per-hub refreshHubNameMap DB queries.
 let globalItemNameMap = new Map();
+// Reverse map: lowercase name → typeId. Built alongside globalItemNameMap for O(1) appraise lookups.
+let globalNameToTypeId = new Map();
 
 async function loadGlobalItemNameMap() {
   try {
     const rows = await dbAll("SELECT type_id, name FROM items WHERE name IS NOT NULL AND name != ''");
     globalItemNameMap = new Map(rows.map(r => [r.type_id, r.name]));
+    globalNameToTypeId = new Map(rows.map(r => [r.name.toLowerCase(), r.type_id]));
     console.log(`✓ Global item name map loaded — ${globalItemNameMap.size} items`);
   } catch (err) {
     console.error('⚠ Failed to load global item name map:', err.message);
@@ -1777,11 +1780,10 @@ async function pollFuzzworkHub(hubId) {
   } catch (err) {
     hubMetas[hubId].fetching = false;
     hubMetas[hubId].lastError = err.message;
-    console.error(`⚠ Fuzzwork poll failed for ${hubId}:`, err.message, '— falling back to ESI');
-    return pollHubESI(hubId);
+    console.error(`⚠ Fuzzwork fallback poll failed for ${hubId}:`, err.message);
   }
 
-  scheduleNextHubPoll(hubId, false);
+  scheduleNextHubPoll(hubId, !!hubMetas[hubId].lastError);
 }
 
 // ── ESI order-page poller (fallback per hub) ──────────────────────────────────
@@ -1804,6 +1806,8 @@ async function pollHubESI(hubId) {
         pages = r.xPages || 1;
         if (r.errorRemain < TRADE_MIN_ERROR_BUDGET || r.status === 420 || r.status >= 500) { backoff = true; break; }
         for (const o of r.orders) {
+          // Scope to the hub's own station — region endpoint returns all stations.
+          if (o.location_id !== cfg.stationId) continue;
           let e = agg.get(o.type_id);
           if (!e) { e = { sells: [], buys: [] }; agg.set(o.type_id, e); }
           (o.is_buy_order ? e.buys : e.sells).push(o);
@@ -1821,17 +1825,35 @@ async function pollHubESI(hubId) {
         for (const o of e.sells) if (o.price < bestSell) bestSell = o.price;
         for (const o of e.buys)  if (o.price > bestBuy)  bestBuy  = o.price;
         if (bestSell === Infinity) bestSell = 0;
-        let sellQtyTop = 0, buyQtyTop = 0;
-        if (bestSell) for (const o of e.sells) if (o.price === bestSell) sellQtyTop += o.volume_remain;
-        if (bestBuy)  for (const o of e.buys)  if (o.price === bestBuy)  buyQtyTop  += o.volume_remain;
+        // Total depth across ALL orders at all price levels — consistent with Fuzzwork's agg.buy.volume
+        const sellQtyTop = e.sells.reduce((s, o) => s + o.volume_remain, 0);
+        const buyQtyTop  = e.buys.reduce( (s, o) => s + o.volume_remain, 0);
+        // Compact buy order book [{p,v}] sorted high→low for profitable-order queries
+        const buyOrderBook = e.buys
+          .map(o => ({ p: o.price, v: o.volume_remain }))
+          .sort((a, b) => b.p - a.p);
         const spread    = (bestSell && bestBuy) ? bestSell - bestBuy : 0;
         const spreadPct = (bestSell && bestBuy) ? (spread / bestSell) * 100 : 0;
-        newBook.set(typeId, { sell: bestSell, buy: bestBuy, spread, spreadPct, sellOrders: e.sells.length, buyOrders: e.buys.length, sellQtyTop, buyQtyTop });
+        newBook.set(typeId, { sell: bestSell, buy: bestBuy, spread, spreadPct, sellOrders: e.sells.length, buyOrders: e.buys.length, sellQtyTop, buyQtyTop, buyOrderBook });
       }
       hubBooks[hubId] = newBook;
       Object.assign(hubMetas[hubId], { updatedAt: Date.now(), expiresAt: latestExpires || (Date.now() + TRADE_POLL_FALLBACK_MS), fetching: false, lastError: null, types: newBook.size });
       console.log(`⟳ ${cfg.name} book refreshed via ESI — ${newBook.size} types in ${((Date.now() - started) / 1000).toFixed(1)}s`);
       refreshHubNameMap(hubId, [...newBook.keys()]).catch(e => console.error(`Name map error (${hubId}):`, e.message));
+
+      // Persist snapshot (strip buyOrderBook — it's memory-only, repopulated on next poll)
+      setImmediate(() => {
+        const snap = JSON.stringify(Object.fromEntries(
+          [...newBook.entries()].map(([k, { buyOrderBook: _, ...rest }]) => [k, rest])
+        ));
+        if (hubId === 'jita') {
+          dbRun(`INSERT OR REPLACE INTO jita_book_cache (id, snapshot, updated_at) VALUES (1, ?, datetime('now'))`, [snap])
+            .catch(e => console.error('jita_book_cache write error:', e.message));
+        } else {
+          dbRun(`INSERT OR REPLACE INTO hub_book_cache (hub_id, snapshot, updated_at) VALUES (?, ?, datetime('now'))`, [hubId, snap])
+            .catch(e => console.error(`hub_book_cache write error (${hubId}):`, e.message));
+        }
+      });
       if (Date.now() - lastTradingRequestAt < 60_000 || hubEnrichPending[hubId]) {
         runHubHistoryEnrichment(hubId).catch(e => console.error(`History enrichment error (${hubId}):`, e.message));
       }
@@ -1843,7 +1865,8 @@ async function pollHubESI(hubId) {
   } catch (err) {
     meta.fetching = false;
     meta.lastError = err.message;
-    console.error(`⚠ ${cfg.name} ESI poll failed:`, err.message);
+    console.error(`⚠ ${cfg.name} ESI poll failed:`, err.message, '— falling back to Fuzzwork');
+    return pollFuzzworkHub(hubId);
   }
 
   scheduleNextHubPoll(hubId, backoff || !!hubMetas[hubId].lastError);
@@ -1860,7 +1883,7 @@ function scheduleNextHubPoll(hubId, backoff) {
   let delay = (meta.expiresAt || (Date.now() + TRADE_POLL_FALLBACK_MS)) - Date.now() + 5000;
   if (backoff) delay = Math.max(delay, 60_000);
   delay = Math.min(Math.max(delay, 15_000), 15 * 60_000);
-  const pollFn = HUB_CONFIG[hubId].isStructure ? pollStructureHub : pollFuzzworkHub;
+  const pollFn = HUB_CONFIG[hubId].isStructure ? pollStructureHub : pollHubESI;
   hubPollTimers[hubId] = setTimeout(() => pollFn(hubId), delay);
 }
 
@@ -1876,7 +1899,7 @@ function ensureHubPollerRunning(hubId) {
   const delay = Math.max(0, lastHubPollStartedAt + HUB_POLL_STAGGER_MS - now);
   lastHubPollStartedAt = now + delay;
 
-  const pollFn = HUB_CONFIG[hubId].isStructure ? pollStructureHub : pollFuzzworkHub;
+  const pollFn = HUB_CONFIG[hubId].isStructure ? pollStructureHub : pollHubESI;
   if (delay > 0) {
     console.log(`▶ ${HUB_CONFIG[hubId].name} poller starting (staggered ${Math.round(delay / 1000)}s)`);
     setTimeout(() => pollFn(hubId), delay);
@@ -4546,6 +4569,59 @@ app.post('/api/material-stock-check', security.apiLimiter, async (req, res) => {
   }
 });
 
+// ── Item Appraisal ───────────────────────────────────────────────────────────
+// Returns per-item sell/buy prices from the live hub book.
+// Items can arrive with typeId (from Assets selection) or name-only (paste).
+// Name-based lookups do a linear scan of globalItemNameMap (~90k items, fast enough
+// for the small lists (≤200) an appraisal request will ever contain).
+app.post('/api/appraise', security.apiLimiter, (req, res) => {
+  try {
+    const { items, regionId } = req.body;
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'items array required' });
+    }
+    const rid = parseInt(regionId, 10);
+    if (!rid) return res.status(400).json({ error: 'regionId required' });
+
+    const hubId = REGION_TO_HUB[rid];
+    if (!hubId) return res.status(400).json({ error: `Unknown regionId: ${rid}` });
+
+    const book = hubBooks[hubId];
+    if (!book || book.size === 0) {
+      return res.status(503).json({ error: 'Hub price data not yet available — try again in a few seconds' });
+    }
+
+    const hub = HUB_CONFIG[hubId];
+    const limited = items.slice(0, 200);
+    const result = [];
+    let totalSell = 0, totalBuy = 0;
+
+    for (const raw of limited) {
+      let typeId = parseInt(raw.typeId, 10) || 0;
+      const qty = Math.max(1, parseInt(raw.qty, 10) || 1);
+      const suppliedName = typeof raw.name === 'string' ? raw.name.trim() : '';
+
+      // Resolve name → typeId for paste items (O(1) reverse-map lookup)
+      if (!typeId && suppliedName) {
+        typeId = globalNameToTypeId.get(suppliedName.toLowerCase()) || 0;
+      }
+
+      const name = (typeId && globalItemNameMap.get(typeId)) || suppliedName || `#${typeId}`;
+      const entry = typeId ? book.get(typeId) : null;
+      const sell = entry?.sell ?? 0;
+      const buy  = entry?.buy  ?? 0;
+
+      result.push({ typeId: typeId || 0, name, qty, sell, buy, sellTotal: sell * qty, buyTotal: buy * qty });
+      totalSell += sell * qty;
+      totalBuy  += buy  * qty;
+    }
+
+    res.json({ items: result, totalSell, totalBuy, hubName: hub.name, hubId });
+  } catch (err) {
+    console.error('❌ Appraise error:', err.message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 // AI CHAT - Anthropic proxy with function calling
 // ── AI guardrail (v1.30.0) ───────────────────────────────────────────────────
@@ -4569,6 +4645,13 @@ function checkCharAiRateLimit(characterId) {
   _charAiWindow.set(characterId, hits);
   return true;
 }
+// Periodically evict characterIds whose entire window has expired to prevent unbounded growth.
+setInterval(() => {
+  const cutoff = Date.now() - CHAR_AI_WIN_MS;
+  for (const [id, times] of _charAiWindow) {
+    if (!times.some(t => t > cutoff)) _charAiWindow.delete(id);
+  }
+}, CHAR_AI_WIN_MS);
 
 // Strip invisible/dangerous Unicode before any other processing:
 //   • Zero-width characters (U+200B–U+200D, U+FEFF) — used to split trigger words
@@ -5356,8 +5439,11 @@ app.post('/api/ai-chat',
               const cbRows = await dbAll(
                 `SELECT COALESCE(i.name, 'Item #' || cb.type_id) AS name,
                         CASE WHEN cb.runs = -1 THEN 'BPO' ELSE 'BPC' END AS bp_type,
-                        cb.material_efficiency AS me, cb.time_efficiency AS te, cb.runs
-                 FROM corp_blueprints cb LEFT JOIN items i ON i.type_id = cb.type_id
+                        cb.material_efficiency AS me, cb.time_efficiency AS te, cb.runs,
+                        b.product_id
+                 FROM corp_blueprints cb
+                 LEFT JOIN items i ON i.type_id = cb.type_id
+                 LEFT JOIN blueprints b ON b.blueprint_id = cb.type_id
                  ${cbWhere} ORDER BY i.name ASC LIMIT ?`,
                 [...cbParams, cbLimit]
               );
@@ -5369,7 +5455,7 @@ app.post('/api/ai-chat',
                 corp_name: access.corpName || `Corp ${access.corpId}`,
                 total: cbTotal?.n ?? cbRows.length,
                 showing: cbRows.length,
-                blueprints: cbRows.map(r => ({ name: r.name, type: r.bp_type, me: r.me, te: r.te, runs: r.runs === -1 ? 'infinite' : r.runs })),
+                blueprints: cbRows.map(r => ({ name: r.name, product_id: r.product_id ?? null, type: r.bp_type, me: r.me, te: r.te, runs: r.runs === -1 ? 'infinite' : r.runs })),
               };
               break;
             }
@@ -8887,25 +8973,27 @@ app.get('/api/inter-hub-arb', security.apiLimiter, async (req, res) => {
     const buyBook   = buyHubId  ? hubBooks[buyHubId]  : null;
     const sellBook  = sellHubId ? hubBooks[sellHubId] : null;
 
+    const enriched = rows.flatMap(r => {
+      const buyEntry  = buyBook?.get(r.product_id)  ?? null;
+      const sellEntry = sellBook?.get(r.product_id) ?? null;
+      // If the hub book exists and confirms 0 buy orders at the sell hub, skip — no market to sell into
+      if (sellEntry && sellEntry.buyOrders === 0) return [];
+      return [{
+        ...r,
+        buy_hub_name:       buyHubName,
+        sell_hub_name:      sellHubName,
+        sell_orders_at_buy: buyEntry  ? buyEntry.sellOrders  : null,
+        sell_vol_at_buy:    buyEntry  ? buyEntry.sellQtyTop  : null,
+        buy_orders_at_sell: sellEntry ? sellEntry.buyOrders  : null,
+        buy_vol_at_sell:    sellEntry ? sellEntry.buyQtyTop  : null,
+      }];
+    });
+
     res.json({
-      results: rows.map(r => {
-        const buyEntry  = buyBook?.get(r.product_id)  ?? null;
-        const sellEntry = sellBook?.get(r.product_id) ?? null;
-        return {
-          ...r,
-          buy_hub_name:       buyHubName,
-          sell_hub_name:      sellHubName,
-          // Sell-side depth at the buy hub (what you're buying from)
-          sell_orders_at_buy: buyEntry  ? buyEntry.sellOrders  : null,
-          sell_vol_at_buy:    buyEntry  ? buyEntry.sellQtyTop  : null,
-          // Buy-side depth at the sell hub (what you're selling into)
-          buy_orders_at_sell: sellEntry ? sellEntry.buyOrders  : null,
-          buy_vol_at_sell:    sellEntry ? sellEntry.buyQtyTop  : null,
-        };
-      }),
+      results: enriched,
       buy_hub:    buyHubName,
       sell_hub:   sellHubName,
-      count:      rows.length,
+      count:      enriched.length,
       offset,
       has_more:   rows.length === limit,
       min_margin: minMargin,
@@ -8914,6 +9002,71 @@ app.get('/api/inter-hub-arb', security.apiLimiter, async (req, res) => {
   } catch (err) {
     console.error('Inter-hub arb error:', err.message);
     res.status(500).json({ error: clientErrMsg(err), results: [] });
+  }
+});
+
+// Profitable buy orders at a hub for a specific item.
+// Fetches raw ESI buy orders for the item in the hub's region, filters to those
+// at the hub's main station AND priced above the break-even cost
+// (buy_at + all fees = sell_into − net_profit), and returns count + total volume_remain.
+// Station-scoped to match the Fuzzwork aggregated data FORGE uses for prices.
+// Note: Keepstar (structure) orders cannot be fetched via public ESI — returns 501.
+app.get('/api/inter-hub-item-profitable', security.apiLimiter, async (req, res) => {
+  try {
+    const typeId    = parseInt(req.query.typeId, 10);
+    const regionId  = parseInt(req.query.regionId, 10);
+    const breakEven = parseFloat(req.query.breakEven);
+    if (!typeId || !regionId || isNaN(breakEven))
+      return res.status(400).json({ error: 'typeId, regionId, and breakEven are required' });
+
+    const hubId = REGION_TO_HUB[regionId];
+    const hub   = hubId ? HUB_CONFIG[hubId] : null;
+    if (!hub)
+      return res.status(400).json({ error: `No hub configured for regionId ${regionId}` });
+    if (hub.isStructure)
+      return res.status(501).json({ error: 'Profitable orders not available for player structures — ESI structure markets require authentication.' });
+
+    // Prefer the in-memory buy order book (populated by pollHubESI — same snapshot as
+    // the trade breakdown figures). Fall back to a live ESI call only if the book
+    // was loaded from Fuzzwork (which doesn't provide per-order detail).
+    const bookEntry = hubBooks[hubId]?.get(typeId);
+    if (bookEntry?.buyOrderBook) {
+      const profitable = bookEntry.buyOrderBook.filter(o => o.p > breakEven);
+      return res.json({
+        profitableOrderCount: profitable.length,
+        totalVolumeRemain:    profitable.reduce((s, o) => s + o.v, 0),
+        totalAtStation:       bookEntry.buyOrders,
+        breakEven,
+        source: 'book',
+      });
+    }
+
+    // Fuzzwork-sourced book — no per-order data. Fall back to live ESI.
+    let allOrders = [];
+    for (let page = 1; page <= 10; page++) {
+      const r = await fetch(
+        `https://esi.evetech.net/latest/markets/${regionId}/orders/?order_type=buy&type_id=${typeId}&page=${page}&datasource=tranquility`,
+        { headers: { 'User-Agent': 'FORGE EVE Manufacturing Tool' } }
+      );
+      if (!r.ok) break;
+      const batch = await r.json();
+      if (!Array.isArray(batch) || batch.length === 0) break;
+      allOrders = allOrders.concat(batch);
+      if (batch.length < 1000) break;
+    }
+    const atStation = allOrders.filter(o => o.location_id === hub.stationId);
+    const profitable = atStation.filter(o => o.price > breakEven);
+
+    res.json({
+      profitableOrderCount: profitable.length,
+      totalVolumeRemain:    profitable.reduce((s, o) => s + o.volume_remain, 0),
+      totalAtStation:       atStation.length,
+      breakEven,
+      source: 'live',
+    });
+  } catch (err) {
+    console.error('❌ inter-hub-item-profitable error:', err.message);
+    res.status(500).json({ error: 'ESI fetch failed' });
   }
 });
 
@@ -9591,19 +9744,19 @@ TIERS:
        Silicon, Toxic Metals, Water
   P2 — Refined Commodities (two P1 inputs combined):
        Biocells, Construction Blocks, Consumer Electronics, Coolant, Enriched Uranium,
-       Fertilizer, Genetically Enhanced Livestock, Mechanical Parts, Microfiber Shielding,
-       Miniature Electronics, Nanites, Oxides, Polyaramids, Polytextiles, Rocket Fuel,
-       Silicon Diborite, Silicate Glass, Supertensile Plastics, Synthetic Oil, Test Cultures,
-       Transcranial Microcontrollers, Transmitter, Viral Agent, Water-Cooled CPU
+       Fertilizer, Genetically Enhanced Livestock, Livestock, Mechanical Parts,
+       Microfiber Shielding, Miniature Electronics, Nanites, Oxides, Polyaramids,
+       Polytextiles, Rocket Fuel, Silicate Glass, Superconductors, Supertensile Plastics,
+       Synthetic Oil, Test Cultures, Transmitter, Viral Agent, Water-Cooled CPU
   P3 — Specialized Commodities (P1+P2 or P2+P2 combinations):
-       Biotech Research Reports, Camera Drones, Cryoprotectant Solution, Data Chips,
-       Gel-Matrix Biopaste, Guidance Systems, Hazmat Detection Systems, Hermetic Membranes,
-       High-Tech Transmitters, Industrial Explosives, Neocoms, Nuclear Reactors,
-       Planetary Vehicles, Robotics, Smart Fabric, Sterile Conduits, Synthetic Synapses,
-       Ukomi Superconductors, Vaccines
+       Biotech Research Reports, Camera Drones, Condensates, Cryoprotectant Solution,
+       Data Chips, Gel-Matrix Biopaste, Guidance Systems, Hazmat Detection Systems,
+       Hermetic Membranes, High-Tech Transmitters, Industrial Explosives, Neocoms,
+       Nuclear Reactors, Planetary Vehicles, Robotics, Smartfab Units, Supercomputers,
+       Synthetic Synapses, Transcranial Microcontrollers, Ukomi Superconductors, Vaccines
   P4 — Advanced Commodities (multiple P3 inputs; require multiple planet types):
        Broadcast Node, Integrity Response Drones, Nano-Factory, Organic Mortar Applicators,
-       Recursive Computing Module, Self-Harmonizing Power Core, Wetware Mainframe
+       Recursive Computing Module, Self-Harmonizing Power Core, Sterile Conduits, Wetware Mainframe
 
 COLONY & EXTRACTION MECHANICS:
   • Command Center (one per planet) sets power/CPU budget; upgrade via CCU skill (L1–5 = more pins).
@@ -9663,7 +9816,7 @@ Always use FULL item names: Tritanium not Trit, Blueprint Original not BPO, Blue
 CLICKABLE ITEM LINKS — IMPORTANT:
 Write recommended items (to build/sell/buy) as: [[Item Name|typeId]]
 The UI renders these as bold, clickable links opening the item's analysis panel. ALWAYS use for key recommendations.
-  • typeId from tool results: get_precomputed→product_id; get_blueprint→productId; analyze_blueprints/get_t2_blueprints/get_corp_blueprints→type/product id.
+  • typeId from tool results: get_precomputed→product_id; get_blueprint→productId; analyze_blueprints/get_t2_blueprints→type_id; get_corp_blueprints→product_id (NOT type_id — corp blueprint rows carry both; always use product_id for [[links]] and profit questions).
   • Example: "[[Hammerhead II|2185]] at ~18M ISK/run"
   • If you don't have the typeId, use the plain full name — never invent an id.
 
@@ -11089,9 +11242,11 @@ app.get('/api/corp/blueprints',
            cb.material_efficiency AS me, cb.time_efficiency AS te,
            cb.location_id, cb.location_flag, cb.fetched_at,
            COALESCE(i.name, 'Item #' || cb.type_id) AS name,
-           CASE WHEN cb.runs = -1 THEN 'BPO' ELSE 'BPC' END AS bp_type
+           CASE WHEN cb.runs = -1 THEN 'BPO' ELSE 'BPC' END AS bp_type,
+           b.product_id
          FROM corp_blueprints cb
          LEFT JOIN items i ON i.type_id = cb.type_id
+         LEFT JOIN blueprints b ON b.blueprint_id = cb.type_id
          ${whereClause}
          ORDER BY i.name ASC
          LIMIT ? OFFSET ?`,

@@ -87,7 +87,7 @@ async function resolveRequiredCommodities(targetTypeIds, { dbAll, dbGet }) {
       const materials = await dbAll(
         `SELECT material_type_id FROM pi_schematic_materials WHERE schematic_id = ?`, [schematic.schematic_id]
       );
-      for (const m of materials) await resolve(m.material_type_id);
+      await Promise.all(materials.map(m => resolve(m.material_type_id)));
       return;
     }
 
@@ -235,9 +235,15 @@ async function planProduction({ regionId, requiredRaw, requiredProducts, product
 
   const minPlanetsNeeded = requiredRaw.length + requiredProducts.length;
 
+  // Yield the event loop every N iterations so concurrent requests aren't starved
+  // during the CPU-bound greedy search across hundreds of systems.
+  const yieldEvery = async (i, n = 50) => { if (i % n === 0) await new Promise(r => setImmediate(r)); };
+
   // 1. Prefer a single system covering everything.
   const singleResults = [];
+  let si = 0;
   for (const sys of systems) {
+    await yieldEvery(si++);
     const planets = planetsBySystem.get(sys.system_id) || [];
     if (planets.length < minPlanetsNeeded) continue; // quick reject
     const assignment = assignPlanets(planets, requiredRaw, requiredProducts, resourcesByType, productTiers);
@@ -256,7 +262,9 @@ async function planProduction({ regionId, requiredRaw, requiredProducts, product
     constellations.get(sys.constellation_id).push(sys);
   }
   const constellationResults = [];
+  let ci = 0;
   for (const constSystems of constellations.values()) {
+    await yieldEvery(ci++);
     const pooled = constSystems.flatMap(s => planetsBySystem.get(s.system_id) || []);
     const assignment = assignPlanets(pooled, requiredRaw, requiredProducts, resourcesByType, productTiers);
     if (assignment) {

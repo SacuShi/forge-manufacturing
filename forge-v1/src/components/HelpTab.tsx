@@ -6,7 +6,7 @@ import { type FC } from 'react';
 const S = {
   page: {
     padding: '24px 28px',
-    maxWidth: 860,
+    maxWidth: 880,
     margin: '0 auto',
     color: 'var(--color-text-primary)',
     fontSize: 13,
@@ -115,6 +115,17 @@ const S = {
     marginBottom: 4,
     color: 'var(--color-text-primary)',
   },
+  bpBadge: (color: string) => ({
+    display: 'inline-block',
+    fontSize: 10,
+    fontWeight: 700,
+    padding: '1px 5px',
+    borderRadius: 3,
+    background: color,
+    color: '#fff',
+    marginRight: 4,
+    verticalAlign: 'middle',
+  } as React.CSSProperties),
 };
 
 const Section: FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
@@ -135,25 +146,25 @@ const HelpTab: FC = () => (
     {/* ── What is FORGE ── */}
     <Section title="What is FORGE?">
       <p style={S.p}>
-        FORGE connects to your EVE Online character via the official ESI (read-only). It pulls your assets,
-        blueprints, jobs, skills, wallet, and standings to calculate <strong>real profit figures</strong> — not
-        guesses. Everything updates live from ESI market data.
+        FORGE connects to your EVE Online character via the official ESI API (read-only). It pulls your assets,
+        blueprints, active industry jobs, skills, wallet balance, loyalty points, and standings —
+        then uses live market data to calculate <strong>real profit figures</strong>, not guesses.
       </p>
       <p style={S.p}>
-        FORGE never sees your password and cannot perform any in-game action. It reads data only.
+        FORGE <strong>never sees your password</strong> and cannot perform any in-game action whatsoever.
+        It is a read-only intelligence tool. Your EVE credentials only ever go to CCP's login page.
       </p>
-      <div style={S.tip}>💡 Add multiple characters using <strong>Add Character</strong> in the left panel.
-        FORGE merges their blueprints and assets so you see your full industrial empire at a glance.</div>
+      <div style={S.tip}>💡 Add multiple characters (industry alts, corp directors) using <strong>+ Add Character</strong>
+        in the left panel. FORGE merges their blueprints and assets so you see your entire industrial empire at a glance.</div>
     </Section>
 
     {/* ── Hub selectors ── */}
     <Section title="Hub Selectors — Buy in / Sell at">
       <p style={S.p}>
-        The two dropdowns in the top bar control which market hubs FORGE uses for its calculations.
+        The two dropdowns in the top bar control which market hubs FORGE uses for every price calculation.
         They are <strong>independent</strong> — set them to match how you actually operate.
       </p>
 
-      {/* Mockup */}
       <div style={S.mockup}>
         <span style={S.label}>BUY IN</span>
         <span style={S.select}>◎ Jita ▾</span>
@@ -166,133 +177,303 @@ const HelpTab: FC = () => (
         <div style={S.card}>
           <div style={S.cardTitle}>◎ Buy in</div>
           <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
-            Where you buy raw materials. FORGE uses the cheapest sell-order price at this hub
-            to calculate your material costs. Default: Jita — the cheapest source for most inputs.
+            Where you source raw materials. FORGE uses the <em>cheapest sell-order price</em> at this hub
+            to calculate your material costs. Default: Jita — the cheapest source for almost all inputs.
           </div>
         </div>
         <div style={S.card}>
           <div style={S.cardTitle}>◎ Sell at</div>
           <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
-            Where you sell finished goods. FORGE uses the current lowest sell-order price here
-            as your expected revenue. Change this to see profit at Amarr, Dodixie, Rens, or Hek.
+            Where you sell finished goods. FORGE uses the <em>current lowest sell-order price</em> here
+            as your expected revenue. Switch to Amarr, Dodixie, Rens, or Hek to see profit at each.
           </div>
         </div>
       </div>
 
       <div style={S.tip}>💡 <strong>Typical setup:</strong> Buy in = Jita, Sell at = wherever you plan to list.
-        If you manufacture and sell locally in one hub, set both to the same hub.</div>
+        If you manufacture and sell at the same hub, set both identically.</div>
+    </Section>
+
+    {/* ── Mfg Setup ── */}
+    <Section title="⚙ Manufacturing Setup">
+      <p style={S.p}>
+        Click <strong>⚙ Mfg Setup</strong> in the top bar to tell FORGE about your manufacturing structure.
+        This is critical — the True Profit calculation changes significantly depending on where you build.
+      </p>
+      <ul style={S.ul}>
+        <li style={S.li}><strong>Solar system</strong> — affects the system cost index (SCI), a CONCORD tax on every
+          manufacturing job. Low-activity systems have lower SCI; busy systems like Jita 4-4 have very high SCI.</li>
+        <li style={S.li}><strong>Structure type</strong> — Raitaru, Azbel, Sotiyo (engineering complexes) each give
+          different material and time efficiency bonuses. NPC stations give no bonus at all.</li>
+        <li style={S.li}><strong>Rigs</strong> — T1 and T2 ME/TE rigs on your structure further reduce material waste
+          or build time, but only for specific item categories.</li>
+        <li style={S.li}><strong>Facility tax</strong> — the structure owner's tax on top of the SCI. Often 0–3% in
+          alliance structures; up to 10% or more in public citadels.</li>
+      </ul>
+      <div style={S.tip}>💡 An Azbel with T2 ME rigs for your item category can improve profit by 5–15% vs an NPC
+        station. Always set this to your actual build location for accurate numbers.</div>
     </Section>
 
     {/* ── Market Opportunities ── */}
     <Section title="Market Opportunities">
       <p style={S.p}>
         The main table ranks every manufacturable item by profitability using live market prices.
-        Click any row to open the <strong>True Profit</strong> breakdown on the right — this is the
-        accurate per-character figure after your skills, blueprint ME, broker fees, sales tax,
-        and manufacturing job costs.
+        Click any row to open the <strong>True Profit</strong> panel on the right — the full per-character
+        breakdown after your skills, blueprint ME, broker fees, sales tax, and job costs.
       </p>
       <ul style={S.ul}>
-        <li style={S.li}><strong>Profit/run</strong> — gross estimate before your personal fees. Good for ranking.</li>
-        <li style={S.li}><strong>True Profit</strong> (right panel) — the real number using your character's skills,
-          your actual blueprint ME level, your standings-adjusted broker fee, and your manufacturing structure costs.</li>
-        <li style={S.li}><strong>ISK/hr</strong> — normalises profit by build time. A slow ship may have high profit/run
-          but poor ISK/hr versus a fast module.</li>
-        <li style={S.li}><strong>Owned</strong> — BPO = original blueprint, BPC = copy. BPOs can be researched;
-          BPCs are single-use.</li>
+        <li style={S.li}><strong>Profit/run</strong> — gross revenue minus material cost. No fees applied. Good for quick ranking.</li>
+        <li style={S.li}><strong>Margin %</strong> — profit as a percentage of sell price. Higher margin = more cushion if prices move against you.</li>
+        <li style={S.li}><strong>ISK/hr</strong> — profit normalised by build time. A slow battleship may have a high profit/run
+          but poor ISK/hr compared to a fast-building T2 module. <em>This is usually the best column to sort by.</em></li>
+        <li style={S.li}><strong>Owned</strong> — whether you have a BPO or BPC for this item (shown in the right panel).</li>
       </ul>
-      <div style={S.tip}>💡 Use the <strong>⚙ Mfg Setup</strong> button in the top bar to set your manufacturing
-        solar system, structure type, rigs, and facility tax. This directly affects True Profit accuracy.</div>
+      <div style={S.tip}>💡 Use <strong>⚙ Mfg Setup</strong> to set your manufacturing structure before reading True Profit —
+        the number in the table is an estimate; the right panel is the accurate figure for your specific character and structure.</div>
     </Section>
 
     {/* ── Your Blueprints ── */}
     <Section title="Your Blueprints">
       <p style={S.p}>
-        Shows every blueprint across all your logged-in characters, with live profit calculations
-        against your current hub selection. Sort by profit, margin, ISK/hr, or build time.
+        Shows every blueprint across all your logged-in characters with live profit calculations.
+        Sort by ISK/hr, margin, total profit, ME level, or name.
       </p>
+      <p style={S.p}><strong>Blueprint icon types:</strong></p>
       <ul style={S.ul}>
-        <li style={S.li}><strong>Buildable Now</strong> filter — only shows blueprints where you already own
-          all required materials across your characters' assets.</li>
-        <li style={S.li}><strong>ME level</strong> — research your BPOs to reduce material waste.
-          Even ME 5–10 makes a meaningful difference on expensive T2 items.</li>
+        <li style={S.li}><span style={S.bpBadge('#2563eb')}>BPO</span> <strong>Blueprint Original</strong> — permanent, can be researched to higher ME/TE levels, can produce unlimited copies.</li>
+        <li style={S.li}><span style={S.bpBadge('#6b7280')}>BPC</span> <strong>Blueprint Copy</strong> — finite number of runs remaining. Cannot be researched. Cheaper to acquire.</li>
+        <li style={S.li}>Reaction Formulas (teal icon) and Sleeper Data Interfaces (orange icon) follow the same BPO/BPC rules.</li>
+      </ul>
+      <ul style={S.ul}>
+        <li style={S.li}><strong>Can Build Now</strong> — only shows blueprints where you already own <em>all</em> required
+          materials across your characters' combined assets.</li>
+        <li style={S.li}>If <strong>Can Build Now</strong> is ticked and you see a blueprint, but the right panel shows
+          a red "Missing Materials" warning — check whether you also see a green <em>"You have enough ISK to buy the missing materials"</em> message.
+          This means your wallet covers the shortfall; use the <strong>📋 Multibuy</strong> button to copy the shopping list for EVE's Multibuy window.</li>
+        <li style={S.li}><strong>ME level</strong> — material efficiency research level. ME 10 is the maximum for T1 items.
+          Even ME 5 meaningfully reduces material cost on expensive T2 products.</li>
       </ul>
     </Section>
 
     {/* ── Research ROI ── */}
     <Section title="Research ROI">
       <p style={S.p}>
-        Calculates whether it's worth researching each of your BPOs further, and by how many ME levels.
-        Compares the ISK saved per run (from reduced material cost) against the time and job cost
-        of the research itself.
+        Calculates whether researching each of your BPOs further is worth the time and ISK.
+        For each blueprint it shows: ISK saved per run at the next ME level, the cost and time of the research job,
+        and how many runs it takes to break even.
       </p>
-      <div style={S.tip}>💡 Research ROI uses your <strong>Sell at</strong> hub for sell-price and your
-        manufacturing settings for job cost. Set these correctly for accurate recommendations.</div>
+      <div style={S.tip}>💡 Research ROI uses your <strong>Sell at</strong> hub for sell-price and your Manufacturing Setup
+        for job cost. Set those correctly before reading recommendations.</div>
+    </Section>
+
+    {/* ── My Assets ── */}
+    <Section title="My Assets">
+      <p style={S.p}>
+        Shows every item across all your characters' hangars, grouped by station or structure.
+        Locations are <strong>collapsed by default</strong> — click a location header to expand it and see what's inside.
+      </p>
+      <ul style={S.ul}>
+        <li style={S.li}><strong>Search</strong> — filters items by name across all locations simultaneously.</li>
+        <li style={S.li}><strong>Sort pills</strong> — Location sorts groups alphabetically; Quantity sorts groups by
+          total items; Item sorts rows within each group by name.</li>
+        <li style={S.li}><strong>Blueprint icons</strong> — blueprints appear with their correct icon:
+          blue = BPO, pale = BPC, teal = Reaction Formula, orange = Sleeper blueprint.</li>
+        <li style={S.li}><strong>Click any item</strong> to open its market data and True Profit panel on the right.</li>
+      </ul>
+      <p style={S.p}><strong>Sending items to Appraise:</strong></p>
+      <ul style={S.ul}>
+        <li style={S.li}><kbd style={S.kbd}>Ctrl+click</kbd> a row to add it to your selection (amber highlight). Click again to deselect.</li>
+        <li style={S.li}><kbd style={S.kbd}>Shift+click</kbd> selects every row between your first click and this one.</li>
+        <li style={S.li}><kbd style={S.kbd}>Left-click</kbd> alone opens the item's detail panel on the right — it does <em>not</em> clear your multi-selection.</li>
+        <li style={S.li}>Once items are selected an <strong>Appraise →</strong> button appears in the toolbar.
+          Clicking it takes you straight to the Appraise tab with those items pre-loaded and valued
+          at your chosen hub. See the <strong>Appraise</strong> section below for what you can do there.</li>
+      </ul>
+      <div style={S.tip}>💡 To value an entire location: expand it, Ctrl+click the first row, then Shift+click the
+        last row to select everything in one go.</div>
+    </Section>
+
+    {/* ── Appraise ── */}
+    <Section title="Appraise">
+      <p style={S.p}>
+        The Appraise tab values any list of items using FORGE's own live market data — the same prices
+        that drive every other calculation in the tool, updated every few minutes from ESI.
+        Unlike external appraisal sites, FORGE also has <strong>C-J6MT Keepstar</strong> pricing for
+        Imperium members.
+      </p>
+      <p style={S.p}><strong>Two ways to load items:</strong></p>
+      <ul style={S.ul}>
+        <li style={S.li}><strong>From Assets</strong> — select items in My Assets and click <strong>Appraise →</strong>.
+          Items land in the Appraise tab pre-loaded with correct type IDs, ready to value instantly.</li>
+        <li style={S.li}><strong>Paste a list</strong> — copy items from anywhere in EVE (right-click a stack → Copy),
+          paste into the text box, and click <strong>Appraise</strong>.
+          FORGE accepts the standard EVE clipboard format: <em>Name[tab]Qty</em>, one item per line.</li>
+      </ul>
+      <p style={S.p}><strong>Hub selector and quick buttons:</strong></p>
+      <ul style={S.ul}>
+        <li style={S.li}><strong>Jita Buy</strong> — shows the value of your items at Jita buy-order prices.
+          This is what you'd receive selling to buy orders right now — instant, guaranteed ISK,
+          but lower than the sell-order price. The number to use when a buyer offers to take your loot in bulk.</li>
+        <li style={S.li}><strong>Jita Sell</strong> — shows the value at Jita's cheapest current sell-order price.
+          This is what you could receive if you listed everything at market and were the cheapest seller.
+          Higher than buy-order value, but not guaranteed — you have to wait for buyers to come to you.</li>
+        <li style={S.li}>The <strong>Hub</strong> pills (Amarr, Dodixie, Hek, Rens, C-J6MT) let you price against any
+          trade hub. Switching hub re-appraises immediately using cached data — no delay.</li>
+      </ul>
+      <p style={S.p}><strong>% adjustment:</strong></p>
+      <ul style={S.ul}>
+        <li style={S.li}>The <strong>80% / 85% / 90% / 95% / 100%</strong> pills multiply every displayed value
+          by that percentage. 90% of Jita buy is the standard offer in null-sec loot-buying contracts
+          ("blues loot" buyback programmes). Set the percentage first, then read off your buyback value.</li>
+        <li style={S.li}>The column headers update to show the percentage, e.g. <em>"Jita buy (90%)"</em>, so the
+          number is never ambiguous.</li>
+      </ul>
+      <p style={S.p}><strong>Exporting to Goonpraisal:</strong></p>
+      <ul style={S.ul}>
+        <li style={S.li}>Click <strong>📋 Copy as Multibuy list</strong> to copy your items in EVE's multibuy format
+          (<em>Name x Qty</em>, one per line). You can paste this directly into Goonpraisal or the
+          in-game Multibuy window (right-click market → Buy Items).</li>
+        <li style={S.li}><strong>Open Goonpraisal ↗</strong> copies the list <em>and</em> opens the site in a new tab —
+          paste immediately on arrival for a second opinion against Goonpraisal's own price feed.</li>
+      </ul>
+      <div style={S.tip}>💡 For null-sec loot buyback: use <strong>Jita Buy</strong> at <strong>90%</strong>.
+        That combination shows exactly what most buyback programmes will pay for your haul —
+        the big cyan number at the top is your cheque.</div>
+    </Section>
+
+    {/* ── Active Jobs ── */}
+    <Section title="Active Jobs">
+      <p style={S.p}>
+        Lists all manufacturing, research, and reaction jobs currently running across all your characters.
+        Each card shows the product being built, the job type (Manufacturing / ME Research / TE Research / Invention),
+        quantity, and time remaining.
+      </p>
+      <div style={S.tip}>💡 Click any job to open that product's market and profit data in the right panel.</div>
+    </Section>
+
+    {/* ── Queue Planner ── */}
+    <Section title="Queue Planner">
+      <p style={S.p}>
+        Helps you fill your characters' available manufacturing slots with the most profitable jobs.
+        It reads your current active jobs, calculates how many slots are free on each character,
+        and recommends what to build next based on your blueprint library and current market prices.
+      </p>
+      <ul style={S.ul}>
+        <li style={S.li}><strong>Time horizon</strong> — how many hours ahead to plan. A 24-hour horizon plans jobs
+          that will complete within the next day; 72 hours fills a long weekend queue.</li>
+        <li style={S.li}><strong>Active slots</strong> show jobs currently running (greyed out — nothing to do).</li>
+        <li style={S.li}><strong>Planned slots</strong> show the recommended next jobs. Each recommendation shows
+          the product name, run count, and expected ISK/hr.</li>
+      </ul>
+      <div style={S.tip}>💡 Queue Planner only recommends blueprints you own. Add more characters and their
+        blueprints appear automatically in the pool.</div>
+    </Section>
+
+    {/* ── PI ── */}
+    <Section title="PI Colonies">
+      <p style={S.p}>
+        Planetary Industry (PI) lets your characters extract raw resources from planets and process them into
+        manufactured goods — a passive ISK income stream that runs while you're offline.
+      </p>
+      <p style={S.p}>
+        The PI Colonies tab shows all your active colonies across every character: which planet, its type
+        (Barren, Gas, Ice, etc.), its upgrade level (which limits how many extractors and factories you can install),
+        and the number of pins currently on it.
+      </p>
+      <ul style={S.ul}>
+        <li style={S.li}><strong>POCO tax rate</strong> — enter the tax your alliance or the POCO owner charges
+          for launching PI goods off the planet. This affects profitability calculations.</li>
+        <li style={S.li}>Click any planet to see the list of blueprints (PI schematics) installed and their
+          input/output materials.</li>
+      </ul>
+    </Section>
+
+    {/* ── PI Planner ── */}
+    <Section title="PI Planner">
+      <p style={S.p}>
+        If you're setting up PI from scratch or optimising an existing chain, the PI Planner tells you
+        <em> which planet in a given region</em> is best suited to produce a target PI product chain.
+      </p>
+      <ul style={S.ul}>
+        <li style={S.li}><strong>Select a region</strong> and a <strong>target product</strong> (P1 through P4).
+          The planner evaluates every planet in the region against the resource requirements for the full production chain.</li>
+        <li style={S.li}>Results rank planets by how many of the required P0 raw materials are available locally,
+          minimising the number of planets you need in your chain.</li>
+      </ul>
+      <div style={S.tip}>💡 The closer a planet can supply all its own inputs, the cheaper your PI setup to run —
+        fewer customs office trips, simpler logistics.</div>
+    </Section>
+
+    {/* ── Corp ── */}
+    <Section title="Corp">
+      <p style={S.p}>
+        If you hold a Director or equivalent role in your corporation, the Corp tab gives you a read-only view of
+        your corporation's blueprint and asset library — the same grouped display as Your Blueprints and
+        My Assets, but for corp hangars.
+      </p>
+      <div style={S.tip}>💡 Corp access requires a character with Director-level ESI permissions logged in.
+        If you see "Director access required", add or re-authorise a Director character via Add Character.</div>
     </Section>
 
     {/* ── Station Trading ── */}
     <Section title="Station Trading">
       <p style={S.p}>
-        Finds items to flip at a single station — buy from sell orders, relist as sell orders at a higher price.
-        No manufacturing required; pure market play.
+        Station trading means placing buy orders at a station, then relisting what you bought as sell orders
+        at a higher price — pure market play, no manufacturing involved. FORGE finds the items with the
+        widest spreads so you know where to put your ISK to work.
       </p>
       <ul style={S.ul}>
-        <li style={S.li}><strong>Hub picker</strong> — select which station to trade at. This is separate from the
-          global hub selectors — it only affects this tab.</li>
-        <li style={S.li}><strong>Min margin %</strong> — filters out thin spreads. 5–10% is typical for active items;
-          higher margins usually mean lower volume.</li>
-        <li style={S.li}><strong>Capital / cycle</strong> — how much ISK you plan to commit per trading cycle.</li>
-        <li style={S.li}><strong>My Orders</strong> — shows your live market orders with undercut alerts. A red flag
-          means a competitor has already undercut you.</li>
+        <li style={S.li}><strong>Hub picker</strong> — which station to trade at. Independent of the global hub selectors.</li>
+        <li style={S.li}><strong>Min margin %</strong> — hides thin spreads. 5–10% is typical for active items;
+          high-margin items usually trade less frequently.</li>
+        <li style={S.li}><strong>Capital / cycle</strong> — how much ISK you want to commit. Affects the
+          "max buys" estimate per item.</li>
+        <li style={S.li}><strong>My Orders</strong> sub-tab shows your live market orders with undercut alerts.
+          A red indicator means a competitor is already cheaper than you.</li>
       </ul>
     </Section>
 
     {/* ── Inter-Hub Arb ── */}
     <Section title="Inter-Hub Arbitrage">
       <p style={S.p}>
-        Finds items where the price difference between two hubs is large enough to profit after hauling costs.
-        Buy cheap at hub A, transport, sell at hub B.
+        Inter-hub arbitrage (inter-hub arb) means buying an item cheap at one trade hub and hauling it to
+        another hub to sell at a higher price. FORGE compares prices across all major hubs simultaneously
+        to find the best opportunities.
       </p>
       <ul style={S.ul}>
-        <li style={S.li}><strong>Buy from / Sell into</strong> — the two hubs you're comparing. Use the ⟺ button
-          to swap them instantly.</li>
-        <li style={S.li}><strong>Min margin</strong> — minimum spread percentage to show. Set higher to filter noise.</li>
-        <li style={S.li}>Click any row to see the full breakdown and configure a haul route with your freighter stats.</li>
+        <li style={S.li}><strong>Buy from / Sell into</strong> — the two hubs you're comparing. Use the ⟺ button to swap.</li>
+        <li style={S.li}><strong>Min margin</strong> — minimum spread percentage. Set higher to filter out marginal deals.</li>
+        <li style={S.li}>Click any row to see the full breakdown and enter your freighter's cargo capacity and jump range
+          to get a per-haul profit estimate.</li>
       </ul>
-      <div style={S.tip}>💡 Jita → Amarr is the classic route. Jita → Dodixie often has better margins for
-        Gallente ship/module items that locals prefer to buy locally.</div>
+      <div style={S.tip}>💡 Jita → Amarr is the classic route. Check Jita → Dodixie for Gallente ship and module items —
+        local buyers often pay a premium.</div>
     </Section>
 
     {/* ── LP Store ── */}
     <Section title="LP Store">
       <p style={S.p}>
-        Finds the best ISK/LP redemptions across all NPC loyalty point stores, using your actual
-        LP balances loaded at login.
+        Loyalty Points (LP) are earned by running NPC missions. The LP Store lets you spend them on exclusive
+        items — faction ships, modules, implants, and blueprints — which you then sell on the market.
+        FORGE finds the redemptions with the best ISK-per-LP ratio across every NPC corporation store.
       </p>
       <ul style={S.ul}>
-        <li style={S.li}>Select a faction to see its store. Items are sorted by ISK/LP — higher is better.</li>
-        <li style={S.li}><strong>Can afford</strong> — items you have enough LP and ISK to redeem right now.</li>
-        <li style={S.li}>ISK/LP calculations use the <strong>Sell at</strong> hub for sell-price. Switch hubs
-          to see how redemption value changes by market.</li>
+        <li style={S.li}>Select a faction to see its store. Items are sorted by <strong>ISK/LP</strong> — higher is better.</li>
+        <li style={S.li}><strong>Can afford</strong> highlights — items where you have both enough LP and enough ISK to redeem right now.</li>
+        <li style={S.li}>ISK/LP calculations use your <strong>Sell at</strong> hub price. Switch hubs to see how redemption
+          value changes by market.</li>
+        <li style={S.li}>Blueprint offers from LP stores are always BPCs — shown with the pale BPC icon.</li>
       </ul>
-      <div style={S.tip}>💡 Faction warfare LP stores (Caldari Navy, Federation Navy etc.) typically have
-        the best ISK/LP for popular T2 BPCs and implants. Check these first.</div>
-    </Section>
-
-    {/* ── PI ── */}
-    <Section title="PI Colonies">
-      <p style={S.p}>
-        Shows your active planetary industry colonies across all characters — planet type, upgrade level,
-        and number of installed pins. Use this to check your PI footprint at a glance without
-        logging into each character in EVE.
-      </p>
+      <div style={S.tip}>💡 Faction warfare LP stores (Caldari Navy, Federation Navy, etc.) typically offer the
+        best ISK/LP for popular T2 BPCs and implants. Run the numbers before redeeming anything.</div>
     </Section>
 
     {/* ── AI Advisor ── */}
     <Section title="AI Advisor — Getting the Most Out of It">
       <p style={S.p}>
-        The AI Advisor (Ask F.O.R.G.E. AI button) knows your assets, blueprints, skills, wallet,
-        jobs, and live market data. It is specifically trained to answer EVE manufacturing and
-        profitability questions — nothing else.
+        The <strong>Ask F.O.R.G.E. AI</strong> button opens the AI advisor. It has full access to your
+        assets, blueprints, skills, wallet, active jobs, LP balances, and live market prices. It is
+        specifically tuned to answer EVE manufacturing and market questions — nothing else.
       </p>
       <p style={S.p}><strong>Example prompts that work well:</strong></p>
       <span style={S.aiPrompt}>"What's the most profitable T2 module I can build right now?"</span>
@@ -302,27 +483,33 @@ const HelpTab: FC = () => (
       <span style={S.aiPrompt}>"What LP store gives the best ISK/LP for my current balances?"</span>
       <span style={S.aiPrompt}>"Is it worth researching my Machariel BPO to ME 10?"</span>
       <span style={S.aiPrompt}>"What items should I haul from Jita to Amarr this week?"</span>
+      <span style={S.aiPrompt}>"Which of my PI colonies is producing the most valuable output?"</span>
 
-      <div style={S.tip}>💡 The AI uses your <strong>real character data</strong> — tell it your budget,
-        your available slots, and your preferred activity (manufacturing, reactions, trading) and it
-        will give you specific, actionable recommendations rather than generic advice.</div>
-      <div style={S.tip}>💡 The AI only answers EVE industry and market questions. It won't help with
-        combat, fittings, or anything outside manufacturing and profitability.</div>
+      <div style={S.tip}>💡 The AI uses your <strong>real character data</strong>. Tell it your budget,
+        your available manufacturing slots, and your preferred activity (manufacturing, reactions, hauling, trading)
+        for specific, actionable recommendations rather than generic advice.</div>
+      <div style={S.tip}>💡 The AI only answers EVE industry and market questions. Combat, ship fittings, and
+        lore are outside its scope.</div>
     </Section>
 
     {/* ── Tips ── */}
     <Section title="Efficiency Tips">
       <ul style={S.ul}>
-        <li style={S.li}>Log in all your industry alts using <strong>Add Character</strong> — FORGE merges
-          blueprints and assets across all of them.</li>
-        <li style={S.li}>Set <strong>⚙ Mfg Setup</strong> to your actual structure. An Azbel with T2 ME rigs
-          produces very different True Profit figures than an NPC station.</li>
-        <li style={S.li}>The <strong>Market Opportunities</strong> table updates prices automatically in the background.
-          Leave FORGE open while you plan your build queue — it will stay current.</li>
-        <li style={S.li}>True Profit in the right panel respects your blueprint's actual ME level. If you see a
-          worse number than the table estimate, check your ME level in <strong>⚙ Mfg Setup</strong>.</li>
-        <li style={S.li}>For T2 manufacturing, set <strong>Buy in</strong> to Jita even if you sell elsewhere —
-          T2 materials (particularly moon products) are almost always cheapest at Jita.</li>
+        <li style={S.li}>Log in all your industry alts with <strong>Add Character</strong> — FORGE merges blueprints,
+          assets, and jobs across all of them automatically.</li>
+        <li style={S.li}>Set <strong>⚙ Mfg Setup</strong> to your actual structure before reading any profit numbers.
+          An Azbel with T2 ME rigs produces very different True Profit figures than an NPC station.</li>
+        <li style={S.li}>The <strong>Market Opportunities</strong> table refreshes market prices automatically in the background.
+          Leave FORGE open while you plan your queue — it will stay current.</li>
+        <li style={S.li}>True Profit in the right panel uses your blueprint's actual ME level. If you see a worse number
+          than the table estimate, your blueprint's ME is probably at 0 — research it or check your setup.</li>
+        <li style={S.li}>For T2 manufacturing, always set <strong>Buy in</strong> to Jita even if you sell elsewhere —
+          T2 materials (moon products, advanced components) are almost always cheapest at Jita.</li>
+        <li style={S.li}>To value a stockpile: Ctrl+click rows in <strong>My Assets</strong>, then hit <strong>Appraise →</strong>.
+          Switch hubs instantly — C-J6MT Keepstar prices are available if you're in the Imperium.</li>
+        <li style={S.li}>For null-sec loot buyback quotes: open Appraise, hit <strong>Jita Buy</strong>, set the
+          percentage to your programme's rate (usually 90%), and read the cyan total. Use
+          <strong> 📋 Copy as Multibuy list</strong> to hand the list to your buyer.</li>
       </ul>
     </Section>
 

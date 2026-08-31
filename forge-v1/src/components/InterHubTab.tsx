@@ -97,7 +97,10 @@ const InterHubTab: FC<InterHubTabProps> = ({
   const availableMarkets = canDockKeestar ? MARKETS : MARKETS.filter(m => m.id !== 10099000);
   const [buyHub,      setBuyHub]      = useState<number>(() => parseInt(localStorage.getItem(LS_BUY)  || '10000002', 10));
   const [sellHub,     setSellHub]     = useState<number>(() => parseInt(localStorage.getItem(LS_SELL) || '10000043', 10));
-  const [minMargin,   setMinMargin]   = useState<number>(() => parseFloat(localStorage.getItem(LS_MARG) || '5'));
+  const [minMargin,   setMinMargin]   = useState<number>(() => {
+    const saved = parseFloat(localStorage.getItem(LS_MARG) || '5');
+    return Math.max(1, Math.min(100, saved));
+  });
   const [sortBy,      setSortBy]      = useState<SortKey>('est_daily_profit');
   const [results,     setResults]     = useState<InterHubArbRow[]>([]);
   const [hasMore,     setHasMore]     = useState(false);
@@ -235,20 +238,19 @@ const InterHubTab: FC<InterHubTabProps> = ({
 
         <div style={{ width: 1, height: 20, background: 'var(--color-border-light)', margin: '0 4px' }} />
 
-        {/* Min margin */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        {/* Min margin slider */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <span style={{ fontSize: 10, color: 'var(--color-text-tertiary)', letterSpacing: 0.5 }}>MIN MARGIN</span>
-          {[2, 5, 10, 15, 20].map(v => (
-            <button
-              key={v}
-              type="button"
-              className={`pill-filter${minMargin === v ? ' active' : ''}`}
-              onClick={() => handleMarginChange(v)}
-              aria-pressed={minMargin === v}
-            >
-              {v}%
-            </button>
-          ))}
+          <input
+            type="range" min={1} max={100} step={1} value={minMargin}
+            onChange={e => handleMarginChange(Number(e.target.value))}
+            className="td-slider"
+            style={{ width: 90 }}
+            aria-label="Minimum margin percentage"
+          />
+          <span style={{ fontSize: 11, color: 'var(--color-text-secondary)', minWidth: 28, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+            {minMargin}%
+          </span>
         </div>
 
         <div style={{ width: 1, height: 20, background: 'var(--color-border-light)', margin: '0 4px' }} />

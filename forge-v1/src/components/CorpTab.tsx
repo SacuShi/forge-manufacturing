@@ -260,13 +260,13 @@ const CorpBlueprintsView: FC<CorpBlueprintsProps> = ({ token, regionId, onSelect
                 className="bp-card"
                 role="button"
                 tabIndex={0}
-                onClick={() => onSelectItem(typeId, pName)}
-                onKeyDown={e => e.key === 'Enter' && onSelectItem(typeId, pName)}
+                onClick={() => onSelectItem(bp.product_id ?? typeId, pName)}
+                onKeyDown={e => e.key === 'Enter' && onSelectItem(bp.product_id ?? typeId, pName)}
               >
                 {/* Icon */}
                 <div className={`bp-icon ${isBpo ? 'bp-icon-bpo' : 'bp-icon-bpc'}`}>
                   <img
-                    src={itemIconUrl(typeId)}
+                    src={itemIconUrl(typeId, 32, isBpo ? 'bp' : 'bpc')}
                     alt={bp.name}
                     width={32} height={32}
                     crossOrigin="anonymous"

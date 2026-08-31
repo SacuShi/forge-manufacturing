@@ -13,6 +13,10 @@
  * @param typeId  EVE item type ID (the numeric identifier for any in-game item)
  * @param size    Icon pixel size — 22, 32, or 64 (default 32)
  */
-export function itemIconUrl(typeId: number | string, size = 32): string {
-  return `/api/icon/${typeId}?size=${size}`;
+export function itemIconUrl(
+  typeId: number | string,
+  size = 32,
+  variant: 'icon' | 'bp' | 'bpc' = 'icon',
+): string {
+  return `/api/icon/${typeId}?size=${size}&variant=${variant}`;
 }

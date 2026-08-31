@@ -80,10 +80,16 @@ const SCOPES =
   // v1.37.0 — structure names for Assets tab (requires docking access).
   'esi-universe.read_structures.v1';
 
-const SESSION_TOKEN_KEY = 'forge_token';
-const SESSION_STATE_KEY = 'forge_oauth_state';
-const ALT_TOKENS_KEY    = 'forge_alt_tokens';
-const ADDING_ALT_KEY    = 'forge_adding_alt';
+const SESSION_TOKEN_KEY    = 'forge_token';
+const SESSION_STATE_KEY    = 'forge_oauth_state';
+const ALT_TOKENS_KEY       = 'forge_alt_tokens';
+const ADDING_ALT_KEY       = 'forge_adding_alt';
+const SESSION_START_KEY    = 'forge_session_start';
+
+const INACTIVITY_TIMEOUT_MS = 20 * 60 * 1000; // 20 min
+const ABSOLUTE_TIMEOUT_MS   = 60 * 60 * 1000; // 1 hour
+
+const ACTIVITY_EVENTS = ['mousemove', 'keydown', 'click', 'scroll', 'touchstart'] as const;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -241,12 +247,51 @@ export function useAuth(): AuthState & {
    * Tracks characterIds of in-flight alt loads to prevent duplicate concurrent
    * loads of the same character (race condition on session restore).
    */
-  const inFlightAltsRef  = useRef<Set<number>>(new Set());
+  const inFlightAltsRef    = useRef<Set<number>>(new Set());
   /**
    * Tracks characterIds of removed alts so an in-flight load completing after
    * removal doesn't write stale data back into state.
    */
-  const altCancelledRef  = useRef<Set<number>>(new Set());
+  const altCancelledRef    = useRef<Set<number>>(new Set());
+  const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const absoluteTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── Session timeout ───────────────────────────────────────────────────────
+
+  const resetInactivityTimer = useCallback(() => {
+    if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
+    inactivityTimerRef.current = setTimeout(() => {
+      window.dispatchEvent(new Event('forge:session-expired'));
+    }, INACTIVITY_TIMEOUT_MS);
+  }, []);
+
+  useEffect(() => {
+    if (status !== 'authed') return;
+
+    const now        = Date.now();
+    const savedStart = parseInt(sessionStorage.getItem(SESSION_START_KEY) ?? '0', 10);
+    const sessionStart = savedStart > 0 ? savedStart : now;
+    if (!savedStart) sessionStorage.setItem(SESSION_START_KEY, String(now));
+
+    const remaining = ABSOLUTE_TIMEOUT_MS - (now - sessionStart);
+    if (remaining <= 0) {
+      window.dispatchEvent(new Event('forge:session-expired'));
+      return;
+    }
+
+    absoluteTimerRef.current = setTimeout(() => {
+      window.dispatchEvent(new Event('forge:session-expired'));
+    }, remaining);
+
+    resetInactivityTimer();
+    ACTIVITY_EVENTS.forEach(e => window.addEventListener(e, resetInactivityTimer, { passive: true }));
+
+    return () => {
+      if (absoluteTimerRef.current)   clearTimeout(absoluteTimerRef.current);
+      if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
+      ACTIVITY_EVENTS.forEach(e => window.removeEventListener(e, resetInactivityTimer));
+    };
+  }, [status, resetInactivityTimer]);
 
   // ── loadCharacterData ──────────────────────────────────────────────────────
 
@@ -850,6 +895,7 @@ export function useAuth(): AuthState & {
     updatedAlts[targetIdx]        = currentPrimaryToken;
     sessionStorage.setItem(SESSION_TOKEN_KEY, newPrimaryToken);
     saveAltTokens(updatedAlts);
+    sessionStorage.removeItem(SESSION_START_KEY); // new primary gets a fresh absolute timeout
 
     window.location.reload();
   }, []);
@@ -877,6 +923,7 @@ export function useAuth(): AuthState & {
   const logout = useCallback(() => {
     sessionStorage.removeItem(SESSION_TOKEN_KEY);
     sessionStorage.removeItem(ALT_TOKENS_KEY);
+    sessionStorage.removeItem(SESSION_START_KEY);
     setToken(null);
     setCharacter(null);
     setBlueprints([]);

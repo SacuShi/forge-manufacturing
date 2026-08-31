@@ -741,6 +741,7 @@ export interface CorpAccessStatus {
 export interface CorpBlueprint {
   item_id:             number;
   type_id:             number;
+  product_id:          number | null;
   name:                string;
   bp_type:             'BPO' | 'BPC';
   quantity:            number;

@@ -634,7 +634,7 @@ const LPStoreTab: FC<LPStoreTabProps> = ({ onSelectItem, selectedTypeId, lpPoint
                   >
                     <td style={{ padding: '4px 8px', whiteSpace: 'nowrap' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <img src={itemIconUrl(o.type_id)} alt="" width={24} height={24}
+                        <img src={itemIconUrl(o.type_id, 32, /blueprint|reaction formula/i.test(o.item_name) ? 'bpc' : 'icon')} alt="" width={24} height={24}
                           style={{ borderRadius: 3, flexShrink: 0 }}
                           onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
                         <span style={{ color: 'var(--color-accent)' }}>{o.item_name}</span>

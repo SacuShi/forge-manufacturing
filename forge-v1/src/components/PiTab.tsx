@@ -382,7 +382,10 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
           <input
             type="number" min={0} max={100} step={0.5}
             value={Math.round(pocoTaxRate * 1000) / 10}
-            onChange={e => setPocoTaxRate((parseFloat(e.target.value) || 0) / 100)}
+            onChange={e => {
+              if (e.target.value === '') return; // mid-edit: keep current rate
+              setPocoTaxRate((parseFloat(e.target.value) || 0) / 100);
+            }}
           />
           %
         </label>

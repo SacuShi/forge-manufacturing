@@ -58,16 +58,33 @@ interface ColDef {
   hint?: string;
 }
 
-// Shared explanation of the "Est." figures so every header tells the same story.
-const EST_HINT =
-  'GROSS estimate — sell minus materials, before your fees, with an unresearched blueprint. ' +
-  'A comparison baseline (same value the AI quotes). Open an item to see your NET (True Profit).';
+// Column header tooltips — visible on hover, explain what each number means.
+const GROSS_HINT =
+  'Est. Gross — sell price minus raw material cost, before broker fees, sales tax, or job costs. ' +
+  'Uses an ME 0 blueprint. A rough ranking baseline only — open an item for your real net profit.';
+
+const MARGIN_HINT =
+  'Margin — gross profit as a percentage of sell price. Higher margin = more buffer if prices move against you. ' +
+  'Below 5% is very thin. 10–20% is healthy. Above 30% often means low volume or high competition risk.';
+
+const ISKHR_HINT =
+  'Est. ISK/hr — gross profit normalised by build time. Usually the best column to sort by: a slow battleship ' +
+  'with 50M profit/run may lose to a fast module with 3M profit/run × many jobs per hour. ' +
+  'Open an item to see your true ISK/hr after fees and your blueprint ME.';
 
 // Liquidity column: how much the market actually absorbs per day. A fat margin on a
 // 2/day item is a trap — you crater your own price trying to offload a batch.
 const VOL_HINT =
   'Sellable/day — mean units traded on the market (30-day history). High margin + low ' +
   'volume = slow to liquidate. Dot: green liquid · amber thin · grey contract-only · red suspect.';
+
+const BUILDTIME_HINT =
+  'Build time for one manufacturing job at your configured structure and rigs. ' +
+  'Shorter build times let you queue more jobs per day and compound your ISK/hr.';
+
+const OWNED_HINT =
+  'Whether you own a blueprint for this item. BPO = Blueprint Original (permanent, researchable). ' +
+  'BPC = Blueprint Copy (limited runs). No badge = you need to buy a BPC from contracts or the LP store.';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -76,13 +93,13 @@ import { itemIconUrl } from '../utils/icons';
 const BASE_COLUMNS: ColDef[] = [
   { label: '#',            field: 'rank',            align: 'center' },
   { label: 'Item',         field: null                               },
-  { label: 'Est. Gross',     field: 'profitPerRun',    align: 'right', hint: EST_HINT },
-  { label: 'Margin',         field: 'margin',           align: 'right', hint: EST_HINT },
-  { label: 'Est. ISK/hr',    field: 'iskPerHour',       align: 'right', hint: EST_HINT },
-  { label: 'Build Time',   field: 'buildTimeMinutes', align: 'right'  },
-  { label: 'Sellable/day', field: 'avgDailyVolume',   align: 'right', hint: VOL_HINT },
-  { label: 'Owned',        field: null,               align: 'center' },
-  { label: 'Action',       field: null,               align: 'center' },
+  { label: 'Est. Gross',   field: 'profitPerRun',    align: 'right', hint: GROSS_HINT   },
+  { label: 'Margin',       field: 'margin',          align: 'right', hint: MARGIN_HINT  },
+  { label: 'Est. ISK/hr',  field: 'iskPerHour',      align: 'right', hint: ISKHR_HINT   },
+  { label: 'Build Time',   field: 'buildTimeMinutes',align: 'right', hint: BUILDTIME_HINT },
+  { label: 'Sellable/day', field: 'avgDailyVolume',  align: 'right', hint: VOL_HINT     },
+  { label: 'Owned',        field: null,              align: 'center', hint: OWNED_HINT  },
+  { label: 'Action',       field: null,              align: 'center' },
 ];
 
 const HAUL_COLUMN: ColDef = { label: 'Haul/unit', field: null, align: 'right' };

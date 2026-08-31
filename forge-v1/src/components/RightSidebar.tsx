@@ -538,6 +538,35 @@ const RightSidebar: FC<RightSidebarProps> = ({
   const displayName = rawName.replace(/ Blueprint$/i, '');
   const iconUrl     = selectedTypeId ? itemIconUrl(selectedTypeId, 64) : '';
 
+  // ── Inter-Hub: profitable buy orders fetch ───────────────────────────────
+  // Fetches raw ESI buy orders at the sell hub for the selected item, then
+  // filters to those where price > break-even (buy_at + all fees).
+  const [profOrders,  setProfOrders]  = useState<{ count: number; volume: number; totalAtStation: number | null } | null>(null);
+  const [profLoading, setProfLoading] = useState(false);
+  const [profError,   setProfError]   = useState<string | null>(null);
+
+  // Auto-fetch when item changes — reads from the in-memory ESI book (instant),
+  // so no manual button press is needed.
+  useEffect(() => {
+    setProfOrders(null);
+    setProfError(null);
+    if (!interHubContext) return;
+    const { product_id, sell_region_id, sell_into, net_profit } = interHubContext;
+    const breakEven = sell_into - net_profit;
+    let cancelled = false;
+    setProfLoading(true);
+    fetch(`/api/inter-hub-item-profitable?typeId=${product_id}&regionId=${sell_region_id}&breakEven=${breakEven.toFixed(2)}`)
+      .then(r => r.json())
+      .then((data: { profitableOrderCount: number; totalVolumeRemain: number; totalAtStation?: number; error?: string }) => {
+        if (cancelled) return;
+        if (data.error) { setProfError(data.error); return; }
+        setProfOrders({ count: data.profitableOrderCount, volume: data.totalVolumeRemain, totalAtStation: data.totalAtStation ?? null });
+      })
+      .catch(e => { if (!cancelled) setProfError((e as Error).message); })
+      .finally(() => { if (!cancelled) setProfLoading(false); });
+    return () => { cancelled = true; };
+  }, [interHubContext?.product_id, interHubContext?.sell_region_id]);
+
   /* ── Empty state — rendered AFTER all hooks ──────────────────────────────── */
   if (!selectedTypeId) {
     return (
@@ -690,10 +719,13 @@ const RightSidebar: FC<RightSidebarProps> = ({
                   </div>
                   {(row.sell_orders_at_buy != null || row.sell_vol_at_buy != null) && (
                     <div style={{ ...rowStyle, marginTop: -2, marginBottom: 2 }}>
-                      <span style={{ ...labelStyle, fontSize: 9, color: 'var(--color-text-tertiary)', paddingLeft: 8 }}>
+                      <span
+                        style={{ ...labelStyle, fontSize: 9, color: 'var(--color-text-tertiary)', paddingLeft: 8 }}
+                        title="Total units remaining across all sell orders at this hub — not all are at the displayed best price"
+                      >
                         {row.sell_orders_at_buy != null ? `${row.sell_orders_at_buy.toLocaleString()} sell orders` : ''}
                         {row.sell_orders_at_buy != null && row.sell_vol_at_buy != null ? ' · ' : ''}
-                        {row.sell_vol_at_buy != null ? `${row.sell_vol_at_buy.toLocaleString()} units at best` : ''}
+                        {row.sell_vol_at_buy != null ? `${row.sell_vol_at_buy.toLocaleString()} units total depth` : ''}
                       </span>
                     </div>
                   )}
@@ -759,20 +791,37 @@ const RightSidebar: FC<RightSidebarProps> = ({
                   {/* Divider */}
                   <div style={{ height: 0.5, background: 'var(--color-border-light)', margin: '6px 0' }} />
 
-                  {/* Sell into */}
+                  {/* Sell into — merged with profitable order breakdown */}
                   <div style={rowStyle}>
                     <span style={labelStyle}>Sell into (buy orders, {row.sell_hub_name})</span>
                     <span style={valueStyle}>{formatISK(row.sell_into)}</span>
                   </div>
-                  {(row.buy_orders_at_sell != null || row.buy_vol_at_sell != null) && (
-                    <div style={{ ...rowStyle, marginTop: -2 }}>
-                      <span style={{ ...labelStyle, fontSize: 9, color: 'var(--color-text-tertiary)', paddingLeft: 8 }}>
-                        {row.buy_orders_at_sell != null ? `${row.buy_orders_at_sell.toLocaleString()} buy orders` : ''}
-                        {row.buy_orders_at_sell != null && row.buy_vol_at_sell != null ? ' · ' : ''}
-                        {row.buy_vol_at_sell != null ? `${row.buy_vol_at_sell.toLocaleString()} units at best` : ''}
+                  {/* Profitable order summary — auto-loads, same data source as totals */}
+                  <div style={{ ...rowStyle, marginTop: 2, alignItems: 'flex-start' }}>
+                    {profLoading && (
+                      <span style={{ fontSize: 9, color: 'var(--color-text-tertiary)', paddingLeft: 8 }}>
+                        Checking orders…
                       </span>
-                    </div>
-                  )}
+                    )}
+                    {profError && !profLoading && (
+                      <span style={{ fontSize: 9, color: 'var(--color-text-tertiary)', paddingLeft: 8 }}>
+                        {row.buy_orders_at_sell != null ? `${row.buy_orders_at_sell.toLocaleString()} buy orders total` : ''}
+                      </span>
+                    )}
+                    {profOrders && (
+                      <div style={{ paddingLeft: 8, display: 'flex', flexDirection: 'column', gap: 1 }}>
+                        <span style={{ fontSize: 9, color: 'var(--color-text-tertiary)' }}>
+                          {(profOrders.totalAtStation ?? row.buy_orders_at_sell ?? 0).toLocaleString()} buy orders total
+                          {row.buy_vol_at_sell != null ? ` · ${row.buy_vol_at_sell.toLocaleString()} units` : ''}
+                        </span>
+                        <span style={{ fontSize: 9, color: profOrders.count > 0 ? 'var(--color-success)' : 'var(--color-text-tertiary)' }}>
+                          {profOrders.count > 0
+                            ? `${profOrders.count.toLocaleString()} profitable · ${profOrders.volume.toLocaleString()} units to fill`
+                            : 'No profitable orders at current prices'}
+                        </span>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -1303,36 +1352,48 @@ const RightSidebar: FC<RightSidebarProps> = ({
                   const shortfallTotal = missing.reduce(
                     (s, m) => s + m.shortForRuns * (m.unitCost ?? 0), 0
                   );
+                  const canAffordShortfall = shortfallTotal > 0 && walletISK >= shortfallTotal;
                   return (
-                    <div style={{
-                      marginTop: 6, padding: '6px 8px', borderRadius: 3,
-                      background: 'rgba(244, 67, 54, 0.08)', border: '0.5px solid rgba(244, 67, 54, 0.2)',
-                      fontSize: 10, color: 'var(--color-danger)',
-                      display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
-                    }}>
-                      <span>
-                        ⚠ Missing Materials · {missing.length} material{missing.length !== 1 ? 's' : ''} short
-                        {shortfallTotal > 0 && <> · {formatISK(shortfallTotal)} to buy</>}
-                      </span>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); copyShortfall(); }}
-                        title={`Copy shortfall list to clipboard in EVE Multibuy format.\nPaste directly into the Multibuy window (right-click → Paste).\nQuantities are raw blueprint amounts × runs (before ME adjustment).`}
-                        style={{
-                          background: copiedShortfall
-                            ? 'rgba(76, 175, 80, 0.18)' : 'rgba(244, 67, 54, 0.15)',
-                          color: copiedShortfall
-                            ? 'var(--color-success)' : 'var(--color-danger)',
-                          border: `0.5px solid ${copiedShortfall
-                            ? 'rgba(76, 175, 80, 0.4)' : 'rgba(244, 67, 54, 0.35)'}`,
-                          borderRadius: 3, padding: '2px 7px', fontSize: 9,
-                          cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0,
-                          transition: 'background 0.15s, color 0.15s, border-color 0.15s',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {copiedShortfall ? '✓ Copied!' : '📋 Multibuy'}
-                      </button>
-                    </div>
+                    <>
+                      <div style={{
+                        marginTop: 6, padding: '6px 8px', borderRadius: 3,
+                        background: 'rgba(244, 67, 54, 0.08)', border: '0.5px solid rgba(244, 67, 54, 0.2)',
+                        fontSize: 10, color: 'var(--color-danger)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+                      }}>
+                        <span>
+                          ⚠ Missing Materials · {missing.length} material{missing.length !== 1 ? 's' : ''} short
+                          {shortfallTotal > 0 && <> · {formatISK(shortfallTotal)} to buy</>}
+                        </span>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); copyShortfall(); }}
+                          title={`Copy shortfall list to clipboard in EVE Multibuy format.\nPaste directly into the Multibuy window (right-click → Paste).\nQuantities are raw blueprint amounts × runs (before ME adjustment).`}
+                          style={{
+                            background: copiedShortfall
+                              ? 'rgba(76, 175, 80, 0.18)' : 'rgba(244, 67, 54, 0.15)',
+                            color: copiedShortfall
+                              ? 'var(--color-success)' : 'var(--color-danger)',
+                            border: `0.5px solid ${copiedShortfall
+                              ? 'rgba(76, 175, 80, 0.4)' : 'rgba(244, 67, 54, 0.35)'}`,
+                            borderRadius: 3, padding: '2px 7px', fontSize: 9,
+                            cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0,
+                            transition: 'background 0.15s, color 0.15s, border-color 0.15s',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {copiedShortfall ? '✓ Copied!' : '📋 Multibuy'}
+                        </button>
+                      </div>
+                      {canAffordShortfall && (
+                        <div style={{
+                          marginTop: 3, padding: '4px 8px', borderRadius: 3,
+                          background: 'rgba(76, 175, 80, 0.07)', border: '0.5px solid rgba(76, 175, 80, 0.25)',
+                          fontSize: 10, color: 'var(--color-success)',
+                        }}>
+                          ✓ You have enough ISK to buy the missing materials
+                        </div>
+                      )}
+                    </>
                   );
                 })()}
 
