@@ -4283,6 +4283,24 @@ tr:hover .ticker-pin-btn,
   gap: 6px;
 }
 
+.pi-planner-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.pi-planner-mode-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.pi-planner-mode-hint {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  font-style: italic;
+  max-width: 520px;
+}
+
 .pi-planner-run-btn {
   align-self: flex-start;
   padding: 8px 18px;

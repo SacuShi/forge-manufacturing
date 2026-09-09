@@ -17,9 +17,6 @@ const TradingStandalone: FC = () => {
 
   // Re-check token every 30s (it can expire after ~20 min).
   useEffect(() => {
-    const stored = localStorage.getItem(TOKEN_KEY);
-    setToken(stored);
-
     const interval = setInterval(() => {
       const t = localStorage.getItem(TOKEN_KEY);
       setToken(t);

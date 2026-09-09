@@ -27,7 +27,7 @@ function uuid(): string {
     : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-export function compactISK(v: number | null): string {
+function compactISK(v: number | null): string {
   if (v === null || v === undefined) return '—';
   const abs = Math.abs(v);
   if (abs >= 1e12) return `${(v / 1e12).toFixed(2)}T`;
@@ -37,7 +37,7 @@ export function compactISK(v: number | null): string {
   return v.toFixed(0);
 }
 
-export function compactISKPerHr(v: number | null): string {
+function compactISKPerHr(v: number | null): string {
   if (v === null) return '—';
   return compactISK(v) + '/hr';
 }

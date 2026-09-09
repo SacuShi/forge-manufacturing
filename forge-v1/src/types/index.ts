@@ -22,9 +22,6 @@ export interface Market {
   type: 'hisec' | 'nullsec';
 }
 
-export type RegionalPriceEntry = { sell: number; buy: number; median: number };
-export type RegionalPrices = Record<number, RegionalPriceEntry>;
-
 export interface MarketItem {
   rank: number;
   typeId: number;
@@ -186,19 +183,6 @@ export interface TickerBroadcastPayload {
   slots: Record<string, TickerSlotData>;
 }
 
-/** Legacy — kept for backward compatibility with existing TickerBar pop-out code */
-export interface TickerData {
-  walletISK:      number;
-  jobCount:       number;
-  nextJobName:    string | null;
-  nextJobEndDate: string | null;
-  topItemName:    string | null;
-  topItemProfit:  number | null;
-  topItemMargin:  number | null;
-  marketName:     string;
-  updatedAt:      number;
-}
-
 /** Raw LP point balance for one NPC corp, as returned by ESI */
 export interface LPPoint {
   corp_id:      number;
@@ -217,13 +201,6 @@ export interface CharacterInfo {
   bpoCount: number;
   activeJobs: ActiveJob[];
   lpPoints: LPPoint[];
-}
-
-/** Loading log entry for the LoadingScreen */
-export interface DataLogItem {
-  label: string;
-  status: 'ok' | 'warn' | 'err';
-  detail: string;
 }
 
 // ══════════════════════════════════════════════════════════════════════════

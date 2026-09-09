@@ -25,7 +25,7 @@ import { useMemo, useState, useCallback, useRef, useEffect, Fragment, type FC } 
 import type { ItemDetail, ItemDetailApiResponse, EsiBlueprint, Market, TrueCostResponse, AltCharacter, MaterialBreakdownResponse, BreakdownMaterial, JumpClone, MaterialStockCheckResponse, InterHubArbRow, InterHubHaulResult } from '../types';
 import { INVENTION_DECRYPTORS } from '../types';
 import { apiPost } from '../api/client';
-import { formatPerDay, liquidityInfo } from '../utils/format';
+import { formatISKDisplay as formatISK, formatPerDay, liquidityInfo } from '../utils/format';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -111,20 +111,6 @@ const MFG_TIME_IMPLANTS: Record<number, { short: string; pct: number }> = {
 const WHATIF_BX_IDS = [27170, 27167, 27171]; // always offered as "what-if"
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-
-function formatISK(n: number | null | undefined): string {
-  if (n == null || isNaN(n)) return '—';
-  const abs = Math.abs(n);
-  if (abs >= 1e12) return (n / 1e12).toFixed(2) + 'T ISK';
-  if (abs >= 1e9)  return (n / 1e9).toFixed(2) + 'B ISK';
-  if (abs >= 1e6)  return (n / 1e6).toFixed(1) + 'M ISK';
-  if (abs >= 1e3)  return (n / 1e3).toFixed(0) + 'K ISK';
-  return Math.round(n).toLocaleString() + ' ISK';
-}
-
-function fmtN(n: number): string {
-  return n.toLocaleString();
-}
 
 // ── Chain drill-down (inline reaction / manufacturing tree) ───────────────────
 // Module-level cache keyed by `${typeId}:${regionId}` so re-opening a node (or
@@ -264,7 +250,7 @@ const ChainRow: FC<ChainRowProps> = ({ mat, regionId, ownedBlueprints, depth, on
         </span>
 
         <span className="chain-qty" style={{ fontSize: 9, color: 'var(--color-text-tertiary)', flexShrink: 0 }}>
-          ×{fmtN(mat.quantity)}
+          ×{mat.quantity.toLocaleString()}
         </span>
 
         {/* Build-vs-buy verdict — the core chain insight */}
@@ -303,6 +289,38 @@ const ChainRow: FC<ChainRowProps> = ({ mat, regionId, ownedBlueprints, depth, on
     </>
   );
 };
+
+// ── DecryptorSelect ───────────────────────────────────────────────────────────
+
+interface DecryptorSelectProps {
+  /** The currently selected decryptor type (use 'none' when no decryptor is active). */
+  value: string;
+  /** Called with the raw select value; callers map 'none' → null as needed. */
+  onChange: (val: string) => void;
+}
+
+/** Controlled <select> listing all invention decryptors (including "none"). */
+function DecryptorSelect({ value, onChange }: DecryptorSelectProps) {
+  return (
+    <select
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      style={{
+        fontSize: 10,
+        background: 'var(--color-bg-elevated)',
+        color: '#ff9800',
+        border: '0.5px solid rgba(255,152,0,0.4)',
+        borderRadius: 'var(--radius-sm)',
+        padding: '2px 4px',
+        cursor: 'pointer',
+      }}
+    >
+      {INVENTION_DECRYPTORS.map(d => (
+        <option key={d.type} value={d.type}>{d.name}</option>
+      ))}
+    </select>
+  );
+}
 
 // ── Component ────────────────────────────────────────────────────────────────
 
@@ -1261,7 +1279,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
 
                         {/* Have / needed counts — runs-adjusted */}
                         <span className="mat-qty">
-                          {fmtN(mat.have)}/{fmtN(needForRuns)}
+                          {mat.have.toLocaleString()}/{needForRuns.toLocaleString()}
                         </span>
 
                         {/* Per-material cost — runs-adjusted */}
@@ -1419,15 +1437,10 @@ const RightSidebar: FC<RightSidebarProps> = ({
                 <div className="detail-section">
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                     <div className="detail-section-heading" style={{ marginBottom: 0 }}>Invention</div>
-                    <select
+                    <DecryptorSelect
                       value={inventionDecryptorType || 'none'}
-                      onChange={e => onInventionDecryptorChange(e.target.value === 'none' ? null : e.target.value)}
-                      style={{ fontSize: 10, background: 'var(--color-bg-elevated)', color: '#ff9800', border: '0.5px solid rgba(255,152,0,0.4)', borderRadius: 'var(--radius-sm)', padding: '2px 4px', cursor: 'pointer' }}
-                    >
-                      {INVENTION_DECRYPTORS.map(d => (
-                        <option key={d.type} value={d.type}>{d.name}</option>
-                      ))}
-                    </select>
+                      onChange={val => onInventionDecryptorChange(val === 'none' ? null : val)}
+                    />
                   </div>
                   <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginBottom: 6 }}>
                     Invented from:{' '}
@@ -1506,15 +1519,10 @@ const RightSidebar: FC<RightSidebarProps> = ({
                     <div className="detail-section-heading" style={{ color: '#ff9800', marginBottom: 0 }}>
                       Can Invent Into (T2)
                     </div>
-                    <select
+                    <DecryptorSelect
                       value={inventionDecryptorType || 'none'}
-                      onChange={e => onInventionDecryptorChange(e.target.value === 'none' ? null : e.target.value)}
-                      style={{ fontSize: 10, background: 'var(--color-bg-elevated)', color: '#ff9800', border: '0.5px solid rgba(255,152,0,0.4)', borderRadius: 'var(--radius-sm)', padding: '2px 4px', cursor: 'pointer' }}
-                    >
-                      {INVENTION_DECRYPTORS.map(d => (
-                        <option key={d.type} value={d.type}>{d.name}</option>
-                      ))}
-                    </select>
+                      onChange={val => onInventionDecryptorChange(val === 'none' ? null : val)}
+                    />
                   </div>
 
                   {/* Decryptor stats badge (when one is selected) */}

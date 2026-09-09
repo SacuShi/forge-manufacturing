@@ -243,8 +243,6 @@ const AppShell: FC = () => {
     return MARKETS[0]; // default: Jita
   });
 
-  // v1.5.1 — Character fee rates (broker, tax, SCI, facility tax) for profit alignment
-
   // v1.2.0 — Industry settings + settings modal
   const [industrySettings, setIndustrySettings] = useState<IndustrySettings | null>(null);
   const [settingsOpen,     setSettingsOpen]     = useState(false);
@@ -958,54 +956,51 @@ const AppShell: FC = () => {
     } catch { /* ignore */ }
   }, [leftWidth, rightWidth]);
 
-  const handleMarketChange = useCallback(async (market: Market) => {
-    setSelectedMarket(market);
-    localStorage.setItem('forge-sell-market', String(market.id));
-    setRawResults([]);
-    setMarketSearchResults(null);
-    setMarketSearchQuery('');
-    setMarketHasMore(true);
-    setMarketError(null);
-    setMarketLoading(true);
-    try {
-      const data = await apiGet<TopProfitableResponse>(
-        `/api/top-profitable-by-skills?limit=50&regionId=${market.id}&sourceRegionId=${selectedSourceMarket.id}`,
-        auth.token ?? ''
-      );
-      setRawResults(data.results);
-      setMarketHasMore(data.meta.hasMore ?? data.results.length >= 50);
-    } catch (e) {
-      console.error('Failed to load market for region:', e);
-      setMarketError((e as Error).message);
-      setSelectedMarket(MARKETS[0]);
-      localStorage.setItem('forge-sell-market', String(MARKETS[0].id));
-    } finally {
-      setMarketLoading(false);
-    }
-  }, [auth.token, selectedSourceMarket.id]);
+  /**
+   * Loads market data for the given sell/source hub pair and updates all
+   * related state. Handles both sell-hub changes and source-hub changes in
+   * one place, reverting only the market that changed on fetch failure.
+   *
+   * When the sell hub changes, stale name-search results are also cleared
+   * (they were scoped to the old hub's region). Source-hub changes leave
+   * search state intact — search is by item name, not region-specific.
+   */
+  const loadMarket = useCallback(async (sellMarket: Market, sourceMarket: Market) => {
+    const sellChanged = sellMarket.id !== selectedMarket.id;
 
-  // v1.3.0 — Source hub change: persist selection, then reload the market table
-  // so profit/margin/ISK-per-hour all reflect the new material purchase costs.
-  const handleSourceMarketChange = useCallback(async (market: Market) => {
-    setSelectedSourceMarket(market);
-    localStorage.setItem('forge-source-market', String(market.id));
+    setSelectedMarket(sellMarket);
+    localStorage.setItem('forge-sell-market', String(sellMarket.id));
+    setSelectedSourceMarket(sourceMarket);
+    localStorage.setItem('forge-source-market', String(sourceMarket.id));
+
     setRawResults([]);
     setMarketHasMore(true);
     setMarketError(null);
+    // Clear search only when the sell hub changes: search results are hub-scoped.
+    if (sellChanged) {
+      setMarketSearchResults(null);
+      setMarketSearchQuery('');
+    }
     setMarketLoading(true);
+
     try {
       const data = await apiGet<TopProfitableResponse>(
-        `/api/top-profitable-by-skills?limit=50&regionId=${selectedMarket.id}&sourceRegionId=${market.id}`,
+        `/api/top-profitable-by-skills?limit=50&regionId=${sellMarket.id}&sourceRegionId=${sourceMarket.id}`,
         auth.token ?? ''
       );
       setRawResults(data.results);
       setMarketHasMore(data.meta.hasMore ?? data.results.length >= 50);
     } catch (e) {
-      console.error('Failed to load market with new source region:', e);
+      console.error('Failed to load market:', e);
       setMarketError((e as Error).message);
-      // Revert source on error so the selector doesn't show a hub whose prices failed
-      setSelectedSourceMarket(MARKETS[0]);
-      localStorage.setItem('forge-source-market', String(MARKETS[0].id));
+      // Revert whichever hub changed so the selector doesn't show a hub whose prices failed.
+      if (sellChanged) {
+        setSelectedMarket(MARKETS[0]);
+        localStorage.setItem('forge-sell-market', String(MARKETS[0].id));
+      } else {
+        setSelectedSourceMarket(MARKETS[0]);
+        localStorage.setItem('forge-source-market', String(MARKETS[0].id));
+      }
     } finally {
       setMarketLoading(false);
     }
@@ -1217,8 +1212,8 @@ const AppShell: FC = () => {
         onThemeChange={setTheme}
         onFontChange={setFont}
         onLogout={auth.logout}
-        onMarketChange={handleMarketChange}
-        onSourceMarketChange={handleSourceMarketChange}
+        onMarketChange={market => loadMarket(market, selectedSourceMarket)}
+        onSourceMarketChange={market => loadMarket(selectedMarket, market)}
         onOpenSettings={() => setSettingsOpen(true)}
         canDockKeestar={auth.canDockKeestar}
       />

@@ -31,25 +31,6 @@ export async function apiFetch(
   });
 }
 
-/**
- * Authenticated fetch — adds a Bearer Authorization header.
- * Returns the raw Response object.
- */
-export async function authFetch(
-  endpoint: string,
-  token: string,
-  options: RequestInit = {}
-): Promise<Response> {
-  return fetch(endpoint, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`,
-      ...(options.headers ?? {}),
-    },
-  });
-}
-
 // ── FORGE backend ────────────────────────────────────────────────────────────
 
 /** GET from the FORGE backend (optionally authenticated) */

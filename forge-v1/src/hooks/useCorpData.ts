@@ -10,7 +10,7 @@
  * Call this hook once in App.tsx and pass results down as props.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import type { CorpStatus, CorpAccessStatus } from '../types';
 import { apiGet } from '../api/client';
 
@@ -23,8 +23,6 @@ export interface UseCorpDataReturn {
   accessStatus:  CorpAccessStatus | null;
   /** True while loading corpStatus or accessStatus */
   loading:       boolean;
-  /** Re-check access status (e.g. after re-auth with updated scopes) */
-  refreshAccess: () => Promise<void>;
 }
 
 // ── Hook ────────────────────────────────────────────────────────────────────
@@ -78,16 +76,5 @@ export function useCorpData(
   // Re-fire on Corp-tab activation AND whenever the selected character's token changes
   }, [isActive, token]);
 
-  // ── Re-check access (e.g. after scope grant / re-auth) ──────────────────────
-  const refreshAccess = useCallback(async () => {
-    if (!token) return;
-    try {
-      const access = await apiGet<CorpAccessStatus>('/api/corp/access-status', token);
-      setAccessStatus(access);
-    } catch {
-      // non-fatal
-    }
-  }, [token]);
-
-  return { corpStatus, accessStatus, loading, refreshAccess };
+  return { corpStatus, accessStatus, loading };
 }

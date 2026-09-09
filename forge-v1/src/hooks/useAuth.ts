@@ -334,6 +334,10 @@ export function useAuth(): AuthState & {
         setBlueprints(bData);
         addLog('Blueprints', bData.length > 0 ? 'ok' : 'warn',
           `${bData.length} blueprints${bData.length === 0 ? ' — check scopes or corp hangar' : ''}`);
+        // Fire-and-forget: start warming bp/bpc icon cache now, at step 4, instead of
+        // waiting for the full session-data POST at the end of login. Gives the warm
+        // job the maximum head start before the user can reach the Blueprints tab.
+        apiPost('/api/warm-blueprint-icons', { blueprints: bData }, acc).catch(() => {});
       } catch (e) {
         addLog('Blueprints', 'err', (e as Error).message);
       }
@@ -662,6 +666,13 @@ export function useAuth(): AuthState & {
       const rawStandings = standingsResult.status === 'fulfilled'
         ? standingsResult.value
         : null;
+
+      // Fire-and-forget: start warming this alt's bp/bpc icon cache as soon as its
+      // blueprints are known, rather than waiting for the primary's combined session
+      // re-POST later — same rationale as the primary-character load path above.
+      if (bData.length > 0) {
+        apiPost('/api/warm-blueprint-icons', { blueprints: bData }, acc).catch(() => {});
+      }
 
       // ── Phase 2: Resolve job names (parallel, deduplicated) ───────────────
       // Filter out jobs missing product_type_id (edge case for some activity types)

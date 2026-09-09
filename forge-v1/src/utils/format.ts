@@ -12,14 +12,18 @@
  * Formats an ISK amount into a compact human-readable string.
  * Negative values are prefixed with a minus sign.
  *
- * @example formatISK(47200000)  → "47.2M"
- * @example formatISK(-800000)   → "−0.8M"
- * @example formatISK(4827300000) → "4.8B"
+ * @example formatISK(47200000)      → "47.2M"
+ * @example formatISK(-800000)       → "−0.8M"
+ * @example formatISK(4827300000)    → "4.8B"
+ * @example formatISK(4800000000000) → "4.8T"
+ * @example formatISK(null)          → "—"
  */
-export function formatISK(value: number): string {
+export function formatISK(value: number | null | undefined): string {
+  if (value == null || isNaN(value)) return '—';
   const abs = Math.abs(value);
   const sign = value < 0 ? '−' : '';
 
+  if (abs >= 1e12) return `${sign}${(abs / 1e12).toFixed(1)}T`;
   if (abs >= 1e9) return `${sign}${(abs / 1e9).toFixed(1)}B`;
   if (abs >= 1e6) return `${sign}${(abs / 1e6).toFixed(1)}M`;
   if (abs >= 1e3) return `${sign}${(abs / 1e3).toFixed(0)}K`;
@@ -32,6 +36,17 @@ export function formatISK(value: number): string {
  */
 export function formatISKPerHour(value: number): string {
   return `${formatISK(value)}/hr`;
+}
+
+/**
+ * Like formatISK but appends " ISK" — used in calculation-result panels
+ * (e.g. RightSidebar) where the currency unit adds clarity.
+ * @example formatISKDisplay(47200000) → "47.2M ISK"
+ * @example formatISKDisplay(null)     → "—"
+ */
+export function formatISKDisplay(value: number | null | undefined): string {
+  const base = formatISK(value);
+  return base === '—' ? '—' : `${base} ISK`;
 }
 
 // ── Semantic colour classes ─────────────────────────────────────────────────

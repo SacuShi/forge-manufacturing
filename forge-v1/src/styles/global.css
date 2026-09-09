@@ -99,9 +99,6 @@ body {
 .danger  { color: var(--color-danger);  }
 .mono    { font-family: var(--font-mono); }
 
-/* Hide on mobile */
-.hide-mobile { /* applied via @media below */ }
-
 /* ── Focus ring ────────────────────────────────────────────────────────────── */
 :focus-visible {
   outline: 2px solid var(--color-accent-primary);
@@ -126,18 +123,9 @@ body {
     display: flex;
   }
 
-  /* Hide market teaser in header */
-  .market-teaser {
-    display: none !important;
-  }
-
   /* Hide char name (show avatar only) */
   .char-pill-name {
     display: none !important;
   }
 
-  /* Hide non-essential table columns */
-  .hide-mobile {
-    display: none !important;
-  }
 }
