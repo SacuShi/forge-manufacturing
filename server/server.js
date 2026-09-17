@@ -9753,13 +9753,15 @@ The material quantities needed for a job are reduced by the combined effective M
 Structure ME bonuses (Upwell engineering complexes):
   NPC Station: 0%   Raitaru: +1%   Azbel: +1%   Sotiyo: +1%
 
-Standup M-Set rig ME bonuses (null/WH — full bonus zone):
-  T1 rigs (e.g. Capital Ship Mfg Efficiency I):  +2.0% per rig installed
-  T2 rigs (e.g. Capital Ship Mfg Efficiency II): +2.4% per rig installed
+Standup {M,L,XL}-Set manufacturing rig ME bonuses:
+  T1 rigs (e.g. Standup XL-Set Ship Manufacturing Efficiency I):  +2.0% per rig installed
+  T2 rigs (e.g. Standup XL-Set Ship Manufacturing Efficiency II): +2.4% per rig installed
   Max 3 rigs; no stacking penalty on ME reduction.
-  Each rig applies to its designated category (Capital Ship rigs → capitals only, etc.)
+  Each rig applies to its designated category and structure size — a Raitaru (M)
+  only takes M-Set rigs, Azbel (L) only L-Set, Sotiyo (XL) only XL-Set; within a
+  size, a rig applies only to its category (Ship rigs → ships only, etc.)
 
-Example — Sotiyo, ME10 blueprint, 3× Capital Ship Mfg Efficiency II rigs:
+Example — Sotiyo, ME10 blueprint, 3× Standup XL-Set Ship Manufacturing Efficiency II rigs:
   effectiveME = 10 + 1 + 7.2 = 18.2%
   meFactor = 0.818 (vs 0.9 at bare ME10 in NPC)
   On a 10B ISK carrier build: ~820M ISK additional saving vs NPC station
@@ -10503,32 +10505,124 @@ app.get('/api/system-search', security.apiLimiter, security.verifyEveToken, asyn
 //   • Sell price           → regionPriceCache (populated by precompute job)
 //   • Sales fees           → character skills + standings (session cache)
 //
-// ── Standup M-Set manufacturing efficiency rig ME bonuses ──────────────────
-// Source: EVE SDE materialConsumptionBonus attribute per type_id.
-// Values are % reduction in null/WH space (full bonus zone — where UKC operates).
-// T1 = 2.0% per rig; T2 = 2.4% per rig. Rigs do NOT stack-penalise each other.
-// Note: each rig applies only to its designated manufacturing category in-game.
-// FORGE applies whichever rigs are configured — the user is responsible for
-// selecting rigs appropriate to what they are building.
+// ── Standup {M,L,XL}-Set manufacturing efficiency rig ME bonuses ───────────
+// Source: verified 17 Sept 2026 against live ESI (/universe/types/{id}/ dogma
+// attribute 2594 "Material Reduction Bonus") + the Fuzzwork SDE export (market
+// groups 2347/2348/2349 = "{Medium,Large,X-Large} Structure Engineering Rigs").
+// T1 = 2.0% per rig; T2 = 2.4% per rig; Thukker faction variant = 2.0% (no I/II
+// tiers) — unchanged from the prior map's assumed magnitude, which the raw
+// dogma value corroborates. Rigs also carry a separate, much larger *time*
+// bonus (attribute 2593, ~10x the material one) that is NOT modelled here —
+// it doesn't affect ISK cost, only job duration — and structure rig bonuses
+// are known to scale by security space (per CCP's Engineering Complex dev
+// blog), though whether that scaling touches the material bonus specifically,
+// as opposed to only time/cost, was not re-verified here; flag for review if
+// True Profit numbers look off for a non-null/WH structure. Rigs do NOT
+// stack-penalise each other.
+//
+// IMPORTANT — this replaces a prior map (removed 17 Sept 2026) whose type_ids
+// were wrong: about a third pointed at unpublished legacy blueprint-research
+// modules with zero relation to manufacturing (e.g. old 37184–37199 range —
+// "Medium/Large Tech I Ship/Drone/Module Research", not manufacturing rigs at
+// all), and the real rigs among them were mapped to the wrong ship-size tier
+// (e.g. 37180/37181 are the XL-Set "Ship Manufacturing Efficiency" rigs, not
+// "Large Ship" — this was the reported bug: users couldn't find/select the
+// real XL-Set rig because FORGE had already claimed that type_id under a
+// different, incorrect name). See IndustrySettings.tsx's MANUFACTURING_RIGS
+// for the matching frontend catalog (must stay in sync with this map — same
+// type_ids, same source verification date).
+//
+// M-Set (Raitaru) splits each category into separate ME-only/TE-only rigs, so
+// its TE-only entries are listed here at 0 (no material bonus, but a real,
+// selectable rig — kept in the map for the "not simply missing" documentation
+// value). L-Set (Azbel) and XL-Set (Sotiyo) combine ME+TE into one rig per
+// category/tier, so every entry for those sizes carries a nonzero ME value.
 const RIG_ME_BONUSES = {
-  37178: 2.0, // Capital Ship Mfg Efficiency I
-  37179: 2.4, // Capital Ship Mfg Efficiency II
-  37180: 2.0, // Large Ship Mfg Efficiency I
-  37181: 2.4, // Large Ship Mfg Efficiency II
-  37182: 2.0, // Medium Ship Mfg Efficiency I
-  37183: 2.4, // Medium Ship Mfg Efficiency II
-  37184: 2.0, // Small Ship Mfg Efficiency I
-  37185: 2.4, // Small Ship Mfg Efficiency II
-  37186: 2.0, // Ammunition Mfg Efficiency I
-  37187: 2.4, // Ammunition Mfg Efficiency II
-  37188: 2.0, // Equipment Mfg Efficiency I
-  37189: 2.4, // Equipment Mfg Efficiency II
-  37190: 2.0, // Drone Mfg Efficiency I
-  37191: 2.4, // Drone Mfg Efficiency II
-  37197: 2.0, // Adv. Component Mfg Efficiency I
-  37198: 2.4, // Adv. Component Mfg Efficiency II
-  37199: 2.0, // Structure Mfg Efficiency I
-  37200: 2.4, // Structure Mfg Efficiency II
+  37146: 2, // Basic Medium Ship Manufacturing Material Efficiency I
+  37147: 2.4, // Basic Medium Ship Manufacturing Material Efficiency II
+  37148: 0, // Drone and Fighter Manufacturing Time Efficiency I
+  37149: 0, // Drone and Fighter Manufacturing Time Efficiency II
+  37150: 0, // Ammunition Manufacturing Time Efficiency I
+  37151: 0, // Ammunition Manufacturing Time Efficiency II
+  37152: 2.4, // Basic Large Ship Manufacturing Material Efficiency II
+  37153: 0, // Basic Medium Ship Manufacturing Time Efficiency II
+  37154: 2, // Basic Small Ship Manufacturing Material Efficiency I
+  37155: 2.4, // Basic Small Ship Manufacturing Material Efficiency II
+  37156: 2, // Drone and Fighter Manufacturing Material Efficiency I
+  37157: 2.4, // Drone and Fighter Manufacturing Material Efficiency II
+  37158: 2, // Ammunition Manufacturing Material Efficiency I
+  37159: 2.4, // Ammunition Manufacturing Material Efficiency II
+  37160: 0, // Equipment Manufacturing Time Efficiency I
+  37161: 0, // Equipment Manufacturing Time Efficiency II
+  37162: 0, // Basic Small Ship Manufacturing Time Efficiency I
+  37163: 0, // Basic Small Ship Manufacturing Time Efficiency II
+  37164: 2, // Ammunition Manufacturing Efficiency I
+  37165: 2.4, // Ammunition Manufacturing Efficiency II
+  37166: 2, // Basic Large Ship Manufacturing Efficiency I
+  37167: 2.4, // Basic Large Ship Manufacturing Efficiency II
+  37168: 2, // Advanced Large Ship Manufacturing Efficiency I
+  37169: 2.4, // Advanced Large Ship Manufacturing Efficiency II
+  37170: 2, // Equipment Manufacturing Efficiency I
+  37171: 2.4, // Equipment Manufacturing Efficiency II
+  37172: 2.4, // Capital Ship Manufacturing Efficiency II
+  37173: 2, // Capital Ship Manufacturing Efficiency I
+  37174: 2, // Advanced Component Manufacturing Efficiency I
+  37175: 2.4, // Advanced Component Manufacturing Efficiency II
+  37178: 2, // Equipment and Consumable Manufacturing Efficiency I
+  37179: 2.4, // Equipment and Consumable Manufacturing Efficiency II
+  37180: 2, // Ship Manufacturing Efficiency I
+  37181: 2.4, // Ship Manufacturing Efficiency II
+  43704: 2, // Structure and Component Manufacturing Efficiency I
+  43705: 2.4, // Structure and Component Manufacturing Efficiency II
+  43707: 2, // Advanced Small Ship Manufacturing Efficiency I
+  43708: 2.4, // Advanced Small Ship Manufacturing Efficiency II
+  43709: 2, // Advanced Medium Ship Manufacturing Efficiency I
+  43711: 2.4, // Advanced Medium Ship Manufacturing Efficiency II
+  43712: 2, // Drone and Fighter Manufacturing Efficiency I
+  43713: 2.4, // Drone and Fighter Manufacturing Efficiency II
+  43714: 2, // Basic Small Ship Manufacturing Efficiency I
+  43715: 2.4, // Basic Small Ship Manufacturing Efficiency II
+  43716: 2, // Basic Medium Ship Manufacturing Efficiency I
+  43717: 2.4, // Basic Medium Ship Manufacturing Efficiency II
+  43718: 2, // Basic Capital Component Manufacturing Efficiency I
+  43719: 2.4, // Basic Capital Component Manufacturing Efficiency II
+  43720: 2, // Structure Manufacturing Efficiency I
+  43721: 2.4, // Structure Manufacturing Efficiency II
+  43732: 2, // Basic Large Ship Manufacturing Material Efficiency I
+  43733: 0, // Basic Large Ship Manufacturing Time Efficiency I
+  43734: 0, // Basic Large Ship Manufacturing Time Efficiency II
+  43854: 2.4, // Advanced Small Ship Manufacturing Material Efficiency II
+  43855: 2, // Advanced Small Ship Manufacturing Material Efficiency I
+  43856: 0, // Advanced Small Ship Manufacturing Time Efficiency I
+  43857: 0, // Advanced Small Ship Manufacturing Time Efficiency II
+  43858: 2, // Advanced Medium Ship Manufacturing Material Efficiency I
+  43859: 2.4, // Advanced Medium Ship Manufacturing Material Efficiency II
+  43860: 0, // Advanced Medium Ship Manufacturing Time Efficiency I
+  43861: 0, // Advanced Medium Ship Manufacturing Time Efficiency II
+  43862: 2, // Advanced Large Ship Manufacturing Material Efficiency I
+  43863: 2.4, // Advanced Large Ship Manufacturing Material Efficiency II
+  43864: 0, // Advanced Large Ship Manufacturing Time Efficiency II
+  43865: 0, // Advanced Large Ship Manufacturing Time Efficiency I
+  43866: 2.4, // Advanced Component Manufacturing Material Efficiency II
+  43867: 2, // Advanced Component Manufacturing Material Efficiency I
+  43868: 0, // Advanced Component Manufacturing Time Efficiency II
+  43869: 0, // Advanced Component Manufacturing Time Efficiency I
+  43870: 2, // Basic Capital Component Manufacturing Material Efficiency I
+  43871: 2.4, // Basic Capital Component Manufacturing Material Efficiency II
+  43872: 0, // Basic Capital Component Manufacturing Time Efficiency I
+  43873: 0, // Basic Capital Component Manufacturing Time Efficiency II
+  43874: 2.4, // Structure Manufacturing Material Efficiency II
+  43875: 2, // Structure Manufacturing Material Efficiency I
+  43876: 0, // Structure Manufacturing Time Efficiency I
+  43877: 0, // Structure Manufacturing Time Efficiency II
+  43919: 0, // Basic Medium Ship Manufacturing Time Efficiency I
+  43920: 2, // Equipment Manufacturing Material Efficiency I
+  43921: 2.4, // Equipment Manufacturing Material Efficiency II
+  45544: 2, // Thukker Basic Capital Component Manufacturing Material Efficiency
+  45546: 2, // Thukker Basic Capital Component Manufacturing Efficiency
+  45548: 2, // Thukker Structure and Component Manufacturing Efficiency
+  45640: 2, // Thukker Advanced Component Manufacturing Material Efficiency
+  45641: 2, // Thukker Advanced Component Manufacturing Efficiency
 };
 
 // Invention probability rigs for Upwell structures.

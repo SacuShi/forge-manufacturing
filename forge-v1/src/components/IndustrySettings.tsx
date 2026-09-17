@@ -35,36 +35,120 @@ interface RigEntry {
   type_id:  number;
   name:     string;
   category: string;
+  size:     'M' | 'L' | 'XL';
 }
 
+// Every published Standup {M,L,XL}-Set manufacturing-efficiency rig, verified
+// 17 Sept 2026 against live ESI (/universe/types/) + the Fuzzwork SDE export
+// (market groups 2347/2348/2349 = "{Medium,Large,X-Large} Structure Engineering
+// Rigs"). Excludes the sibling research/invention/blueprint-copy rigs that live
+// in the same market groups — those aren't manufacturing-job rigs and belong to
+// a separate research-rig picker (see invention_rig_ids elsewhere in this file).
+//
+// M-Set (Raitaru) splits each category into a Material-Efficiency-only rig and
+// a Time-Efficiency-only rig. L-Set (Azbel) and XL-Set (Sotiyo) instead use one
+// combined rig per category/tier that grants both bonuses at once — that's why
+// M has ~2x as many rows per category as L/XL. Only fit rigs matching the
+// structure's own size (a Raitaru cannot take L or XL rigs); the picker below
+// filters accordingly.
 const MANUFACTURING_RIGS: RigEntry[] = [
-  { type_id: 37178, name: 'Capital Ship Mfg Efficiency I',      category: 'Capital Ships'     },
-  { type_id: 37179, name: 'Capital Ship Mfg Efficiency II',     category: 'Capital Ships'     },
-  { type_id: 37180, name: 'Large Ship Mfg Efficiency I',        category: 'Large Ships'       },
-  { type_id: 37181, name: 'Large Ship Mfg Efficiency II',       category: 'Large Ships'       },
-  { type_id: 37182, name: 'Medium Ship Mfg Efficiency I',       category: 'Medium Ships'      },
-  { type_id: 37183, name: 'Medium Ship Mfg Efficiency II',      category: 'Medium Ships'      },
-  { type_id: 37184, name: 'Small Ship Mfg Efficiency I',        category: 'Small Ships'       },
-  { type_id: 37185, name: 'Small Ship Mfg Efficiency II',       category: 'Small Ships'       },
-  { type_id: 37186, name: 'Ammunition Mfg Efficiency I',        category: 'Ammunition'        },
-  { type_id: 37187, name: 'Ammunition Mfg Efficiency II',       category: 'Ammunition'        },
-  { type_id: 37188, name: 'Equipment Mfg Efficiency I',         category: 'Equipment'         },
-  { type_id: 37189, name: 'Equipment Mfg Efficiency II',        category: 'Equipment'         },
-  { type_id: 37190, name: 'Drone Mfg Efficiency I',             category: 'Drones'            },
-  { type_id: 37191, name: 'Drone Mfg Efficiency II',            category: 'Drones'            },
-  { type_id: 37197, name: 'Adv. Component Mfg Efficiency I',    category: 'Adv. Components'   },
-  { type_id: 37198, name: 'Adv. Component Mfg Efficiency II',   category: 'Adv. Components'   },
-  { type_id: 37199, name: 'Structure Mfg Efficiency I',         category: 'Structures'        },
-  { type_id: 37200, name: 'Structure Mfg Efficiency II',        category: 'Structures'        },
+  // ── M-Set (Raitaru) ──────────────────────────────────────
+  { type_id: 43866, name: 'Advanced Component Manufacturing Material Efficiency II', category: 'Advanced Component', size: 'M' },
+  { type_id: 43867, name: 'Advanced Component Manufacturing Material Efficiency I', category: 'Advanced Component', size: 'M' },
+  { type_id: 43868, name: 'Advanced Component Manufacturing Time Efficiency II', category: 'Advanced Component', size: 'M' },
+  { type_id: 43869, name: 'Advanced Component Manufacturing Time Efficiency I', category: 'Advanced Component', size: 'M' },
+  { type_id: 45640, name: 'Thukker Advanced Component Manufacturing Material Efficiency', category: 'Advanced Component', size: 'M' },
+  { type_id: 43862, name: 'Advanced Large Ship Manufacturing Material Efficiency I', category: 'Advanced Large Ship', size: 'M' },
+  { type_id: 43863, name: 'Advanced Large Ship Manufacturing Material Efficiency II', category: 'Advanced Large Ship', size: 'M' },
+  { type_id: 43864, name: 'Advanced Large Ship Manufacturing Time Efficiency II', category: 'Advanced Large Ship', size: 'M' },
+  { type_id: 43865, name: 'Advanced Large Ship Manufacturing Time Efficiency I', category: 'Advanced Large Ship', size: 'M' },
+  { type_id: 43858, name: 'Advanced Medium Ship Manufacturing Material Efficiency I', category: 'Advanced Medium Ship', size: 'M' },
+  { type_id: 43859, name: 'Advanced Medium Ship Manufacturing Material Efficiency II', category: 'Advanced Medium Ship', size: 'M' },
+  { type_id: 43860, name: 'Advanced Medium Ship Manufacturing Time Efficiency I', category: 'Advanced Medium Ship', size: 'M' },
+  { type_id: 43861, name: 'Advanced Medium Ship Manufacturing Time Efficiency II', category: 'Advanced Medium Ship', size: 'M' },
+  { type_id: 43854, name: 'Advanced Small Ship Manufacturing Material Efficiency II', category: 'Advanced Small Ship', size: 'M' },
+  { type_id: 43855, name: 'Advanced Small Ship Manufacturing Material Efficiency I', category: 'Advanced Small Ship', size: 'M' },
+  { type_id: 43856, name: 'Advanced Small Ship Manufacturing Time Efficiency I', category: 'Advanced Small Ship', size: 'M' },
+  { type_id: 43857, name: 'Advanced Small Ship Manufacturing Time Efficiency II', category: 'Advanced Small Ship', size: 'M' },
+  { type_id: 37150, name: 'Ammunition Manufacturing Time Efficiency I', category: 'Ammunition', size: 'M' },
+  { type_id: 37151, name: 'Ammunition Manufacturing Time Efficiency II', category: 'Ammunition', size: 'M' },
+  { type_id: 37158, name: 'Ammunition Manufacturing Material Efficiency I', category: 'Ammunition', size: 'M' },
+  { type_id: 37159, name: 'Ammunition Manufacturing Material Efficiency II', category: 'Ammunition', size: 'M' },
+  { type_id: 43870, name: 'Basic Capital Component Manufacturing Material Efficiency I', category: 'Basic Capital Component', size: 'M' },
+  { type_id: 43871, name: 'Basic Capital Component Manufacturing Material Efficiency II', category: 'Basic Capital Component', size: 'M' },
+  { type_id: 43872, name: 'Basic Capital Component Manufacturing Time Efficiency I', category: 'Basic Capital Component', size: 'M' },
+  { type_id: 43873, name: 'Basic Capital Component Manufacturing Time Efficiency II', category: 'Basic Capital Component', size: 'M' },
+  { type_id: 45544, name: 'Thukker Basic Capital Component Manufacturing Material Efficiency', category: 'Basic Capital Component', size: 'M' },
+  { type_id: 37152, name: 'Basic Large Ship Manufacturing Material Efficiency II', category: 'Basic Large Ship', size: 'M' },
+  { type_id: 43732, name: 'Basic Large Ship Manufacturing Material Efficiency I', category: 'Basic Large Ship', size: 'M' },
+  { type_id: 43733, name: 'Basic Large Ship Manufacturing Time Efficiency I', category: 'Basic Large Ship', size: 'M' },
+  { type_id: 43734, name: 'Basic Large Ship Manufacturing Time Efficiency II', category: 'Basic Large Ship', size: 'M' },
+  { type_id: 37146, name: 'Basic Medium Ship Manufacturing Material Efficiency I', category: 'Basic Medium Ship', size: 'M' },
+  { type_id: 37147, name: 'Basic Medium Ship Manufacturing Material Efficiency II', category: 'Basic Medium Ship', size: 'M' },
+  { type_id: 37153, name: 'Basic Medium Ship Manufacturing Time Efficiency II', category: 'Basic Medium Ship', size: 'M' },
+  { type_id: 43919, name: 'Basic Medium Ship Manufacturing Time Efficiency I', category: 'Basic Medium Ship', size: 'M' },
+  { type_id: 37154, name: 'Basic Small Ship Manufacturing Material Efficiency I', category: 'Basic Small Ship', size: 'M' },
+  { type_id: 37155, name: 'Basic Small Ship Manufacturing Material Efficiency II', category: 'Basic Small Ship', size: 'M' },
+  { type_id: 37162, name: 'Basic Small Ship Manufacturing Time Efficiency I', category: 'Basic Small Ship', size: 'M' },
+  { type_id: 37163, name: 'Basic Small Ship Manufacturing Time Efficiency II', category: 'Basic Small Ship', size: 'M' },
+  { type_id: 37148, name: 'Drone and Fighter Manufacturing Time Efficiency I', category: 'Drone and Fighter', size: 'M' },
+  { type_id: 37149, name: 'Drone and Fighter Manufacturing Time Efficiency II', category: 'Drone and Fighter', size: 'M' },
+  { type_id: 37156, name: 'Drone and Fighter Manufacturing Material Efficiency I', category: 'Drone and Fighter', size: 'M' },
+  { type_id: 37157, name: 'Drone and Fighter Manufacturing Material Efficiency II', category: 'Drone and Fighter', size: 'M' },
+  { type_id: 37160, name: 'Equipment Manufacturing Time Efficiency I', category: 'Equipment', size: 'M' },
+  { type_id: 37161, name: 'Equipment Manufacturing Time Efficiency II', category: 'Equipment', size: 'M' },
+  { type_id: 43920, name: 'Equipment Manufacturing Material Efficiency I', category: 'Equipment', size: 'M' },
+  { type_id: 43921, name: 'Equipment Manufacturing Material Efficiency II', category: 'Equipment', size: 'M' },
+  { type_id: 43874, name: 'Structure Manufacturing Material Efficiency II', category: 'Structure', size: 'M' },
+  { type_id: 43875, name: 'Structure Manufacturing Material Efficiency I', category: 'Structure', size: 'M' },
+  { type_id: 43876, name: 'Structure Manufacturing Time Efficiency I', category: 'Structure', size: 'M' },
+  { type_id: 43877, name: 'Structure Manufacturing Time Efficiency II', category: 'Structure', size: 'M' },
+  // ── L-Set (Azbel) ──────────────────────────────────────
+  { type_id: 37174, name: 'Advanced Component Manufacturing Efficiency I', category: 'Advanced Component', size: 'L' },
+  { type_id: 37175, name: 'Advanced Component Manufacturing Efficiency II', category: 'Advanced Component', size: 'L' },
+  { type_id: 45641, name: 'Thukker Advanced Component Manufacturing Efficiency', category: 'Advanced Component', size: 'L' },
+  { type_id: 37168, name: 'Advanced Large Ship Manufacturing Efficiency I', category: 'Advanced Large Ship', size: 'L' },
+  { type_id: 37169, name: 'Advanced Large Ship Manufacturing Efficiency II', category: 'Advanced Large Ship', size: 'L' },
+  { type_id: 43709, name: 'Advanced Medium Ship Manufacturing Efficiency I', category: 'Advanced Medium Ship', size: 'L' },
+  { type_id: 43711, name: 'Advanced Medium Ship Manufacturing Efficiency II', category: 'Advanced Medium Ship', size: 'L' },
+  { type_id: 43707, name: 'Advanced Small Ship Manufacturing Efficiency I', category: 'Advanced Small Ship', size: 'L' },
+  { type_id: 43708, name: 'Advanced Small Ship Manufacturing Efficiency II', category: 'Advanced Small Ship', size: 'L' },
+  { type_id: 37164, name: 'Ammunition Manufacturing Efficiency I', category: 'Ammunition', size: 'L' },
+  { type_id: 37165, name: 'Ammunition Manufacturing Efficiency II', category: 'Ammunition', size: 'L' },
+  { type_id: 43718, name: 'Basic Capital Component Manufacturing Efficiency I', category: 'Basic Capital Component', size: 'L' },
+  { type_id: 43719, name: 'Basic Capital Component Manufacturing Efficiency II', category: 'Basic Capital Component', size: 'L' },
+  { type_id: 45546, name: 'Thukker Basic Capital Component Manufacturing Efficiency', category: 'Basic Capital Component', size: 'L' },
+  { type_id: 37166, name: 'Basic Large Ship Manufacturing Efficiency I', category: 'Basic Large Ship', size: 'L' },
+  { type_id: 37167, name: 'Basic Large Ship Manufacturing Efficiency II', category: 'Basic Large Ship', size: 'L' },
+  { type_id: 43716, name: 'Basic Medium Ship Manufacturing Efficiency I', category: 'Basic Medium Ship', size: 'L' },
+  { type_id: 43717, name: 'Basic Medium Ship Manufacturing Efficiency II', category: 'Basic Medium Ship', size: 'L' },
+  { type_id: 43714, name: 'Basic Small Ship Manufacturing Efficiency I', category: 'Basic Small Ship', size: 'L' },
+  { type_id: 43715, name: 'Basic Small Ship Manufacturing Efficiency II', category: 'Basic Small Ship', size: 'L' },
+  { type_id: 37172, name: 'Capital Ship Manufacturing Efficiency II', category: 'Capital Ship', size: 'L' },
+  { type_id: 37173, name: 'Capital Ship Manufacturing Efficiency I', category: 'Capital Ship', size: 'L' },
+  { type_id: 43712, name: 'Drone and Fighter Manufacturing Efficiency I', category: 'Drone and Fighter', size: 'L' },
+  { type_id: 43713, name: 'Drone and Fighter Manufacturing Efficiency II', category: 'Drone and Fighter', size: 'L' },
+  { type_id: 37170, name: 'Equipment Manufacturing Efficiency I', category: 'Equipment', size: 'L' },
+  { type_id: 37171, name: 'Equipment Manufacturing Efficiency II', category: 'Equipment', size: 'L' },
+  { type_id: 43720, name: 'Structure Manufacturing Efficiency I', category: 'Structure', size: 'L' },
+  { type_id: 43721, name: 'Structure Manufacturing Efficiency II', category: 'Structure', size: 'L' },
+  // ── XL-Set (Sotiyo) ──────────────────────────────────────
+  { type_id: 37178, name: 'Equipment and Consumable Manufacturing Efficiency I', category: 'Equipment and Consumable', size: 'XL' },
+  { type_id: 37179, name: 'Equipment and Consumable Manufacturing Efficiency II', category: 'Equipment and Consumable', size: 'XL' },
+  { type_id: 37180, name: 'Ship Manufacturing Efficiency I', category: 'Ship', size: 'XL' },
+  { type_id: 37181, name: 'Ship Manufacturing Efficiency II', category: 'Ship', size: 'XL' },
+  { type_id: 43704, name: 'Structure and Component Manufacturing Efficiency I', category: 'Structure and Component', size: 'XL' },
+  { type_id: 43705, name: 'Structure and Component Manufacturing Efficiency II', category: 'Structure and Component', size: 'XL' },
+  { type_id: 45548, name: 'Thukker Structure and Component Manufacturing Efficiency', category: 'Structure and Component', size: 'XL' },
 ];
 
-// Group rigs by category
-const RIG_CATEGORIES = Array.from(
-  new Set(MANUFACTURING_RIGS.map((r) => r.category))
-).map((cat) => ({
-  category: cat,
-  rigs: MANUFACTURING_RIGS.filter((r) => r.category === cat),
-}));
+// Maps each selectable structure type_id (see STRUCTURE_TYPES) to the rig size
+// it can mount — Raitaru→M, Azbel→L, Sotiyo→XL. NPC stations (null) take none.
+const STRUCTURE_RIG_SIZE: Record<number, 'M' | 'L' | 'XL'> = {
+  35825: 'M',  // Raitaru
+  35826: 'L',  // Azbel
+  35827: 'XL', // Sotiyo
+};
 
 const MAX_RIGS = 3;
 
@@ -341,6 +425,30 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
   // ── Save ───────────────────────────────────────────────────────────────────
   const isNpc    = structureId === null;
   const canSave  = !!systemId;
+
+  // Rigs available for the currently-selected structure size (a Raitaru can't
+  // mount L/XL rigs, etc.) — grouped by category for the accordion below.
+  const rigSize = structureId !== null ? STRUCTURE_RIG_SIZE[structureId] : null;
+  const RIG_CATEGORIES = useMemo(() => {
+    const rigs = rigSize ? MANUFACTURING_RIGS.filter((r) => r.size === rigSize) : [];
+    return Array.from(new Set(rigs.map((r) => r.category))).map((cat) => ({
+      category: cat,
+      rigs: rigs.filter((r) => r.category === cat),
+    }));
+  }, [rigSize]);
+
+  // If the structure type changes (or is cleared), drop any selected rigs that
+  // no longer fit the new size — prevents saving e.g. an XL rig against a
+  // Raitaru after switching structures mid-edit.
+  useEffect(() => {
+    setSelectedRigs((prev) => {
+      const validIds = new Set(
+        (rigSize ? MANUFACTURING_RIGS.filter((r) => r.size === rigSize) : []).map((r) => r.type_id)
+      );
+      const filtered = prev.filter((id) => validIds.has(id));
+      return filtered.length === prev.length ? prev : filtered;
+    });
+  }, [rigSize]);
 
   // Auto-zero: if mfg system matches the source or sell hub's main station
   const leg1AutoZero = !!(systemId && HUB_SYSTEM_IDS[sourceMarket.id] === systemId);
