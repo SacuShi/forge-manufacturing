@@ -18,6 +18,7 @@ interface ExtractorDetails {
   qty_per_cycle?:   number;
   cycle_time?:      number;
   expiry_time?:     string;
+  install_time?:    string; // ESI returns this on extractor_details; needed for the decay curve below
 }
 interface FactoryDetails { schematic_id: number; }
 interface EsiPin {
@@ -145,6 +146,38 @@ interface YieldLine {
 }
 
 /**
+ * Average extractor output per cycle over its full program (install → expiry),
+ * per CCP's own published decay formula (developers.eveonline.com/docs/guides/pi/):
+ *   decayValue(t) = qtyPerCycle / (1 + t × decayFactor)     [decayFactor = 0.012]
+ * where t counts elapsed 15-minute (900s) units since the program started. CCP's
+ * reference implementation also layers a bounded sinusoidal "noise" term on top
+ * (for the in-game bar-graph's per-cycle jitter) — deliberately omitted here since
+ * we want the program's AVERAGE rate for an "Est. daily value" stat, not a specific
+ * cycle's instantaneous value, and the noise term's long-run contribution to that
+ * average is not a simple constant (it depends on qtyPerCycle via a phase shift).
+ * Falls back to the flat, undecayed qtyPerCycle if install_time/expiry_time aren't
+ * available (matches the previous behaviour) rather than guessing a duration.
+ */
+function extractorAvgPerCycle(
+  qtyPerCycle: number, cycleTimeSec: number,
+  installTime?: string, expiryTime?: string,
+): number {
+  if (!installTime || !expiryTime) return qtyPerCycle; // no program window known — can't decay-adjust
+  const durationSec = (new Date(expiryTime).getTime() - new Date(installTime).getTime()) / 1000;
+  const numCycles = Math.floor(durationSec / cycleTimeSec);
+  if (!(numCycles > 0)) return qtyPerCycle;
+
+  const DECAY_FACTOR = 0.012; // dogma attribute 1683 default, per CCP's dev docs
+  const barWidth = cycleTimeSec / 900;
+  let total = 0;
+  for (let i = 0; i < numCycles; i++) {
+    const t = (i + 0.5) * barWidth;
+    total += qtyPerCycle / (1 + t * DECAY_FACTOR);
+  }
+  return total / numCycles;
+}
+
+/**
  * Computes estimated daily ISK yield for one colony.
  *
  * Takes a pre-built `grouped` array (from groupFactories) so the caller can share
@@ -173,7 +206,8 @@ function colonyYield(
 
     const typeId      = ex.product_type_id;
     const tier        = productNames[typeId]?.piTier ?? 0;
-    const unitsPerDay = ex.qty_per_cycle * (86400 / ex.cycle_time);
+    const avgPerCycle = extractorAvgPerCycle(ex.qty_per_cycle, ex.cycle_time, ex.install_time, ex.expiry_time);
+    const unitsPerDay = avgPerCycle * (86400 / ex.cycle_time);
     const sell        = prices[typeId]?.sell ?? 0;
     const grossISK    = unitsPerDay * sell;
     const taxISK      = unitsPerDay * (PI_BASE_VALUE[tier] ?? 5) * pocoTaxRate;
@@ -451,7 +485,12 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
                     const qty      = p.extractor_details!.qty_per_cycle;
                     const ct       = p.extractor_details!.cycle_time;
                     const { label: countdown, urgency } = formatCountdown(p.extractor_details!.expiry_time);
-                    const perDay   = qty && ct ? Math.round(qty * 86400 / ct) : null;
+                    // Decay-adjusted average, matching colonyYield()'s figure — was a flat
+                    // qty×cycles/day estimate that ignored CCP's per-cycle output decay,
+                    // overstating this the longer the extraction program runs.
+                    const perDay   = qty && ct
+                      ? Math.round(extractorAvgPerCycle(qty, ct, p.extractor_details!.install_time, p.extractor_details!.expiry_time) * 86400 / ct)
+                      : null;
 
                     return (
                       <div key={p.pin_id} className="pi-extractor-row">

@@ -15,6 +15,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo, type FC } from 'react';
 import type { IndustrySettings, HaulMethod, Market, SystemSearchResult } from '../types';
 import { apiGet, apiPost } from '../api/client';
+import { FREIGHT_SHIPS } from '../data/freightShips';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -205,44 +206,8 @@ function fmtISK(n: number): string {
 
 // ── Freight ship table ─────────────────────────────────────────────────────────
 // cargoAtLevel[n] = cargo capacity (m³) when the required skill is at level n (1–5).
-interface FreightShip {
-  id:          string;
-  name:        string;
-  skillId:     number;
-  skillName:   string;
-  minLevel:    number;
-  cargoAtLevel: [number, number, number, number, number, number]; // [unused, L1, L2, L3, L4, L5]
-}
-
-// Verified 17 Sept 2026 against live ESI (/universe/types/{id}/) — same
-// "unverified hand-typed ids" bug as the original rig catalog: skillId here
-// pointed at unrelated skills (3387="Mass Production", 3388="Advanced
-// Industry", 3389="Reprocessing Efficiency", 3390="Mobile Refinery
-// Operation" — none of which are hauling skills; "X Industrial" isn't a real
-// skill name either, the racial skill is "X Hauler"), and the freighter
-// type_ids were shifted by one row (20522 doesn't exist at all; 20524/25/26
-// each named the WRONG race's freighter skill). cargoAtLevel is unverified —
-// flagged separately, not changed here (see below).
-const FREIGHT_SHIPS: FreightShip[] = [
-  // T1 Industrials
-  { id: 'bestower',   name: 'Bestower',        skillId: 3343,  skillName: 'Amarr Hauler',     minLevel: 1, cargoAtLevel: [0, 4200,  4700,  5300,  6000,  6800]  },
-  { id: 'sigil',      name: 'Sigil',            skillId: 3343,  skillName: 'Amarr Hauler',     minLevel: 1, cargoAtLevel: [0, 3500,  3900,  4400,  5000,  5600]  },
-  { id: 'badger',     name: 'Badger',           skillId: 3342,  skillName: 'Caldari Hauler',   minLevel: 1, cargoAtLevel: [0, 4700,  5200,  5900,  6700,  7600]  },
-  { id: 'iteron_v',   name: 'Iteron Mark V',    skillId: 3340,  skillName: 'Gallente Hauler',  minLevel: 5, cargoAtLevel: [0, 0,     0,     0,     0,     62500] },
-  { id: 'hoarder',    name: 'Hoarder',          skillId: 3341,  skillName: 'Minmatar Hauler',  minLevel: 1, cargoAtLevel: [0, 4900,  5500,  6200,  7000,  7900]  },
-  // Freighters
-  { id: 'providence', name: 'Providence',       skillId: 20524, skillName: 'Amarr Freighter',    minLevel: 1, cargoAtLevel: [0, 490000, 614000, 737000, 816000, 895000] },
-  { id: 'charon',     name: 'Charon',           skillId: 20526, skillName: 'Caldari Freighter',  minLevel: 1, cargoAtLevel: [0, 485000, 600000, 720000, 845000, 900000] },
-  { id: 'obelisk',    name: 'Obelisk',          skillId: 20527, skillName: 'Gallente Freighter', minLevel: 1, cargoAtLevel: [0, 530000, 650000, 775000, 895000, 995000] },
-  { id: 'fenrir',     name: 'Fenrir',           skillId: 20528, skillName: 'Minmatar Freighter', minLevel: 1, cargoAtLevel: [0, 452000, 555000, 665000, 735000, 800000] },
-];
-// KNOWN GAP (not fixed here — needs a full per-hull dogma-bonus recomputation,
-// not a lookup-table correction): cargoAtLevel wasn't independently reverified.
-// Spot check: Bestower's own base (unskilled) cargo per ESI is 4800 m³, but
-// this table's level-1 value is 4200 — LOWER than unskilled, which can't be
-// right since skill training only ever adds cargo. Treat these numbers as
-// approximate until someone re-derives them from each hull's actual capacity
-// attribute + role bonus.
+// Shared with InterHubHaulConfig.tsx — see data/freightShips.ts for the full
+// verification notes (both skillId/skillName and cargoAtLevel are verified).
 
 interface CharacterSkillData {
   characterId: number;

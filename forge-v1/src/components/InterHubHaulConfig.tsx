@@ -4,6 +4,7 @@
 
 import { useState, useEffect, useMemo, type FC } from 'react';
 import type { HaulMethod } from '../types';
+import { FREIGHT_SHIPS } from '../data/freightShips';
 
 // ── Haul provider rate tables (mirrored from server.js HAUL_PROVIDERS) ────────
 interface HaulProvider {
@@ -39,28 +40,9 @@ function fmtISK(n: number): string {
   return n.toFixed(0);
 }
 
-// ── Freight ship table ─────────────────────────────────────────────────────────
-interface FreightShip {
-  id:           string;
-  name:         string;
-  skillId:      number;
-  minLevel:     number;
-  cargoAtLevel: [number, number, number, number, number, number];
-}
-
-// Verified 17 Sept 2026 against live ESI — see the matching table (with full
-// verification notes) in IndustrySettings.tsx; keep these two in sync.
-const FREIGHT_SHIPS: FreightShip[] = [
-  { id: 'bestower',   name: 'Bestower',        skillId: 3343,  minLevel: 1, cargoAtLevel: [0, 4200,  4700,  5300,  6000,  6800]  },
-  { id: 'sigil',      name: 'Sigil',            skillId: 3343,  minLevel: 1, cargoAtLevel: [0, 3500,  3900,  4400,  5000,  5600]  },
-  { id: 'badger',     name: 'Badger',           skillId: 3342,  minLevel: 1, cargoAtLevel: [0, 4700,  5200,  5900,  6700,  7600]  },
-  { id: 'iteron_v',   name: 'Iteron Mark V',    skillId: 3340,  minLevel: 5, cargoAtLevel: [0, 0,     0,     0,     0,     62500] },
-  { id: 'hoarder',    name: 'Hoarder',          skillId: 3341,  minLevel: 1, cargoAtLevel: [0, 4900,  5500,  6200,  7000,  7900]  },
-  { id: 'providence', name: 'Providence',       skillId: 20524, minLevel: 1, cargoAtLevel: [0, 490000, 614000, 737000, 816000, 895000] },
-  { id: 'charon',     name: 'Charon',           skillId: 20526, minLevel: 1, cargoAtLevel: [0, 485000, 600000, 720000, 845000, 900000] },
-  { id: 'obelisk',    name: 'Obelisk',          skillId: 20527, minLevel: 1, cargoAtLevel: [0, 530000, 650000, 775000, 895000, 995000] },
-  { id: 'fenrir',     name: 'Fenrir',           skillId: 20528, minLevel: 1, cargoAtLevel: [0, 452000, 555000, 665000, 735000, 800000] },
-];
+// ── Freight ship table ────────────────────────────────────────────────────────
+// Shared with IndustrySettings.tsx — see data/freightShips.ts for the full
+// verification notes.
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
