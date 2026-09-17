@@ -41,6 +41,12 @@ export function useTrueCost(
   implants:            number[] = [], // v1.17.1 — selected implant set (default none)
   decryptorType:       string | null = null, // v1.35.0 — invention decryptor
   inventionProbBonus:  number = 0,    // v1.35.0 — flat probability bonus % (manual override)
+  // Bumped by the caller whenever Manufacturing Setup (system/structure/rigs/
+  // tax) is saved. The server reads rig_ids etc. fresh from the DB on every
+  // call, so this isn't sent to the server — it exists purely to force this
+  // effect to re-fire, since a rig-only change touches none of the params
+  // above and would otherwise leave the panel showing stale numbers.
+  settingsVersion:     number = 0,
 ): UseTrueCostResult {
   const [data,    setData]    = useState<TrueCostResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -120,9 +126,10 @@ export function useTrueCost(
       }
     };
 
-  // Re-fetch when item, hub, blueprint ME/TE, runs count, or invention settings change
+  // Re-fetch when item, hub, blueprint ME/TE, runs count, invention settings, or
+  // Manufacturing Setup (system/structure/rigs/tax, via settingsVersion) change
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [productTypeId, sellRegionId, materialRegionId, token, me, te, runs, implants.join(','), decryptorType, inventionProbBonus]);
+  }, [productTypeId, sellRegionId, materialRegionId, token, me, te, runs, implants.join(','), decryptorType, inventionProbBonus, settingsVersion]);
 
   return { data, loading, error };
 }

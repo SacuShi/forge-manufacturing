@@ -152,9 +152,10 @@ effectiveME = blueprintME + structureMEbonus + Σ(rigMEbonus)
 adjQty[mat] = max(1, ceil(baseQty × max(0, 1 − effectiveME/100))) × runs
 
 Structure ME bonuses: NPC 0% | Raitaru +1% | Azbel +1% | Sotiyo +1%
-Standup M-Set rig ME bonuses (null/WH full-bonus zone only):
+Standup {M,L,XL}-Set rig ME bonuses (M=Raitaru, L=Azbel, XL=Sotiyo — a rig only
+fits its own structure's size):
   T1 rigs: +2.0% each | T2 rigs: +2.4% each | max 3 rigs, no stacking penalty
-Example — Sotiyo + ME10 BP + 3× Capital Ship Mfg Eff II:
+Example — Sotiyo + ME10 BP + 3× Standup XL-Set Ship Manufacturing Efficiency II:
   effectiveME = 10 + 1 + 7.2 = 18.2%; on a 10B carrier build: ~820M extra saving vs NPC
 
 ── True Profit Formula ──

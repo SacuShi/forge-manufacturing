@@ -246,6 +246,13 @@ const AppShell: FC = () => {
   // v1.2.0 — Industry settings + settings modal
   const [industrySettings, setIndustrySettings] = useState<IndustrySettings | null>(null);
   const [settingsOpen,     setSettingsOpen]     = useState(false);
+  // Bumped on every settings save (system/structure/rigs/tax) so useTrueCost's
+  // effect re-fires — /api/true-cost reads rig_ids etc. fresh from the DB per
+  // request, but none of useTrueCost's other params change on a rig pick alone,
+  // so without this the True Profit panel would keep showing stale numbers
+  // (computed under the OLD rig selection) until something unrelated happened
+  // to trigger a refetch (switching items, changing runs, ...).
+  const [settingsVersion,  setSettingsVersion]  = useState(0);
 
   // v1.5 — Multi-character: view isolation + fee character selection
   // viewCharacterId: null = combined view; a characterId = isolated single-char view
@@ -655,6 +662,7 @@ const AppShell: FC = () => {
     selectedImplants,
     inventionDecryptorType,
     inventionProbBonus,
+    settingsVersion,
   );
 
   useEffect(() => {
@@ -1456,6 +1464,7 @@ const AppShell: FC = () => {
         onClose={() => setSettingsOpen(false)}
         onSaved={(settings) => {
           setIndustrySettings(settings);
+          setSettingsVersion((v) => v + 1);
           setSettingsOpen(false);
         }}
         characters={[
