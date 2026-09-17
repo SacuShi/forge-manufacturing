@@ -2496,13 +2496,18 @@ const REGIONS = {
 // Used by /api/true-cost to calculate the character-specific broker fee rate.
 // corp_id  = NPC corporation that owns the station
 // faction_id = NPC faction associated with that hub's space
+// Verified 17 Sept 2026 directly against ESI /universe/stations/{id}/'s `owner`
+// field (the authoritative station-owning-corp value) — the previous corp_ids
+// here were wrong for every hub except Jita (same "unverified hand-typed ids"
+// pattern as the original rig-catalog bug). Syndicate's faction_id was also
+// wrong (500010 is Guristas Pirates, not The Syndicate/500009).
 const HUB_STANDINGS = {
   10000002: { corp_id: 1000035, faction_id: 500001 }, // Jita — Caldari Navy / Caldari State
-  10000043: { corp_id: 1000082, faction_id: 500003 }, // Amarr — Imperial Navy / Amarr Empire
-  10000032: { corp_id: 1000049, faction_id: 500004 }, // Dodixie — Federation Navy / Gallente Federation
-  10000042: { corp_id: 1000070, faction_id: 500002 }, // Hek — Brutor Tribe / Minmatar Republic
-  10000030: { corp_id: 1000006, faction_id: 500002 }, // Rens — Brutor Tribe / Minmatar Republic
-  10000041: { corp_id: 1000462, faction_id: 500010 }, // Syndicate — Intaki Syndicate (null-sec, no faction bonus)
+  10000043: { corp_id: 1000086, faction_id: 500003 }, // Amarr — Emperor Family / Amarr Empire
+  10000032: { corp_id: 1000120, faction_id: 500004 }, // Dodixie — Federation Navy / Gallente Federation
+  10000042: { corp_id: 1000057, faction_id: 500002 }, // Hek — Boundless Creation / Minmatar Republic
+  10000030: { corp_id: 1000049, faction_id: 500002 }, // Rens — Brutor Tribe / Minmatar Republic
+  10000041: { corp_id: 1000147, faction_id: 500009 }, // Syndicate — Intaki Syndicate / The Syndicate (null-sec, no faction bonus)
 };
 
 // Hub region → main station solar system ID (for jump-count API and auto-zero haul legs)
@@ -2512,7 +2517,7 @@ const HUB_SYSTEM_IDS = {
   10000032: 30002659, // Dodixie IX – Moon 20 – Federation Navy Assembly Plant
   10000042: 30002053, // Hek VIII – Moon 12 – Boundless Creation Factory
   10000030: 30002510, // Rens VI – Moon 8 – Brutor Tribe Treasury
-  10000041: 30045331, // Syndicate – Poitot
+  10000041: 30003271, // Syndicate – Poitot (verified 17 Sept 2026: the old id, 30045331, was actually Vaaralen — a different system in a different region entirely)
   10099000: 30000772, // C-J6MT Keepstar (1st Taj Mahgoon, structure_id 1049588174021)
 };
 
@@ -5343,7 +5348,10 @@ async function executeAiTool(toolUse, { characterId, req, jobs, blueprints, asse
             avg_daily_volume: 'avg_daily_volume DESC NULLS LAST',
           };
           const iaOrder = allowedIaSorts[iaSortBy] || allowedIaSorts.est_daily_profit;
-          const TAX = 0.964;
+          // 3.375% sales tax at Accounting V: 1 − 0.075×(1−0.11×5) = 0.96625.
+          // Was 0.964 (a hand-typed 3.6%) — didn't match calcSalesFeeRates, this
+          // app's own verified formula for the same tax. Fixed 17 Sept 2026.
+          const TAX = 0.96625;
 
           const iaRows = await dbAll(`
             SELECT
@@ -6810,24 +6818,45 @@ app.get('/api/pi/market', security.apiLimiter, security.verifyEveToken, async (r
 //
 // No ESI calls at request time — everything comes from session cache + local DB.
 
+// Manufacturing and Reaction jobs use two INDEPENDENT slot pools in EVE —
+// Mass Production/Advanced Mass Production (skills 3387/24625) govern
+// manufacturing slots (activity_id 1); Mass Reactions/Advanced Mass Reactions
+// (skills 45748/45749) govern reaction slots (activity_id 9). A reaction job
+// can never occupy a manufacturing slot or vice versa. Verified 17 Sept 2026
+// against eveuniversity.org/Reactions. (This used to be one combined pool
+// sized only by the manufacturing skills, with both job types counted
+// against it — wrong for anyone running reactions, and wrong entirely when
+// activityFilter='reactions' selects a slot count governed by the wrong
+// skill pair.)
 function calcMfgSlotAllocation({ multiCharMode, characters, skillMap, activeJobs }) {
-  let totalMfgSlots, occupiedSlots, freeSlots, charSlotPool;
+  let mfgFreeSlots, reactionFreeSlots, totalMfgSlots, totalReactionSlots, charSlotPool;
   if (multiCharMode) {
-    totalMfgSlots = characters.reduce((s, c) => s + (c.totalSlots || 0), 0);
-    freeSlots     = characters.reduce((s, c) => s + (c.freeSlots  || 0), 0);
-    occupiedSlots = totalMfgSlots - freeSlots;
+    totalMfgSlots      = characters.reduce((s, c) => s + (c.mfgTotalSlots ?? c.totalSlots ?? 0), 0);
+    totalReactionSlots = characters.reduce((s, c) => s + (c.reactionTotalSlots ?? 0), 0);
+    mfgFreeSlots      = characters.reduce((s, c) => s + (c.mfgFreeSlots      ?? c.freeSlots ?? 0), 0);
+    reactionFreeSlots = characters.reduce((s, c) => s + (c.reactionFreeSlots ?? 0), 0);
     charSlotPool  = characters;
   } else {
-    // Base 1 slot. Mass Production (3387) +1/level. Advanced Mass Production (24625) +1/level.
-    const massProduction    = skillMap[3387]  || 0;
-    const advMassProduction = skillMap[24625] || 0;
-    totalMfgSlots  = 1 + massProduction + advMassProduction;
-    const activeMfgJobs = activeJobs.filter(j => j.activity_id === 1 || j.activity_id === 9);
-    occupiedSlots  = Math.min(activeMfgJobs.length, totalMfgSlots);
-    freeSlots      = Math.max(0, totalMfgSlots - occupiedSlots);
+    const massProduction       = skillMap[3387]  || 0;
+    const advMassProduction    = skillMap[24625] || 0;
+    const massReactions        = skillMap[45748] || 0;
+    const advMassReactions     = skillMap[45749] || 0;
+    totalMfgSlots      = 1 + massProduction + advMassProduction;
+    totalReactionSlots = 1 + massReactions  + advMassReactions;
+    const activeMfgJobs      = activeJobs.filter(j => j.activity_id === 1);
+    const activeReactionJobs = activeJobs.filter(j => j.activity_id === 9);
+    mfgFreeSlots      = Math.max(0, totalMfgSlots      - Math.min(activeMfgJobs.length,      totalMfgSlots));
+    reactionFreeSlots = Math.max(0, totalReactionSlots - Math.min(activeReactionJobs.length, totalReactionSlots));
     charSlotPool   = null;
   }
-  return { totalMfgSlots, occupiedSlots, freeSlots, charSlotPool };
+  const occupiedSlots = (totalMfgSlots + totalReactionSlots) - (mfgFreeSlots + reactionFreeSlots);
+  return {
+    totalMfgSlots: totalMfgSlots + totalReactionSlots, // display total, both pools combined
+    occupiedSlots,
+    freeSlots: mfgFreeSlots + reactionFreeSlots,        // display total, both pools combined
+    mfgFreeSlots, reactionFreeSlots,
+    charSlotPool,
+  };
 }
 
 function calcGlobalTeFactor({ skillMap, structureTeBonus, implants }) {
@@ -6929,7 +6958,8 @@ async function fetchQueueCandidates({ bpTypeIds, safeRegionId, allowedActivities
 function runQueuePlannerAllocation({
   candidates, reqsByBp, skillMap, bpByType, structureMeBonus, rigMeBonus,
   globalTeFactor, safeHorizon, horizonDays, totalSalesFeeRate,
-  effectiveBudget, freeSlots, multiCharMode, characters,
+  effectiveBudget, mfgFreeSlots, reactionFreeSlots, multiCharMode, characters,
+  adjustedPrices, sci, facilityTaxDecimal, prices,
 }) {
   const meetsSkills = bpId => {
     const reqs = reqsByBp.get(bpId) || [];
@@ -6937,16 +6967,19 @@ function runQueuePlannerAllocation({
   };
 
   // In multi-char mode, build per-character skill maps and remaining free-slot counts
-  // so the loop can find the first character who BOTH has a free slot AND meets the
-  // blueprint's skill requirements (skill checks are per-character, not combined).
-  let charSlotPool = null, charSkillMaps, charFreeSlots;
+  // (tracked separately per activity — manufacturing and reaction slots are independent
+  // pools, see calcMfgSlotAllocation) so the loop can find the first character who BOTH
+  // has a free slot in the RIGHT pool AND meets the blueprint's skill requirements.
+  let charSlotPool = null, charSkillMaps, charMfgFreeSlots, charReactionFreeSlots;
   if (multiCharMode) {
     charSlotPool  = characters;
     charSkillMaps = new Map();
-    charFreeSlots = new Map();
+    charMfgFreeSlots      = new Map();
+    charReactionFreeSlots = new Map();
     for (const c of characters) {
       charSkillMaps.set(c.characterId, c.skills || {});
-      charFreeSlots.set(c.characterId, c.freeSlots || 0);
+      charMfgFreeSlots.set(c.characterId,      c.mfgFreeSlots      ?? c.freeSlots ?? 0);
+      charReactionFreeSlots.set(c.characterId, c.reactionFreeSlots ?? 0);
     }
   }
 
@@ -6958,10 +6991,17 @@ function runQueuePlannerAllocation({
 
   const recommendations = [];
   let remainingBudget = effectiveBudget;
-  let slotsToFill      = freeSlots;
+  // Single-char mode: two independent counters, checked/decremented by each
+  // candidate's own activity_id (1=manufacturing, 9=reaction) — a candidate
+  // of one type can never consume a slot from the other pool.
+  let mfgSlotsToFill      = mfgFreeSlots;
+  let reactionSlotsToFill = reactionFreeSlots;
 
   for (const c of candidates) {
-    if (slotsToFill <= 0) break;
+    if (mfgSlotsToFill <= 0 && reactionSlotsToFill <= 0) break; // both pools exhausted, nothing left can be scheduled
+    const isReaction   = c.activity_id === 9;
+    const charFreeSlots = multiCharMode ? (isReaction ? charReactionFreeSlots : charMfgFreeSlots) : null;
+    if (!multiCharMode && (isReaction ? reactionSlotsToFill : mfgSlotsToFill) <= 0) continue; // this candidate's pool is full but the other might still have room
     if (!meetsSkills(c.blueprint_id)) continue;
 
     const ownedBp = bpByType.get(c.blueprint_id);
@@ -6986,32 +7026,59 @@ function runQueuePlannerAllocation({
       ? Math.max(1, Math.ceil((dailyVol * horizonDays) / productQty))
       : maxRunsByTime;
 
-    // Adjusted material cost per run — ME reduces required quantities.
-    const matCostPerRun = (c.mat_cost_per_run || 0) * meFactor;
+    // Material cost per run and EIV (for job cost) — both computed per-material
+    // with the same ceiling rule /api/true-cost and calcAggregateShortfall use
+    // (max(1, ceil(qty × meFactor))), not a linear scale-down of an aggregate.
+    // blueprintMaterialsCache/adjustedPrices/prices are all pre-warmed
+    // in-memory maps, so this costs nothing extra per candidate (no DB/ESI
+    // call here). Previously matCostPerRun scaled c.mat_cost_per_run (a 0%-ME
+    // aggregate) linearly by meFactor, which can diverge from the ceiling
+    // rule per material — and this function charged NO job cost at all,
+    // which both let the profitability filter below admit jobs that are
+    // actually unprofitable once job cost is included, and made the
+    // frontend's "True Profit" label for this number inaccurate.
+    let matCostPerRun = 0;
+    let eivPerRun      = 0;
+    const candidateMats = blueprintMaterialsCache.get(c.blueprint_id) || [];
+    for (const m of candidateMats) {
+      const adjQty = Math.max(1, Math.ceil(m.quantity * meFactor));
+      matCostPerRun += (prices?.[m.material_id]?.sell || 0) * adjQty;
+      eivPerRun     += (adjustedPrices?.[m.material_id] || 0) * adjQty;
+    }
+    // Fallback to the precompute aggregate (linear ME scaling) only if this
+    // blueprint's materials aren't in the cache for some reason — better than
+    // silently pricing it at 0.
+    if (candidateMats.length === 0) matCostPerRun = (c.mat_cost_per_run || 0) * meFactor;
+    const jobCostPerRun = eivPerRun * (sci || 0) + eivPerRun * 0.04 + eivPerRun * (facilityTaxDecimal || 0);
 
     // Re-derive profit per run using the character's actual sales fees.
     const totalSellValue = (c.sell_per_unit || 0) * productQty;
     const salesFees      = totalSellValue * totalSalesFeeRate;
-    const profitPerRun   = totalSellValue - salesFees - matCostPerRun;
-    if (profitPerRun <= 0) continue; // character's fees make this unprofitable
+    const profitPerRun   = totalSellValue - salesFees - matCostPerRun - jobCostPerRun;
+    if (profitPerRun <= 0) continue; // character's fees + job cost make this unprofitable
 
     const iskPerHour = buildHoursPerRun > 0 ? profitPerRun / buildHoursPerRun : 0;
 
-    // Budget check: skip if we can't afford even one run.
-    if (matCostPerRun > 0 && remainingBudget < matCostPerRun) continue;
-    const maxRunsByBudget = matCostPerRun > 0
-      ? Math.floor(remainingBudget / matCostPerRun)
+    // Budget check: skip if we can't afford even one run. Job cost is a real
+    // ISK-out-of-wallet expense at job installation, same as materials, so it
+    // counts against the budget cap too.
+    const spendPerRun = matCostPerRun + jobCostPerRun;
+    if (spendPerRun > 0 && remainingBudget < spendPerRun) continue;
+    const maxRunsByBudget = spendPerRun > 0
+      ? Math.floor(remainingBudget / spendPerRun)
       : maxRunsByTime;
 
     // BPOs have runs = -1 (unlimited); BPCs have a finite positive run count.
     const bpcRunCap       = (ownedBp.runs != null && ownedBp.runs > 0) ? ownedBp.runs : maxRunsByTime;
     const recommendedRuns = Math.max(1, Math.min(maxRunsByTime, liquidityRunCap, maxRunsByBudget, bpcRunCap));
     const totalMatCost    = matCostPerRun * recommendedRuns;
+    const totalJobCost    = jobCostPerRun * recommendedRuns;
     const totalProfit     = profitPerRun  * recommendedRuns;
     const totalBuildSec   = effectiveBuildSec * recommendedRuns;
 
-    // In multi-char mode: find the first character who has a free slot AND meets
-    // this blueprint's skill requirements (per-character check, not combined).
+    // In multi-char mode: find the first character who has a free slot in this
+    // candidate's own pool (mfg or reaction) AND meets its skill requirements
+    // (per-character check, not combined).
     let assignedChar = null;
     if (charSlotPool) {
       for (const char of charSlotPool) {
@@ -7021,7 +7088,7 @@ function runQueuePlannerAllocation({
           break;
         }
       }
-      if (!assignedChar) continue; // no character has both free slots and the required skills
+      if (!assignedChar) continue; // no character has both a free slot in this pool and the required skills
     }
 
     recommendations.push({
@@ -7034,6 +7101,7 @@ function runQueuePlannerAllocation({
       buildTimeSec:           Math.round(totalBuildSec),
       buildTimePerRunSec:     Math.round(effectiveBuildSec),
       materialCost:           totalMatCost,
+      jobCost:                totalJobCost,
       estimatedProfit:        totalProfit,
       iskPerHour,
       liquidityRisk:          c.liquidity_risk || null,
@@ -7044,11 +7112,11 @@ function runQueuePlannerAllocation({
       assignedCharacterName:  assignedChar?.name       ?? null,
     });
 
-    remainingBudget -= totalMatCost;
+    remainingBudget -= (totalMatCost + totalJobCost);
     if (assignedChar) {
       charFreeSlots.set(assignedChar.characterId, charFreeSlots.get(assignedChar.characterId) - 1);
     }
-    slotsToFill--;
+    if (isReaction) reactionSlotsToFill--; else mfgSlotsToFill--;
   }
 
   return { recommendations, remainingBudget };
@@ -7112,7 +7180,7 @@ app.post('/api/queue-planner', security.apiLimiter, security.verifyEveToken, asy
       budgetCap      = null,        // null = full wallet
       includeCorpBps = false,
       activityFilter = 'all',       // 'all' | 'manufacturing' | 'reactions'
-      characters     = [],          // [{characterId, name, totalSlots, freeSlots}] — multi-char mode
+      characters     = [],          // [{characterId, name, totalSlots, freeSlots, mfgFreeSlots, reactionFreeSlots}] — multi-char mode
     } = req.body;
 
     const safeRegionId = VALID_REGIONS.includes(parseInt(regionId)) ? parseInt(regionId) : 10000002;
@@ -7143,9 +7211,11 @@ app.post('/api/queue-planner', security.apiLimiter, security.verifyEveToken, asy
     // Structure gives +1% ME to all material quantities.
     const structureMeBonus   = settings?.structure_type_id ? 1 : 0;
     const rigMeBonus         = rigIds.reduce((sum, id) => sum + (RIG_ME_BONUSES[id] || 0), 0);
-    // Structure TE bonus reduces build time (Raitaru 15%, Azbel 20%, Sotiyo 25%).
+    // Structure TE bonus reduces build time (Raitaru 15%, Azbel 20%, Sotiyo 30%).
     const structureTeBonus   = settings?.structure_type_id
       ? (STRUCTURE_TE_BONUS[settings.structure_type_id] || 0) : 0;
+    const facilityTaxDecimal = (settings?.facility_tax || 0) / 100;
+    const targetSystemId     = settings?.system_id || 30000142; // default: Jita IV
 
     // ── Manufacturing slot count ──────────────────────────────────────────────
     // In multi-character mode (characters array supplied by the frontend), use the
@@ -7153,13 +7223,26 @@ app.post('/api/queue-planner', security.apiLimiter, security.verifyEveToken, asy
     // Mass Production / Advanced Mass Production skill levels.
     // In single-character mode, derive from this character's session skillMap.
     const multiCharMode = Array.isArray(characters) && characters.length > 0;
-    const { freeSlots, charSlotPool } = calcMfgSlotAllocation({ multiCharMode, characters, skillMap, activeJobs });
+    const { mfgFreeSlots, reactionFreeSlots, charSlotPool } = calcMfgSlotAllocation({ multiCharMode, characters, skillMap, activeJobs });
 
     // ── Global time-efficiency factor (applied to every blueprint) ───────────
     const globalTeFactor = calcGlobalTeFactor({ skillMap, structureTeBonus, implants });
 
-    // ── Jita prices for material cost re-scoring and shortfall valuation ─────
-    const prices = jitaPricesCache || {};
+    // ── Prices for material cost re-scoring and shortfall valuation ──────────
+    // Follows the safeRegionId the user actually selected — was hardcoded to
+    // Jita regardless of region, so the shortfall panel priced materials at a
+    // different market than fetchQueueCandidates was scoring recommendations
+    // against (same request, two different hubs). Falls back to Jita if the
+    // selected region's cache isn't warm yet.
+    const prices = regionPriceCache.get(safeRegionId)?.prices || jitaPricesCache || {};
+
+    // ── Job cost inputs (EIV × SCI + SCC + facility tax) ──────────────────────
+    // Both calls are cheap, pre-warmed in-memory reads (same functions
+    // /api/true-cost uses) — no per-candidate ESI/DB cost from adding this.
+    const [adjustedPrices, costIndices] = await Promise.all([
+      fetchAdjustedPrices(), fetchCostIndices(),
+    ]);
+    const sci = costIndices[targetSystemId] || 0;
 
     // ── Activity filter ───────────────────────────────────────────────────────
     const allowedActivities = activityFilter === 'manufacturing' ? [1]
@@ -7195,7 +7278,8 @@ app.post('/api/queue-planner', security.apiLimiter, security.verifyEveToken, asy
     const { recommendations, remainingBudget: _unusedBudget } = runQueuePlannerAllocation({
       candidates, reqsByBp, skillMap, bpByType, structureMeBonus, rigMeBonus,
       globalTeFactor, safeHorizon, horizonDays, totalSalesFeeRate,
-      effectiveBudget, freeSlots, multiCharMode, characters,
+      effectiveBudget, mfgFreeSlots, reactionFreeSlots, multiCharMode, characters,
+      adjustedPrices, sci, facilityTaxDecimal, prices,
     });
 
     // ── Aggregate material shortfall for one combined shopping trip ───────────
@@ -7207,6 +7291,7 @@ app.post('/api/queue-planner', security.apiLimiter, security.verifyEveToken, asy
     const summaryProfit    = recommendations.reduce((s, r) => s + r.estimatedProfit, 0);
     const summaryIskPerDay = horizonDays > 0 ? summaryProfit / horizonDays : 0;
     const totalMatSpend    = recommendations.reduce((s, r) => s + r.materialCost,    0);
+    const totalJobCost     = recommendations.reduce((s, r) => s + r.jobCost,         0);
     const totalShortageISK = aggregateMaterials.reduce((s, m) => s + m.shortageISK,  0);
 
     res.json({
@@ -7215,6 +7300,7 @@ app.post('/api/queue-planner', security.apiLimiter, security.verifyEveToken, asy
       summaryProfit,
       summaryIskPerDay,
       totalMatSpend,
+      totalJobCost,
       totalShortageISK,
       walletBalance,
       effectiveBudget,
@@ -9055,8 +9141,10 @@ app.get('/api/inter-hub-arb', security.apiLimiter, async (req, res) => {
     const rawSort  = req.query.sortBy || 'est_daily_profit';
     const orderBy  = allowedSorts[rawSort] || allowedSorts.est_daily_profit;
 
-    // 3.6% sales tax (Accounting L5). Broker fee not included — user fills existing buy orders.
-    const TAX = 0.964;
+    // 3.375% sales tax at Accounting V: 1 − 0.075×(1−0.11×5) = 0.96625 (was a
+    // hand-typed 0.964/3.6% that didn't match calcSalesFeeRates — fixed 17 Sept
+    // 2026). Broker fee not included — user fills existing buy orders.
+    const TAX = 0.96625;
 
     const rows = await dbAll(`
       SELECT
@@ -9770,7 +9858,7 @@ Example — Sotiyo, ME10 blueprint, 3× Standup XL-Set Ship Manufacturing Effici
   Revenue       = lowestSell[hub] × productQty × runs
   Material Cost = Σ(adjQty[mat] × sellPrice[mat, sourceHub])
   EIV           = Σ(adjQty[mat] × adjustedPrice[mat])   ← EVE adjusted prices, NOT market price
-  Job Cost      = EIV × SCI + EIV × 0.02(SCC) + EIV × facilityTax%
+  Job Cost      = EIV × SCI + EIV × 0.04(SCC) + EIV × facilityTax%
   Broker Fee    = revenue × max(1%, 3% − 0.3%×BrokerRelations − 0.03%×factionStanding − 0.02%×corpStanding)
   Trans. Tax    = revenue × max(0%, 7.5% × (1 − 0.11×Accounting))
   True Profit   = Revenue − MaterialCost − JobCost − BrokerFee − TransactionTax − HaulCost
@@ -9780,9 +9868,10 @@ The SCI multiplier makes EIV the critical number for comparing job costs across 
 
 Job cost components (all multiply EIV):
   • System Cost Index (SCI) — per-system, per-activity; reflects local job congestion
-  • SCC Surcharge — flat CONCORD tax. Currently 2% (temporarily halved from 4% on
-    18 Jul 2025 pending CCP's industry rework; assume it may revert to 4% — flag this
-    when giving long-horizon ROI advice).
+  • SCC Surcharge — flat CONCORD tax, 4% for manufacturing and invention jobs. CCP's
+    18 Jul 2025 "Exploration & Industry Balance Rework" cut this to 2%, but ONLY for
+    ME/TE blueprint research jobs (which this app doesn't charge job-install cost for
+    at all) — manufacturing and invention both stayed at 4%.
   • Facility Tax — set by structure owner (NPC stations fixed 0.25%; player structures 0–10%)
   • Alpha clone tax — extra 0.25% for Alpha accounts (Omega = 0%)
 Structure role bonuses (Engineering Complex) reduce the SCI portion of the cost.
@@ -10164,7 +10253,10 @@ const INDUSTRY_IMPLANTS = {
   27174: { kind: 'reprocessing', pct: 4, name: "Zainou 'Beancounter' Reprocessing RX-804" },
 };
 // Structure manufacturing-TIME bonus (separate from the 1% ME bonus).
-const STRUCTURE_TE_BONUS = { 35825: 15, 35826: 20, 35827: 25 }; // Raitaru / Azbel / Sotiyo
+// Verified 17 Sept 2026 against ESI dogma attribute 2602 (strEngTimeBonus):
+// Raitaru 0.85→15%, Azbel 0.8→20%, Sotiyo 0.7→30% (was wrongly 25% — the only
+// one of the three that was wrong). Matching frontend copy: IndustrySettings.tsx.
+const STRUCTURE_TE_BONUS = { 35825: 15, 35826: 20, 35827: 30 }; // Raitaru / Azbel / Sotiyo
 
 /**
  * Calculate EVE broker fee and transaction tax rates for a character at a trade hub.
@@ -10211,7 +10303,7 @@ function calcSalesFeeRates(skillMap, standings, hub, fixedBrokerFee = null) {
 //   broker_fee_rate        — decimal (e.g. 0.025 for 2.5%)
 //   transaction_tax_rate   — decimal (e.g. 0.0375)
 //   sci                    — System Cost Index for the character's configured system (0 if unconfigured)
-//   scc_rate               — always 0.02 (SCC surcharge, flat)
+//   scc_rate               — always 0.04 (SCC surcharge, flat — see the "Job cost formula" comment above calcHaulLegs for why 4%, not the 2% that applies to research-only)
 //   facility_tax           — decimal (e.g. 0.025 for 2.5%)
 //   setup_configured       — true if industry system has been set
 app.get('/api/character-fee-rates', security.apiLimiter, security.verifyEveToken, async (req, res) => {
@@ -10244,7 +10336,7 @@ app.get('/api/character-fee-rates', security.apiLimiter, security.verifyEveToken
       broker_fee_rate:      brokerFeeRate,
       transaction_tax_rate: transactionTaxRate,
       sci,
-      scc_rate:             0.02,
+      scc_rate:             0.04,
       facility_tax:         facilityTaxDecimal,
       setup_configured:     !!(settings?.system_id),
     });
@@ -10638,15 +10730,23 @@ const RIG_INVENTION_PROBABILITY = {
 // Science skills (any other activity=8 skill) are weighted at ÷30.
 // Formula: P = base × (1 + enc/40 + sci1/30 + sci2/30) × decryptorMult
 // Source: https://wiki.eveuniversity.org/Invention
+// Verified 17 Sept 2026 against live ESI (/universe/types/{id}/). Three entries
+// were fabricated (same "unverified hand-typed ids" pattern as the rig-catalog
+// bug): 3407 doesn't exist in the SDE at all; 3410 is actually Astrogeology
+// (mining skill); 3411 is actually Cybernetics (implant skill) — neither has
+// anything to do with invention. The Amarr/Caldari comments were also swapped
+// on the two real entries. Removed the three fake ones, fixed the swap, and
+// added the two real Encryption Methods skills this set was missing entirely
+// (Triglavian and Upwell — both currently obtainable, used for Triglavian/
+// Upwell-structure invention jobs).
 const ENCRYPTION_SKILL_IDS = new Set([
-  21790, // Amarr Encryption Methods
-  23087, // Caldari Encryption Methods
+  21790, // Caldari Encryption Methods
+  23087, // Amarr Encryption Methods
   23121, // Gallente Encryption Methods
   21791, // Minmatar Encryption Methods
   3408,  // Sleeper Encryption Methods
-  3407,  // Takmahl Encryption Methods
-  3411,  // Talocan Encryption Methods
-  3410,  // Yan Jung Encryption Methods
+  52308, // Triglavian Encryption Methods
+  55025, // Upwell Encryption Methods
 ]);
 
 // Invention decryptors: probability multiplier (%), run modifier, ME modifier, TE modifier.
@@ -10671,7 +10771,14 @@ const decryptorTypeIds = {};
 //   adjQty[mat]     = max(1, ceil(baseQty × meFactor)) × runs
 //   EIV             = Σ(adjusted_price[mat] × adjQty[mat])
 //   System Job Cost = EIV × SCI
-//   SCC Surcharge   = EIV × 2%     (reduced from 4% in the Legion update)
+//   SCC Surcharge   = EIV × 4%     (verified 17 Sept 2026 against CCP's own
+//                     "Exploration & Industry Balance Rework" dev blog, 18 Jul
+//                     2025: the 4%→2% cut applies ONLY to ME/TE blueprint
+//                     research jobs — manufacturing and invention stayed at
+//                     4%. This code previously applied 2% to manufacturing
+//                     too, undercharging job cost — and therefore overstating
+//                     True Profit — on every single manufacturing calculation
+//                     in the app by ~2% of EIV.)
 //   Facility Tax    = EIV × facility_tax_rate
 //   Total Job Cost  = System Job Cost + SCC Surcharge + Facility Tax
 
@@ -10760,6 +10867,12 @@ async function calcInventionCost({
 
   const invRigIds   = JSON.parse(settings?.invention_rig_ids || '[]');
   const invSystemId = settings?.invention_system_id || targetSystemId;
+  // No dedicated invention-facility-tax setting exists (invention_system_id
+  // is the only invention-specific location field), so reuse the same
+  // facility_tax the user set for manufacturing — same fallback pattern as
+  // invSystemId above. Previously this was omitted entirely (0%), understating
+  // invention job cost for anyone building at a taxed player structure.
+  const invFacilityTaxDecimal = (settings?.facility_tax || 0) / 100;
 
   // P = base × (1 + enc/40 + sci1/30 + sci2/30) × decryptorMult + rigBonus + probBonus
   // Source: https://wiki.eveuniversity.org/Invention
@@ -10812,7 +10925,7 @@ async function calcInventionCost({
   let invEiv = 0;
   for (const m of invMats) invEiv += (adjustedPrices[m.material_id] || 0) * m.quantity;
   const invSci           = costIndices[invSystemId] || 0;
-  const invJobPerAttempt = invEiv * invSci + invEiv * 0.02; // system cost + SCC surcharge
+  const invJobPerAttempt = invEiv * invSci + invEiv * 0.04 + invEiv * invFacilityTaxDecimal; // system cost + SCC surcharge (4% — invention isn't ME/TE research, so the Jul 2025 research-only cut to 2% doesn't apply; see the "Job cost formula" comment above calcHaulLegs) + facility tax
 
   const perBpcCost = (dcCostPerAttempt + decryptorCostPerAttempt + invJobPerAttempt) * expectedAttempts;
   const amortize   = (cost) => (cost * expectedAttempts / outputRunsWithDecryptor) * runs;
@@ -10937,7 +11050,7 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
     // ── Manufacturing job cost ─────────────────────────────────────────────
     const sci            = costIndices[targetSystemId] || 0;
     const systemJobCost  = eiv * sci;
-    const sccSurcharge   = eiv * 0.02;         // 2% SCC surcharge (Legion update)
+    const sccSurcharge   = eiv * 0.04;         // 4% SCC surcharge (see "Job cost formula" comment above calcHaulLegs — the 2% rate applies only to ME/TE research jobs, not manufacturing)
     const facilityTaxCost = eiv * facilityTaxDecimal;
     const totalJobCost   = systemJobCost + sccSurcharge + facilityTaxCost;
 

@@ -82,8 +82,13 @@ function formatISKShort(n: number): string {
 }
 
 // Activity labels for job rows
+// Verified 17 Sept 2026 against the SDE's ramActivities table (via
+// https://github.com/esi/esi-issues/issues/894, which quotes it directly):
+// activity_id 11 is "Reactions" (an alternate/legacy code alongside 9, not
+// "Reverse Engineering" as this table previously claimed — that's activity_id
+// 7, which wasn't represented here at all).
 const ACTIVITY_LABELS: Record<number, string> = {
-  1: 'Mfg', 3: 'TE', 4: 'ME', 5: 'Copy', 8: 'Inv', 9: 'React', 11: 'RevEng',
+  1: 'Mfg', 3: 'TE', 4: 'ME', 5: 'Copy', 7: 'RevEng', 8: 'Inv', 9: 'React', 11: 'React',
 };
 
 // ── Sub-component: AltCard ────────────────────────────────────────────────────

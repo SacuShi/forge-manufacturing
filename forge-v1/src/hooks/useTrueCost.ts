@@ -51,14 +51,31 @@ export function useTrueCost(
   const [data,    setData]    = useState<TrueCostResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState<string | null>(null);
-  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevItemRef    = useRef<number | null>(null);
 
   useEffect(() => {
     if (!productTypeId || !token) {
       setData(null);
       setError(null);
+      prevItemRef.current = productTypeId;
       return;
     }
+
+    // Switching to a DIFFERENT item must drop the previous item's data
+    // immediately, not just on a successful fetch — otherwise the panel (and
+    // everything downstream that reads effective_me/material quantities from
+    // it: the shortfall total, the stock-check request, the multibuy export)
+    // keeps showing the OLD item's numbers, now mislabeled as the new item's,
+    // until the new /api/true-cost call resolves (which can take up to 60s on
+    // a cold ESI cache). A settingsVersion-only refetch for the SAME item
+    // deliberately does NOT clear — keeping the last-known numbers visible
+    // while it refreshes is the better UX there.
+    if (prevItemRef.current !== productTypeId) {
+      setData(null);
+      setError(null);
+    }
+    prevItemRef.current = productTypeId;
 
     let cancelled = false;
 

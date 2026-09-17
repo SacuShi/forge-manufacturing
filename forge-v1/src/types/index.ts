@@ -605,8 +605,15 @@ export interface QueueCharacter {
   characterId: number;
   name:        string;
   token:       string;
+  /** Manufacturing + Reaction slots combined — for display totals only (e.g. the summary bar). Never used for allocation: the two are independent pools in-game (Mass Production/Advanced Mass Production skills vs. Mass Reactions/Advanced Mass Reactions skills), so a manufacturing job can't occupy a reaction slot or vice versa. */
   totalSlots:  number;
   freeSlots:   number;
+  /** Base 1 + Mass Production + Advanced Mass Production (skills 3387/24625) minus active activity_id===1 jobs. */
+  mfgTotalSlots:      number;
+  mfgFreeSlots:       number;
+  /** Base 1 + Mass Reactions + Advanced Mass Reactions (skills 45748/45749) minus active activity_id===9 jobs. */
+  reactionTotalSlots: number;
+  reactionFreeSlots:  number;
   activeJobs:  ActiveJob[];
   /** skill_id → trained level, used for per-character blueprint skill checks */
   skills:      Record<number, number>;
@@ -686,7 +693,7 @@ export interface FeeRates {
   transaction_tax_rate: number;
   /** System Cost Index for the character's configured manufacturing system */
   sci:                  number;
-  /** SCC surcharge — always 0.02 */
+  /** SCC surcharge — always 0.04 for manufacturing/invention jobs (the 2% rate applies only to ME/TE research, which this app doesn't charge job-install cost for) */
   scc_rate:             number;
   /** Facility tax as a decimal fraction */
   facility_tax:         number;

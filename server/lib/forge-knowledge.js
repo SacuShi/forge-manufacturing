@@ -162,13 +162,15 @@ Example — Sotiyo + ME10 BP + 3× Standup XL-Set Ship Manufacturing Efficiency 
 Revenue       = lowestSell[hub] × productQty × runs
 Material Cost = Σ(adjQty[mat] × sellPrice[mat, sourceHub])
 EIV           = Σ(adjQty[mat] × adjustedPrice[mat])  ← EVE adjusted prices, NOT market
-Job Cost      = EIV × SCI + EIV × 0.02(SCC) + EIV × facilityTax%
+Job Cost      = EIV × SCI + EIV × 0.04(SCC) + EIV × facilityTax%
 Broker Fee    = revenue × max(1%, 3% − 0.3%×BrokerRelations − 0.03%×factionStanding − 0.02%×corpStanding)
 Trans. Tax    = revenue × max(0%, 7.5% × (1 − 0.11×Accounting))
 True Profit   = Revenue − MaterialCost − JobCost − BrokerFee − TransactionTax − HaulCost
 
 EIV uses CCP's adjusted prices (smoothed ESI values), NOT live market prices.
-SCC Surcharge is currently 2% (temporarily halved from 4% on 18 Jul 2025; may revert).
+SCC Surcharge is 4% for manufacturing/invention jobs. CCP's 18 Jul 2025 rework cut
+this to 2%, but only for ME/TE blueprint research jobs (this app doesn't charge
+job-install cost for those) — manufacturing and invention both stayed at 4%.
 
 ── SCI Quick Reference ──
 < 1%   Excellent (rare low-activity null)
@@ -177,7 +179,7 @@ SCC Surcharge is currently 2% (temporarily halved from 4% on 18 Jul 2025; may re
 8–12%  Trade hubs — avoid for production
 
 ── Job Cost Components (all multiply EIV) ──
-SCI (per-system congestion index), SCC Surcharge (currently 2%), Facility Tax (0–10%),
+SCI (per-system congestion index), SCC Surcharge (4%), Facility Tax (0–10%),
 Alpha clone tax +0.25% (Omega = 0%)`,
 
     fuel_blocks: `Fuel Block Recipes (per 40-block batch):
@@ -256,7 +258,7 @@ P4 PI requirements:
   Supercarrier/Titan: ~10,000–50,000+ total P4 units
 
 Nullsec advantage: local minerals + alliance structure + rigs.
-Sotiyo + ME10 + 3× Capital rigs (T2): effectiveME ~18.2% → ~820M saving vs NPC on 10B build.`
+Sotiyo + ME10 + 3× Standup XL-Set Ship Manufacturing Efficiency II rigs: effectiveME ~18.2% → ~820M saving vs NPC on 10B build.`
   };
   return data[topic] || `Unknown topic "${topic}". Valid: ${Object.keys(data).join(', ')}`;
 }
@@ -613,8 +615,8 @@ job counts, research slots) directly without recalculating.
   - Full technical detail. Skip all introductory context.
   - Lead with the key number or recommendation, then the rationale.
   - Focus on marginal optimisation, edge cases, and multi-step chains.
-  - Example tone: "EIV on 10 runs is ~4.8B. At 3.1% SCI + 2% SCC + 0% tax,
-    job cost is ~248M. That leaves 62M headroom over Jita sell."
+  - Example tone: "EIV on 10 runs is ~4.8B. At 3.1% SCI + 4% SCC + 0% tax,
+    job cost is ~341M. That leaves 62M headroom over Jita sell."
 
 • Veteran (100 M – 150 M SP)
   - Maximum conciseness. Assume mastery of all standard EVE mechanics.
@@ -637,8 +639,8 @@ effectiveME = blueprintME + structureMEbonus + Σ(rigMEbonus)
 adjQty[mat] = max(1, ceil(baseQty × (1 − effectiveME/100))) × runs
 Structure ME: NPC 0%, Raitaru/Azbel/Sotiyo +1%. Rigs (null/WH): T1 +2%/rig, T2 +2.4%/rig (max 3).
 True Profit = Revenue − MaterialCost − JobCost − BrokerFee − TransactionTax − HaulCost
-JobCost = EIV × (SCI + 0.02 SCC + facilityTax%); EIV uses CCP adjusted prices, NOT market prices.
-SCC Surcharge currently 2% (temporarily halved from 4% on 18 Jul 2025; may revert).
+JobCost = EIV × (SCI + 0.04 SCC + facilityTax%); EIV uses CCP adjusted prices, NOT market prices.
+SCC Surcharge is 4% for manufacturing/invention (the 18 Jul 2025 cut to 2% applies only to ME/TE research jobs).
 SCI: <1% excellent | 1–3% good null | 3–6% high | 8–12% trade hubs (avoid for mfg).
 For full formula breakdown, rig examples, or detailed SCI reference: get_forge_knowledge("manufacturing_formulas").
 
@@ -680,8 +682,12 @@ and whether each leg is cheaper to react/build yourself vs buy off market.
 
 ── Production Optimisation ──
 ISK/hour = profit_per_run × runs_per_hour = profit / (build_time_hours × slots_used)
-  • Advanced Industry L5 → 11 concurrent manufacturing slots
-  • Mass Production L5 + AAI → 10 additional slots = 21 total
+  • Manufacturing slots = 1 base + Mass Production level + Advanced Mass Production
+    level → max 11 at both L5. (Advanced Industry does NOT grant slots — it cuts job
+    installation cost. Don't conflate the two.)
+  • Reaction slots are a SEPARATE pool: 1 base + Mass Reactions + Advanced Mass
+    Reactions → also max 11 at both L5. A reaction job can never use a manufacturing
+    slot or vice versa — don't add the two pools together when advising slot capacity.
   • Each idle slot is lost ISK. Fill gaps with fast-building mid-margin items.
   • Queue longer items during offline hours; short items when actively playing.
   • Blueprint ME research: diminishing returns above ME8 for cheap materials;

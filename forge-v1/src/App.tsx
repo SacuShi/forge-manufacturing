@@ -54,6 +54,7 @@ import type {
   EsiBlueprint,
   EsiAsset,
   QueueCharacter,
+  ActiveJob,
   PiCharacter,
   InterHubArbRow,
   InterHubHaulResult,
@@ -87,17 +88,17 @@ import { usePushNotifications }  from './hooks/usePushNotifications';
 /**
  * Maps raw precomputed results to MarketItem display rows.
  *
- * When feeRates is provided (post-login), profit/margin/ISK-hr are
- * recalculated with the same formula as /api/true-cost so both the
- * Market Opportunities table and the True Profit panel show consistent
- * figures:
- *
- *   me         = best owned blueprint ME level (0 if unowned)
- *   meFactor   = max(0, 1 − me/100)
- *   adjMatCost = material_cost × meFactor        (ME reduces material spend)
- *   jobCost    = adjMatCost × (sci + 0.02 + facilityTax)
- *   fees       = sell_price × (brokerFeeRate + transactionTaxRate)
- *   profit     = sell_price − adjMatCost − jobCost − fees
+ * v1.19.0 — SINGLE BASELINE: profit/margin/ISK-hr are the RAW precomputed
+ * estimate straight from the server (gross spread, unresearched BP, before
+ * your fees/haul) — identical to what the AI quotes (get_precomputed) and
+ * what's stored in the DB. No client-side fee/ME recalculation happens here
+ * any more; the per-character, all-in net figure is "True Profit" in the
+ * RightSidebar info panel, a deliberately separate, clearly-labelled number
+ * computed server-side by /api/true-cost. (An earlier version of this
+ * function re-derived a hybrid client-side estimate — removed because it
+ * matched neither the raw estimate nor True Profit, which is exactly what
+ * made figures disagree across the page. See git history if reintroducing
+ * client-side fee math is ever considered.)
  */
 function mapToMarketItems(
   results: TopProfitableResponse['results'],
@@ -444,13 +445,19 @@ const AppShell: FC = () => {
   }, [auth.character, auth.token, auth.altCharacters, viewCharacterId]);
 
   // ── Queue Planner: per-character slot summary ────────────────────────────
-  // Derived from each character's skills (Mass Production + Adv Mass Production)
-  // and their current active manufacturing/reaction jobs.
+  // Manufacturing and Reaction jobs use two INDEPENDENT slot pools in EVE —
+  // Mass Production/Advanced Mass Production (skills 3387/24625) govern
+  // manufacturing slots; Mass Reactions/Advanced Mass Reactions (skills
+  // 45748/45749) govern reaction slots. A reaction job can never occupy a
+  // manufacturing slot or vice versa. (Verified 17 Sept 2026 — this used to
+  // be a single combined pool sized only by the manufacturing skills, with
+  // both job types counted against it, which under- or over-stated free
+  // slots for anyone running reactions.)
   const queueCharacters = useMemo<QueueCharacter[]>(() => {
-    const getSlots = (skills: Array<{ skill_id: number; active_skill_level: number }>) => {
+    const getSlots = (skills: Array<{ skill_id: number; active_skill_level: number }>, l1: number, l2: number) => {
       const sm: Record<number, number> = {};
       skills.forEach(s => { sm[s.skill_id] = s.active_skill_level; });
-      return 1 + (sm[3387] || 0) + (sm[24625] || 0); // 1 + Mass Prod + Adv Mass Prod
+      return 1 + (sm[l1] || 0) + (sm[l2] || 0);
     };
     const chars: QueueCharacter[] = [];
     const toSkillMap = (skills: Array<{ skill_id: number; active_skill_level: number }>) => {
@@ -458,31 +465,34 @@ const AppShell: FC = () => {
       skills.forEach(s => { m[s.skill_id] = s.active_skill_level; });
       return m;
     };
+    const buildChar = (
+      characterId: number, name: string, token: string,
+      skills: Array<{ skill_id: number; active_skill_level: number }>,
+      activeJobs: ActiveJob[],
+    ): QueueCharacter => {
+      const mfgTotalSlots      = getSlots(skills, 3387, 24625);   // 1 + Mass Prod + Adv Mass Prod
+      const reactionTotalSlots = getSlots(skills, 45748, 45749);  // 1 + Mass Reactions + Adv Mass Reactions
+      const mfgBusy      = activeJobs.filter(j => j.activityId === 1).length;
+      const reactionBusy = activeJobs.filter(j => j.activityId === 9).length;
+      const mfgFreeSlots      = Math.max(0, mfgTotalSlots - mfgBusy);
+      const reactionFreeSlots = Math.max(0, reactionTotalSlots - reactionBusy);
+      return {
+        characterId, name, token,
+        totalSlots: mfgTotalSlots + reactionTotalSlots,
+        freeSlots:  mfgFreeSlots + reactionFreeSlots,
+        mfgTotalSlots, mfgFreeSlots, reactionTotalSlots, reactionFreeSlots,
+        activeJobs,
+        skills: toSkillMap(skills),
+      };
+    };
     if (auth.character) {
-      const totalSlots = getSlots(auth.skills);
-      const busySlots  = (auth.character.activeJobs ?? []).filter(j => j.activityId === 1 || j.activityId === 9).length;
-      chars.push({
-        characterId: auth.character.characterId,
-        name:        auth.character.name,
-        token:       auth.token ?? '',
-        totalSlots,
-        freeSlots:   Math.max(0, totalSlots - busySlots),
-        activeJobs:  auth.character.activeJobs ?? [],
-        skills:      toSkillMap(auth.skills),
-      });
+      chars.push(buildChar(
+        auth.character.characterId, auth.character.name, auth.token ?? '',
+        auth.skills, auth.character.activeJobs ?? [],
+      ));
     }
     auth.altCharacters.filter(a => !a.loading && !a.error).forEach(alt => {
-      const totalSlots = getSlots(alt.skills);
-      const busySlots  = (alt.activeJobs ?? []).filter(j => j.activityId === 1 || j.activityId === 9).length;
-      chars.push({
-        characterId: alt.characterId,
-        name:        alt.name,
-        token:       alt.token,
-        totalSlots,
-        freeSlots:   Math.max(0, totalSlots - busySlots),
-        activeJobs:  alt.activeJobs ?? [],
-        skills:      toSkillMap(alt.skills),
-      });
+      chars.push(buildChar(alt.characterId, alt.name, alt.token, alt.skills, alt.activeJobs ?? []));
     });
     // When "All" is selected (null), plan across every character's slots combined.
     // When a specific character is selected, plan only for that character's slots

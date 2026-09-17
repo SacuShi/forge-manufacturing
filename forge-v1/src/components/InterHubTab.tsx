@@ -1,6 +1,6 @@
 // FORGE — Inter-Hub Arbitrage tab
 // Finds items where buying at sell orders in hub A and filling buy orders at hub B
-// yields a net profit after 3.6% sales tax (Accounting L5 assumed).
+// yields a net profit after 3.375% sales tax (Accounting L5 assumed).
 
 import { useState, useEffect, useCallback, useRef, type FC } from 'react';
 import type { InterHubArbRow, InterHubArbResponse } from '../types';

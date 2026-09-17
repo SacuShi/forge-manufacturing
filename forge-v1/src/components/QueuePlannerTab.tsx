@@ -27,6 +27,7 @@ interface QueueRecommendation {
   buildTimeSec:          number;
   buildTimePerRunSec:    number;
   materialCost:          number;
+  jobCost:               number;
   estimatedProfit:       number;
   iskPerHour:            number;
   liquidityRisk:         string | null;
@@ -53,6 +54,7 @@ interface QueuePlanResult {
   summaryProfit:      number;
   summaryIskPerDay:   number;
   totalMatSpend:      number;
+  totalJobCost:       number;
   totalShortageISK:   number;
   walletBalance:      number;
   effectiveBudget:    number;
@@ -131,13 +133,18 @@ const QueuePlannerTab: FC<QueuePlannerTabProps> = ({ queueCharacters, primaryTok
     const rawBudget = parseFloat(budgetCapInput.replace(/[^0-9.]/g, ''));
     const budgetCap = isNaN(rawBudget) || rawBudget <= 0 ? null : rawBudget;
 
-    // Send per-character slot counts AND skills so backend can do per-character skill checks
+    // Send per-character slot counts AND skills so backend can do per-character skill checks.
+    // Manufacturing and reaction slots are independent pools (see App.tsx's
+    // queueCharacters comment) — send both so the backend allocates against
+    // whichever pool(s) activityFilter actually needs.
     const characters = queueCharacters.map(c => ({
-      characterId: c.characterId,
-      name:        c.name,
-      totalSlots:  c.totalSlots,
-      freeSlots:   c.freeSlots,
-      skills:      c.skills,
+      characterId:        c.characterId,
+      name:               c.name,
+      totalSlots:         c.totalSlots,
+      freeSlots:          c.freeSlots,
+      mfgFreeSlots:       c.mfgFreeSlots,
+      reactionFreeSlots:  c.reactionFreeSlots,
+      skills:             c.skills,
     }));
 
     apiPost<QueuePlanResult & { code?: string }>('/api/queue-planner', {
@@ -299,9 +306,14 @@ const QueuePlannerTab: FC<QueuePlannerTabProps> = ({ queueCharacters, primaryTok
               <div className="qp-s-sub">of {formatISK(result.effectiveBudget)} budget</div>
             </div>
             <div className="qp-summary-cell">
+              <div className="qp-s-label">Job cost</div>
+              <div className="qp-s-val qp-s-amber">{formatISK(result.totalJobCost)}</div>
+              <div className="qp-s-sub">SCI + 4% SCC + facility tax</div>
+            </div>
+            <div className="qp-summary-cell">
               <div className="qp-s-label">Est. profit</div>
               <div className="qp-s-val qp-s-green">+{formatISK(result.summaryProfit)}</div>
-              <div className="qp-s-sub">over {result.horizonHours >= 24 ? `${result.horizonHours / 24}d` : `${result.horizonHours}h`}</div>
+              <div className="qp-s-sub">over {result.horizonHours >= 24 ? `${result.horizonHours / 24}d` : `${result.horizonHours}h`} · net of job cost, not haul</div>
             </div>
             <div className="qp-summary-cell">
               <div className="qp-s-label">Est. ISK/day</div>
@@ -425,9 +437,9 @@ const QueuePlannerTab: FC<QueuePlannerTabProps> = ({ queueCharacters, primaryTok
                       <span className="qp-col-pin">
                         <TickerPinButton
                           options={[
-                            { type: 'mfg_profit',   label: `${rec.productName} profit (Gross)` },
-                            { type: 'mfg_isk_hour', label: `${rec.productName} ISK/hr (Gross)` },
-                            { type: 'mfg_margin',   label: `${rec.productName} margin (Gross)` },
+                            { type: 'mfg_profit',   label: `${rec.productName} profit (Net, ex-haul)` },
+                            { type: 'mfg_isk_hour', label: `${rec.productName} ISK/hr (Net, ex-haul)` },
+                            { type: 'mfg_margin',   label: `${rec.productName} margin (Net, ex-haul)` },
                           ]}
                           baseConfig={{ typeId: rec.productId, itemName: rec.productName, regionId }}
                         />
@@ -476,8 +488,10 @@ const QueuePlannerTab: FC<QueuePlannerTabProps> = ({ queueCharacters, primaryTok
           )}
 
           <p className="qp-footnote">
-            ISK/hr = estimated True Profit ÷ effective build time (ME/TE/skills/structure applied) ·
-            Jita sell prices · runs capped at {result.horizonHours}h horizon and market liquidity ·
+            ISK/hr = estimated profit ÷ effective build time (ME/TE/skills/structure applied) ·
+            profit is net of materials, job cost (SCI + SCC + facility tax), and your sales fees —
+            but does NOT include haul cost, unlike the per-item True Profit panel · Jita sell prices ·
+            runs capped at {result.horizonHours}h horizon and market liquidity ·
             character assignments are suggestive — start on whichever character meets the skill requirements
           </p>
         </>

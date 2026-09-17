@@ -23,7 +23,7 @@ import { itemIconUrl } from '../utils/icons';
 
 const TRADE_HUBS: TradeHub[] = [
   { id: 'jita',     name: 'Jita IV-4',      label: 'Jita IV - Moon 4 - Caldari Navy Assembly Plant' },
-  { id: 'amarr',    name: 'Amarr VIII-4',   label: 'Amarr VIII - Moon 4 - Emperor Family Academy' },
+  { id: 'amarr',    name: 'Amarr VIII (Oris)', label: 'Amarr VIII (Oris) - Emperor Family Academy' },
   { id: 'dodixie',  name: 'Dodixie IX-20',  label: 'Dodixie IX - Moon 20 - Federation Navy Assembly Plant' },
   { id: 'rens',     name: 'Rens VI-8',      label: 'Rens VI - Moon 8 - Brutor Tribe Treasury' },
   { id: 'hek',      name: 'Hek VIII-12',    label: 'Hek VIII - Moon 12 - Boundless Creation Factory' },

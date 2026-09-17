@@ -1430,8 +1430,21 @@ const RightSidebar: FC<RightSidebarProps> = ({
             {/* ── Invention origin (T2 items) ───────────────────────────────── */}
             {apiDetail.inventionInfo && (() => {
               const decr = INVENTION_DECRYPTORS.find(d => d.type === (inventionDecryptorType || 'none')) ?? INVENTION_DECRYPTORS[0];
-              const adjProb = Math.min(1, apiDetail.inventionInfo.baseProbability * (1 + decr.probMult / 100) + (inventionProbBonus / 100));
+              // Prefer the server's authoritative, skill-and-rig-aware probability
+              // (/api/true-cost's calcInventionCost — factors in science/encryption
+              // skills and invention rigs, which this naive fallback doesn't) once
+              // it's loaded; the naive base×decryptor-only estimate below is only
+              // for the brief window before trueCostData arrives. Previously this
+              // stat card ALWAYS used the naive number even after the authoritative
+              // one loaded, while the cost card a few rows down (see hasSkills
+              // below) already preferred it — the two disagreed for any character
+              // with science/encryption skills or invention rigs, which is nearly
+              // every real T2 inventor.
+              const skillProb  = trueCostData?.invention_cost?.effective_probability;
+              const naiveProb  = Math.min(1, apiDetail.inventionInfo.baseProbability * (1 + decr.probMult / 100) + (inventionProbBonus / 100));
+              const adjProb     = skillProb ?? naiveProb;
               const adjAttempts = 1 / adjProb;
+              const hasSkillProb = skillProb != null;
               const adjRuns = apiDetail.inventionInfo.outputRuns + decr.runs;
               return (
                 <div className="detail-section">
@@ -1449,10 +1462,16 @@ const RightSidebar: FC<RightSidebarProps> = ({
                     </span>
                   </div>
                   <div className="stat-card" style={{ marginBottom: 2 }}>
-                    <div className="stat-card-label">Chance per attempt</div>
+                    <div className="stat-card-label">
+                      Chance per attempt
+                      {hasSkillProb
+                        ? <span style={{ color: 'var(--color-text-tertiary)', marginLeft: 4 }}>(your skills + decryptor)</span>
+                        : <span style={{ color: 'var(--color-text-tertiary)', marginLeft: 4 }}>(base prob, no skills)</span>
+                      }
+                    </div>
                     <div className="stat-card-value" style={{ fontWeight: 600 }}>
                       {(adjProb * 100).toFixed(1)}%
-                      {decr.probMult !== 0 && (
+                      {(decr.probMult !== 0 || hasSkillProb) && (
                         <span style={{ color: 'var(--color-text-tertiary)', fontSize: 10, marginLeft: 4 }}>
                           (base {(apiDetail.inventionInfo.baseProbability * 100).toFixed(1)}%)
                         </span>
