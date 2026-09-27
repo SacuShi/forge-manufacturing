@@ -492,6 +492,48 @@ const HelpTab: FC = () => (
         lore are outside its scope.</div>
     </Section>
 
+    {/* ── Managing Characters ── */}
+    <Section title="Managing Multiple Characters">
+      <p style={S.p}>
+        Open <strong>Manage</strong> next to your character card in the left panel to add, remove, or switch
+        your primary character. The window now <strong>stays open</strong> while you add characters one after
+        another — it used to close after every single add (an EVE SSO login redirects the whole browser tab,
+        which used to reset it), which meant reopening Manage between every alt if you run a large roster.
+        Close it yourself with <strong>×</strong> or by clicking outside it whenever you're done.
+      </p>
+
+      <div style={S.tip}>💡 Each <strong>+ Add Character</strong> click is a real EVE SSO login for that
+        character — CCP's own login page, never FORGE. FORGE only ever receives a short-lived access token
+        from CCP, never your password.</div>
+
+      <p style={{ ...S.p, marginTop: 16 }}>
+        <strong>🔑 Remember my characters</strong> (toggle at the top of Manage Characters) saves you from
+        re-adding your whole roster every time your main logs back in:
+      </p>
+      <ul style={S.ul}>
+        <li style={S.li}>Turn it <strong>on</strong> once, then add characters as normal — from then on, each one
+          you add is remembered under your current main character.</li>
+        <li style={S.li}>Next time your main logs in, FORGE shows a list of remembered characters and lets you
+          pick which ones to reload — instantly, with <strong>no SSO redirect</strong> for any of them.</li>
+        <li style={S.li}>You can also reload a single remembered character mid-session from Manage Characters
+          any time, without waiting for the next login.</li>
+        <li style={S.li}>Turning the toggle <strong>off</strong> immediately forgets every character remembered
+          under that main — nothing lingers once you switch it off.</li>
+        <li style={S.li}>Logging out does <em>not</em> forget your remembered characters — only the toggle or the
+          per-character <strong>Forget</strong> button does.</li>
+      </ul>
+      <div style={S.tip}>💡 This is genuinely secure, not just "saved in the browser": FORGE stores an
+        encrypted credential for each remembered character on its own server (never your password, never
+        readable by FORGE staff without the encryption key), separately from the tab you're using — closing
+        the browser or clearing site data doesn't lose them. Only characters <em>you</em> personally log into
+        via CCP's own SSO screen can ever be remembered; FORGE has no way to add a character without that
+        character's own login.</div>
+      <div style={S.tip}>💡 A remembered character occasionally needs re-adding via <strong>+ Add Character</strong>
+        instead of the one-click reload — shown as "Re-auth needed". This happens if EVE Online starts requiring
+        a new permission FORGE didn't have when the character was first remembered, or if the character has been
+        sold or transferred to a different account.</div>
+    </Section>
+
     {/* ── Tips ── */}
     <Section title="Efficiency Tips">
       <ul style={S.ul}>

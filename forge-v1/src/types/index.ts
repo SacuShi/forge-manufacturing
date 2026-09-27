@@ -593,6 +593,20 @@ export interface AltCharacter {
   error:             string | null;
 }
 
+/**
+ * A character the server has remembered under the current main (encrypted
+ * refresh token held server-side — never sent to the client). Shown in the
+ * "Manage Characters" modal and the login-time restore prompt.
+ */
+export interface RememberedCharacter {
+  characterId: number;
+  name:        string;
+  /** ISO timestamp of last use (or capture, if never restored) */
+  lastUsedAt:  string;
+  /** True if EVE SSO now requires scopes this character wasn't captured with — needs re-adding via SSO */
+  needsReauth: boolean;
+}
+
 /** Minimal per-character identity needed for PI fetching */
 export interface PiCharacter {
   characterId: number;

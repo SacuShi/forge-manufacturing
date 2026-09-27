@@ -77,6 +77,7 @@ import LoginScreen           from './components/LoginScreen';
 import LoadingScreen         from './components/LoadingScreen';
 import IndustrySettingsModal      from './components/IndustrySettings';
 import CharacterManagementModal  from './components/CharacterManagementModal';
+import RememberedCharactersModal from './components/RememberedCharactersModal';
 import HelpTab                   from './components/HelpTab';
 import TradingStandalone     from './components/TradingStandalone';
 import TickerBar             from './components/TickerBar';
@@ -259,7 +260,46 @@ const AppShell: FC = () => {
   // viewCharacterId: null = combined view; a characterId = isolated single-char view
   // feeCharacterId:  null = use primary character's token for fee/true-cost calls
   const [viewCharacterId,  setViewCharacterId]  = useState<number | null>(null);
-  const [charModalOpen,    setCharModalOpen]    = useState(false);
+  // "+ Add Character" triggers a full EVE SSO page redirect, which unmounts the
+  // whole app — plain useState would always come back closed, forcing the user
+  // to reopen Manage Characters before adding each alt (reported as "the box
+  // closes after every add" with 20+ characters). Persist across that round
+  // trip in sessionStorage instead; the modal now only closes when the user
+  // explicitly clicks away/×.
+  const [charModalOpen,    setCharModalOpen]    = useState(
+    () => sessionStorage.getItem('forge_char_modal_open') === 'true'
+  );
+  useEffect(() => {
+    sessionStorage.setItem('forge_char_modal_open', charModalOpen ? 'true' : 'false');
+  }, [charModalOpen]);
+
+  // "Remember my characters" restore prompt — shown once per browser tab
+  // session, as soon as the main is authed and the server reports remembered
+  // alts. The sessionStorage flag (not sessionStorage-persisted state, just a
+  // one-shot marker) prevents it reappearing on every page refresh within the
+  // same session; a fresh tab/session shows it again, which is intended.
+  const [showRestorePrompt, setShowRestorePrompt] = useState(false);
+  useEffect(() => {
+    if (auth.status !== 'authed') return;
+    if (!auth.rememberEnabled) return;
+    if (auth.rememberedCharacters.length === 0) return;
+    if (sessionStorage.getItem('forge_remember_prompt_shown') === 'true') return;
+    setShowRestorePrompt(true);
+  }, [auth.status, auth.rememberEnabled, auth.rememberedCharacters]);
+
+  const dismissRestorePrompt = useCallback(() => {
+    sessionStorage.setItem('forge_remember_prompt_shown', 'true');
+    setShowRestorePrompt(false);
+  }, []);
+  const handleLoadRemembered = useCallback((ids: number[]) => {
+    dismissRestorePrompt();
+    auth.restoreRememberedCharacters(ids);
+  }, [dismissRestorePrompt, auth]);
+  const handleForgetAllRemembered = useCallback(() => {
+    dismissRestorePrompt();
+    auth.forgetAllRemembered();
+  }, [dismissRestorePrompt, auth]);
+
   const [feeCharacterId,  setFeeCharacterId]  = useState<number | null>(null);
   const [buildRuns,       setBuildRuns]       = useState(1);
   // v1.17.1 — implant set the user chose to apply to True Profit ISK/hr (default none)
@@ -1310,6 +1350,21 @@ const AppShell: FC = () => {
             }}
             onMakePrimary={auth.makePrimary}
             onClose={() => setCharModalOpen(false)}
+            rememberEnabled={auth.rememberEnabled}
+            rememberConfigured={auth.rememberConfigured}
+            rememberedCharacters={auth.rememberedCharacters}
+            onSetRemember={auth.setRemember}
+            onForgetRemembered={auth.forgetRememberedCharacter}
+            onRestoreRemembered={auth.restoreRememberedCharacters}
+          />
+        )}
+
+        {showRestorePrompt && (
+          <RememberedCharactersModal
+            characters={auth.rememberedCharacters}
+            onLoad={handleLoadRemembered}
+            onNotNow={dismissRestorePrompt}
+            onForgetAll={handleForgetAllRemembered}
           />
         )}
 

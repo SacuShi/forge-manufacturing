@@ -48,8 +48,9 @@ import type {
   EsiCharacter,
   AltCharacter,
   JumpClone,
+  RememberedCharacter,
 } from '../types';
-import { esiFetchAll, esiGet, apiPost } from '../api/client';
+import { esiFetchAll, esiGet, apiGet, apiPost } from '../api/client';
 
 // ── EVE OAuth constants (must match EVE Developer Portal registration) ────────
 
@@ -85,6 +86,11 @@ const SESSION_STATE_KEY    = 'forge_oauth_state';
 const ALT_TOKENS_KEY       = 'forge_alt_tokens';
 const ADDING_ALT_KEY       = 'forge_adding_alt';
 const SESSION_START_KEY    = 'forge_session_start';
+// "Remember my characters" — set right before the SSO redirect for an alt-add
+// if the main's remember preference is on; read (and cleared) on the OAuth
+// callback to decide whether to ask the server to capture this alt's refresh
+// token. Survives the redirect the same way ADDING_ALT_KEY does.
+const REMEMBER_ADD_KEY     = 'forge_remember_this_add';
 
 const INACTIVITY_TIMEOUT_MS = 20 * 60 * 1000; // 20 min
 const ABSOLUTE_TIMEOUT_MS   = 60 * 60 * 1000; // 1 hour
@@ -130,6 +136,12 @@ export interface AuthState {
   dataLog:          LoadStep[];
   altCharacters:    AltCharacter[];
   addingAlt:        boolean;
+  /** Whether the current main character has "Remember my characters" turned on (server-authoritative) */
+  rememberEnabled:      boolean;
+  /** Whether the server has FORGE_REMEMBER_KEY configured at all — false hides the feature entirely */
+  rememberConfigured:   boolean;
+  /** Alts remembered under the current main, for the manage-characters list and the login-time restore prompt */
+  rememberedCharacters: RememberedCharacter[];
   makePrimary:      (characterId: number) => void;
 }
 
@@ -221,6 +233,10 @@ export function useAuth(): AuthState & {
   logout:          () => void;
   addCharacter:    () => void;
   removeCharacter: (characterId: number) => void;
+  setRemember:                (enabled: boolean) => Promise<void>;
+  restoreRememberedCharacters: (characterIds: number[]) => Promise<{ characterId: number; name: string; error?: string }[]>;
+  forgetRememberedCharacter:   (characterId: number) => Promise<void>;
+  forgetAllRemembered:         () => Promise<void>;
 } {
   const [status,            setStatus]            = useState<AuthStatus>('idle');
   const [token,             setToken]             = useState<string | null>(null);
@@ -242,6 +258,12 @@ export function useAuth(): AuthState & {
   // v1.5 — Alt character state
   const [altCharacters, setAltCharacters] = useState<AltCharacter[]>([]);
   const [addingAlt,     setAddingAlt]     = useState(false);
+
+  // "Remember my characters" state — server-authoritative; fetched once the
+  // primary is authed (see the effect near the bottom of this hook).
+  const [rememberEnabled,      setRememberEnabledState]  = useState(false);
+  const [rememberConfigured,   setRememberConfigured]    = useState(true); // assume yes until told otherwise (avoids a flash of "unavailable")
+  const [rememberedCharacters, setRememberedCharacters]  = useState<RememberedCharacter[]>([]);
 
   /**
    * Tracks characterIds of in-flight alt loads to prevent duplicate concurrent
@@ -776,10 +798,19 @@ export function useAuth(): AuthState & {
       const redirectUri = window.location.origin + window.location.pathname;
 
       if (isAddingAlt) {
+        // "Remember my characters" was on when this add started — ask the
+        // server to capture this alt's refresh token too. Requires the main's
+        // own token as auth (proves the main is logged in); the server
+        // double-checks its own stored preference before persisting anything.
+        const wantsRemember = sessionStorage.getItem(REMEMBER_ADD_KEY) === 'true';
+        sessionStorage.removeItem(REMEMBER_ADD_KEY);
+        const primaryToken = sessionStorage.getItem(SESSION_TOKEN_KEY);
+
         // Alt login: exchange token and load as alt (non-blocking)
         apiPost<{ access_token: string; error_description?: string }>(
           '/api/eve-token',
-          { code, redirect_uri: redirectUri }
+          { code, redirect_uri: redirectUri, ...(wantsRemember ? { remember: true } : {}) },
+          wantsRemember && primaryToken ? primaryToken : undefined
         )
           .then((data) => {
             if (!data.access_token) {
@@ -794,7 +825,6 @@ export function useAuth(): AuthState & {
         // gone. The primary token survives in sessionStorage but without this block
         // the isAddingAlt branch returned before reaching the "resume saved session"
         // section, leaving status='idle' and showing the login screen.
-        const primaryToken = sessionStorage.getItem(SESSION_TOKEN_KEY);
         if (primaryToken) {
           loadCharacterData(primaryToken)
             .then(() => {
@@ -858,6 +888,7 @@ export function useAuth(): AuthState & {
 
     sessionStorage.setItem(SESSION_STATE_KEY, state);
     sessionStorage.setItem(ADDING_ALT_KEY, 'true');
+    if (rememberEnabled) sessionStorage.setItem(REMEMBER_ADD_KEY, 'true');
     setAddingAlt(true);
 
     window.location.href =
@@ -868,7 +899,7 @@ export function useAuth(): AuthState & {
         scope:         SCOPES,
         state,
       })}`;
-  }, []);
+  }, [rememberEnabled]);
 
   // ── removeCharacter ───────────────────────────────────────────────────────
 
@@ -911,6 +942,65 @@ export function useAuth(): AuthState & {
     window.location.reload();
   }, []);
 
+  // ── "Remember my characters" ──────────────────────────────────────────────
+  // All of these talk to the server as the CURRENT primary/main character —
+  // the server never trusts a client-side flag alone (see captureRememberedCharacter
+  // server-side, which re-checks its own stored preference before persisting
+  // anything). Refresh tokens never reach this hook or the browser at all;
+  // restore returns fresh access tokens only.
+
+  const fetchRememberState = useCallback(async (primaryToken: string) => {
+    try {
+      const [statusRes, listRes] = await Promise.all([
+        apiGet<{ enabled: boolean; configured: boolean }>('/api/remember/status', primaryToken),
+        apiGet<{ characters: RememberedCharacter[] }>('/api/remember/list', primaryToken),
+      ]);
+      setRememberEnabledState(statusRes.enabled);
+      setRememberConfigured(statusRes.configured);
+      setRememberedCharacters(listRes.characters);
+    } catch {
+      // Non-critical — the toggle/popup just won't show data this session.
+    }
+  }, []);
+
+  const setRemember = useCallback(async (enabled: boolean) => {
+    if (!token) return;
+    const res = await apiPost<{ enabled: boolean }>('/api/remember/status', { enabled }, token);
+    setRememberEnabledState(res.enabled);
+    if (!res.enabled) setRememberedCharacters([]); // server already forgot them all
+  }, [token]);
+
+  const restoreRememberedCharacters = useCallback(async (characterIds: number[]) => {
+    if (!token || characterIds.length === 0) return [];
+    const res = await apiPost<{ results: Array<{ characterId: number; name: string; access_token?: string; error?: string }> }>(
+      '/api/remember/restore', { characterIds }, token
+    );
+    for (const r of res.results) {
+      if (r.access_token) loadAltCharacterData(r.access_token);
+    }
+    // Refresh the list so lastUsedAt / needsReauth reflect what just happened.
+    fetchRememberState(token);
+    return res.results.map((r) => ({ characterId: r.characterId, name: r.name, error: r.error }));
+  }, [token, loadAltCharacterData, fetchRememberState]);
+
+  const forgetRememberedCharacter = useCallback(async (characterId: number) => {
+    if (!token) return;
+    await apiPost('/api/remember/forget', { characterId }, token);
+    setRememberedCharacters((prev) => prev.filter((c) => c.characterId !== characterId));
+  }, [token]);
+
+  const forgetAllRemembered = useCallback(async () => {
+    if (!token) return;
+    await apiPost('/api/remember/forget', { all: true }, token);
+    setRememberedCharacters([]);
+  }, [token]);
+
+  // Fetch remember status/list once, right after the primary successfully authenticates.
+  useEffect(() => {
+    if (status === 'authed' && token) fetchRememberState(token);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, token]);
+
   // ── login ─────────────────────────────────────────────────────────────────
 
   const login = useCallback(() => {
@@ -952,6 +1042,11 @@ export function useAuth(): AuthState & {
     setAddingAlt(false);
     altCancelledRef.current.clear();
     inFlightAltsRef.current.clear();
+    // Local view only — logging out deliberately does NOT forget remembered
+    // characters server-side (that's what the toggle/"Forget" buttons are
+    // for). Just reset this tab's in-memory view; the next login re-fetches it.
+    setRememberEnabledState(false);
+    setRememberedCharacters([]);
   }, []);
 
   // ── session-expired event listener ────────────────────────────────────────
@@ -979,10 +1074,17 @@ export function useAuth(): AuthState & {
     dataLog,
     altCharacters,
     addingAlt,
+    rememberEnabled,
+    rememberConfigured,
+    rememberedCharacters,
     login,
     logout,
     addCharacter,
     removeCharacter,
     makePrimary,
+    setRemember,
+    restoreRememberedCharacters,
+    forgetRememberedCharacter,
+    forgetAllRemembered,
   };
 }

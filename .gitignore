@@ -10,10 +10,6 @@ config/secrets.js
 # Local deployment credentials (server IP, SSH user — never commit these)
 .forge-deploy
 
-# Disaster-recovery USB bundle — contains plaintext WiFi/login credentials
-# for the autoinstall config. Never commit; keep local-only.
-dr-usb/
-
 # Per-session memory / project context (local only — holds live server credentials)
 FORGE_MEMORY.md
 

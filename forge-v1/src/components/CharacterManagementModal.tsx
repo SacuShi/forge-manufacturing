@@ -1,8 +1,8 @@
 // FORGE — Character Management Modal
 // Lets the user add characters, remove alts, and promote an alt to primary.
 
-import type { FC } from 'react';
-import type { CharacterInfo, AltCharacter } from '../types';
+import { useState, useEffect, type FC } from 'react';
+import type { CharacterInfo, AltCharacter, RememberedCharacter } from '../types';
 
 interface CharacterManagementModalProps {
   character:         CharacterInfo;
@@ -12,6 +12,14 @@ interface CharacterManagementModalProps {
   onRemoveCharacter: (characterId: number) => void;
   onMakePrimary:     (characterId: number) => void;
   onClose:           () => void;
+  /** "Remember my characters" — undefined while still loading from the server */
+  rememberEnabled?:      boolean;
+  rememberConfigured?:   boolean;
+  rememberedCharacters?: RememberedCharacter[];
+  onSetRemember?:        (enabled: boolean) => void;
+  onForgetRemembered?:   (characterId: number) => void;
+  /** Instantly reload a remembered character without an SSO redirect */
+  onRestoreRemembered?:  (characterIds: number[]) => void;
 }
 
 const S = {
@@ -147,7 +155,37 @@ const CharacterManagementModal: FC<CharacterManagementModalProps> = ({
   onRemoveCharacter,
   onMakePrimary,
   onClose,
+  rememberEnabled,
+  rememberConfigured = true,
+  rememberedCharacters = [],
+  onSetRemember,
+  onForgetRemembered,
+  onRestoreRemembered,
 }) => {
+  const [restoringId, setRestoringId] = useState<number | null>(null);
+
+  // Characters we remember but that aren't loaded into this session right now —
+  // those already loaded show above with their own Make Primary / × controls.
+  const loadedIds = new Set(altCharacters.map((a) => a.characterId));
+  const notYetLoaded = rememberedCharacters.filter((c) => !loadedIds.has(c.characterId));
+
+  // Clear the "Loading…" state as soon as the restored character actually
+  // shows up in altCharacters (the 15s timeout below is just a fallback for
+  // a restore that silently failed).
+  useEffect(() => {
+    if (restoringId != null && loadedIds.has(restoringId)) setRestoringId(null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [altCharacters]);
+
+  const handleRestore = (characterId: number) => {
+    setRestoringId(characterId);
+    onRestoreRemembered?.([characterId]);
+    // No completion callback from the parent — clear the spinner state once the
+    // alt shows up in altCharacters (handled by the effect below) or after a
+    // generous timeout so a failed restore doesn't spin forever.
+    window.setTimeout(() => setRestoringId((id) => (id === characterId ? null : id)), 15000);
+  };
+
   return (
     <div style={S.overlay} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div style={S.modal} role="dialog" aria-modal="true" aria-label="Manage Characters">
@@ -156,6 +194,71 @@ const CharacterManagementModal: FC<CharacterManagementModalProps> = ({
           <span style={S.title}>Characters</span>
           <button type="button" style={S.closeBtn} onClick={onClose} aria-label="Close">×</button>
         </div>
+
+        {/* ── Remember my characters ─────────────────────────────────────── */}
+        {rememberConfigured && onSetRemember && (
+          <div className="push-toggle-row" style={{ marginBottom: 4 }}>
+            <span className="push-toggle-label">🔑 Remember my characters</span>
+            <button
+              type="button"
+              className={`push-toggle${rememberEnabled ? ' on' : ''}`}
+              onClick={() => onSetRemember(!rememberEnabled)}
+              aria-pressed={!!rememberEnabled}
+              title={rememberEnabled
+                ? 'Click to stop remembering — this also forgets every remembered character immediately'
+                : 'Click to have FORGE securely remember alts you add from now on, so you don’t have to re-add them next session'}
+            >
+              <span className="push-toggle-thumb" />
+              <span className="push-toggle-text">{rememberEnabled ? 'ON' : 'OFF'}</span>
+            </button>
+          </div>
+        )}
+        {rememberConfigured && (
+          <div style={{ fontSize: 10, color: 'var(--color-text-secondary)', marginBottom: 16, lineHeight: 1.4 }}>
+            {rememberEnabled
+              ? 'FORGE will remember alts you add from here on and offer to reload them next time your main logs in. Turning this off immediately forgets all of them.'
+              : 'When on, alts you add are remembered securely so you can reload them next session instead of re-adding each one via EVE SSO.'}
+          </div>
+        )}
+
+        {/* Remembered characters not currently loaded this session */}
+        {notYetLoaded.length > 0 && (
+          <>
+            <div style={{ ...S.sectionLabel, marginTop: 4 }}>Remembered — not loaded</div>
+            {notYetLoaded.map((rc) => (
+              <div key={rc.characterId} style={S.card}>
+                <img
+                  src={`https://images.evetech.net/characters/${rc.characterId}/portrait?size=64`}
+                  alt={rc.name}
+                  style={{ ...S.portrait, opacity: 0.6 }}
+                />
+                <span style={S.charName}>{rc.name}</span>
+                {rc.needsReauth && (
+                  <span style={{ ...S.badge, color: 'var(--color-danger, #c0392b)' }} title="EVE now requires permissions this character wasn't added with — remove and re-add it via + Add Character">
+                    Re-auth needed
+                  </span>
+                )}
+                <button
+                  type="button"
+                  style={S.actionBtn}
+                  disabled={restoringId === rc.characterId || rc.needsReauth}
+                  onClick={() => handleRestore(rc.characterId)}
+                  title={rc.needsReauth ? 'Needs re-authorisation — use + Add Character instead' : 'Load this character now, no EVE SSO redirect needed'}
+                >
+                  {restoringId === rc.characterId ? 'Loading…' : 'Load'}
+                </button>
+                <button
+                  type="button"
+                  style={S.removeBtn}
+                  onClick={() => onForgetRemembered?.(rc.characterId)}
+                  title="Forget this character permanently"
+                >
+                  Forget
+                </button>
+              </div>
+            ))}
+          </>
+        )}
 
         {/* Primary character */}
         <div style={{ ...S.sectionLabel }}>Primary</div>
