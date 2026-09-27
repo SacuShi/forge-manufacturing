@@ -37,8 +37,6 @@ interface LeftSidebarProps {
   onQuickPrompt:      (prompt: string) => void;
   // v1.5 — Multi-character props
   altCharacters:      AltCharacter[];
-  addingAlt:          boolean;
-  onAddCharacter:     () => void;
   onRemoveCharacter:    (characterId: number) => void;
   onManageCharacters:   () => void;
   viewCharacterId:      number | null;
@@ -171,8 +169,6 @@ const LeftSidebar: FC<LeftSidebarProps> = ({
   drawerOpen,
   onQuickPrompt,
   altCharacters,
-  addingAlt,
-  onAddCharacter,
   onRemoveCharacter,
   onManageCharacters,
   viewCharacterId,
@@ -362,16 +358,20 @@ const LeftSidebar: FC<LeftSidebarProps> = ({
           />
         ))}
 
-        {/* "Add Character" full-width button (shown when no alts yet) */}
+        {/* "Add Character" full-width button (shown when no alts yet). Opens the
+            same Characters modal "Manage" does, rather than jumping straight to
+            the EVE SSO redirect — that modal is now the one consistent entry
+            point for adding characters (it's also where "Remember my characters"
+            lives), so there's no extra "click Manage first" step before you can
+            even see it. */}
         {!hasAlts && (
           <button
             type="button"
             className="char-add-btn"
-            disabled={addingAlt}
-            onClick={onAddCharacter}
+            onClick={onManageCharacters}
             aria-label="Add another EVE character"
           >
-            {addingAlt ? 'Redirecting to EVE SSO…' : '+ Add Character'}
+            + Add Character
           </button>
         )}
       </div>

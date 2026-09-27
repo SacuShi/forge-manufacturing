@@ -1326,8 +1326,6 @@ const AppShell: FC = () => {
           drawerOpen={drawerOpen}
           onQuickPrompt={handleSendMessage}
           altCharacters={auth.altCharacters}
-          addingAlt={auth.addingAlt}
-          onAddCharacter={auth.addCharacter}
           onRemoveCharacter={auth.removeCharacter}
           onManageCharacters={() => setCharModalOpen(true)}
           viewCharacterId={viewCharacterId}
