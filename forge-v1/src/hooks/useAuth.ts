@@ -1061,6 +1061,12 @@ export function useAuth(): AuthState & {
     // for). Just reset this tab's in-memory view; the next login re-fetches it.
     setRememberEnabledState(false);
     setRememberedCharacters([]);
+    // Clear the one-shot "already offered to restore" marker too. Without
+    // this, a session-timeout logout followed by logging back in (same tab —
+    // sessionStorage survives that) would silently never restore your alts
+    // again, because the flag still said "already handled this tab session"
+    // from before the timeout. A fresh login should always get a fresh chance.
+    sessionStorage.removeItem(REMEMBER_PROMPT_SHOWN_KEY);
   }, []);
 
   // ── session-expired event listener ────────────────────────────────────────

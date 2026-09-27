@@ -10,7 +10,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef, type FC } from 'react';
 import { apiPost }       from '../api/client';
-import { formatISK }     from '../utils/format';
+import { formatISK, formatISKDisplay } from '../utils/format';
 import type { QueueCharacter } from '../types';
 import ForgeWait        from './ForgeWait';
 import TickerPinButton  from './TickerPinButton';
@@ -478,7 +478,7 @@ const QueuePlannerTab: FC<QueuePlannerTabProps> = ({ queueCharacters, primaryTok
                     <span className="qp-mat-name">{m.name}</span>
                     <span className="qp-mat-have">{m.have > 0 ? `have ${m.have.toLocaleString()}` : '—'}</span>
                     <span className="qp-mat-short">need {m.shortage.toLocaleString()}</span>
-                    <span className="qp-mat-cost">{m.shortageISK > 0 ? formatISK(m.shortageISK) : '—'}</span>
+                    <span className="qp-mat-cost">{m.shortageISK > 0 ? formatISKDisplay(m.shortageISK) : '—'}</span>
                   </div>
                 ))}
               </div>

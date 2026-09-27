@@ -77,7 +77,6 @@ import LoginScreen           from './components/LoginScreen';
 import LoadingScreen         from './components/LoadingScreen';
 import IndustrySettingsModal      from './components/IndustrySettings';
 import CharacterManagementModal  from './components/CharacterManagementModal';
-import RememberedCharactersModal from './components/RememberedCharactersModal';
 import HelpTab                   from './components/HelpTab';
 import TradingStandalone     from './components/TradingStandalone';
 import TickerBar             from './components/TickerBar';
@@ -273,32 +272,30 @@ const AppShell: FC = () => {
     sessionStorage.setItem('forge_char_modal_open', charModalOpen ? 'true' : 'false');
   }, [charModalOpen]);
 
-  // "Remember my characters" restore prompt — shown once per browser tab
-  // session, as soon as the main is authed and the server reports remembered
-  // alts. The sessionStorage flag (not sessionStorage-persisted state, just a
-  // one-shot marker) prevents it reappearing on every page refresh within the
-  // same session; a fresh tab/session shows it again, which is intended.
-  const [showRestorePrompt, setShowRestorePrompt] = useState(false);
+  // "Remember my characters" — auto-restore, no confirmation click required.
+  // Originally this gated behind a "Welcome back, pick which to reload" popup,
+  // but with a large roster that's still a manual step every single login —
+  // reported directly ("I don't want to be adding 20 characters each
+  // session"). The user already consented at the toggle: every remembered
+  // alt was only ever captured because they personally logged into it via
+  // EVE SSO while that toggle was on, so silently reloading it on the next
+  // main login isn't a new consent boundary, just skipping a click nobody
+  // wanted. Characters flagged needsReauth are skipped (they'd fail anyway)
+  // and stay visible/loadable individually from Manage Characters.
+  // REMEMBER_PROMPT_SHOWN_KEY (cleared on logout, see useAuth.ts) guards this
+  // to fire once per login rather than on every re-render.
   useEffect(() => {
     if (auth.status !== 'authed') return;
     if (!auth.rememberEnabled) return;
     if (auth.rememberedCharacters.length === 0) return;
     if (sessionStorage.getItem(REMEMBER_PROMPT_SHOWN_KEY) === 'true') return;
-    setShowRestorePrompt(true);
-  }, [auth.status, auth.rememberEnabled, auth.rememberedCharacters]);
-
-  const dismissRestorePrompt = useCallback(() => {
     sessionStorage.setItem(REMEMBER_PROMPT_SHOWN_KEY, 'true');
-    setShowRestorePrompt(false);
-  }, []);
-  const handleLoadRemembered = useCallback((ids: number[]) => {
-    dismissRestorePrompt();
-    auth.restoreRememberedCharacters(ids);
-  }, [dismissRestorePrompt, auth]);
-  const handleForgetAllRemembered = useCallback(() => {
-    dismissRestorePrompt();
-    auth.forgetAllRemembered();
-  }, [dismissRestorePrompt, auth]);
+    const idsToRestore = auth.rememberedCharacters
+      .filter((c) => !c.needsReauth)
+      .map((c) => c.characterId);
+    if (idsToRestore.length > 0) auth.restoreRememberedCharacters(idsToRestore);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auth.status, auth.rememberEnabled, auth.rememberedCharacters]);
 
   const [feeCharacterId,  setFeeCharacterId]  = useState<number | null>(null);
   const [buildRuns,       setBuildRuns]       = useState(1);
@@ -1354,15 +1351,6 @@ const AppShell: FC = () => {
             onSetRemember={auth.setRemember}
             onForgetRemembered={auth.forgetRememberedCharacter}
             onRestoreRemembered={auth.restoreRememberedCharacters}
-          />
-        )}
-
-        {showRestorePrompt && (
-          <RememberedCharactersModal
-            characters={auth.rememberedCharacters}
-            onLoad={handleLoadRemembered}
-            onDone={dismissRestorePrompt}
-            onForgetAll={handleForgetAllRemembered}
           />
         )}
 

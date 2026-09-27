@@ -4489,6 +4489,14 @@ tr:hover .ticker-pin-btn,
   border: 0.5px solid var(--color-border-light);
   border-radius: 6px;
   overflow: hidden;
+  /* .qp-tab is a flex column with a max-height/overflow-y:auto scroll — an
+     element with non-visible overflow (like this one, for the rounded
+     corners) gets its flex min-height treated as 0 per spec, so without this
+     it gets squeezed below its own content height and clips the values
+     whenever total page content exceeds the viewport (i.e. almost always
+     with 15+ slots). flex-shrink:0 forces it to render at full height and
+     let the page scroll instead. */
+  flex-shrink: 0;
 }
 .qp-summary-cell {
   flex: 1;
