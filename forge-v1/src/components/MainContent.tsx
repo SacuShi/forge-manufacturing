@@ -132,6 +132,8 @@ interface MainContentProps {
 
   /** v1.11 — selected market hub region id (drives Research ROI material prices) */
   regionId: number;
+  /** "Buy In" hub — Queue Planner prices materials (per-recommendation cost + shortfall) here, not at regionId (the "Sell At" hub) */
+  materialRegionId: number;
 
   // v1.4.0 — Corp tab props
   token:            string | null;
@@ -201,6 +203,7 @@ const MainContent: FC<MainContentProps> = ({
   onSelectItem,
   onSelectArbItem,
   regionId,
+  materialRegionId,
   haulConfigOpen       = false,
   onHaulConfigOpen,
   onHaulConfigClose    = () => {},
@@ -1213,6 +1216,7 @@ const MainContent: FC<MainContentProps> = ({
           queueCharacters={queueCharacters}
           primaryToken={primaryToken}
           regionId={regionId}
+          materialRegionId={materialRegionId}
           onSelectItem={onSelectItem}
         />
       )}

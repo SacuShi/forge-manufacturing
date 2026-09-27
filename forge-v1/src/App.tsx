@@ -1395,6 +1395,7 @@ const AppShell: FC = () => {
           onSelectItem={handleSelectItem}
           onSelectArbItem={handleSelectArbItem}
           regionId={selectedMarket.id}
+          materialRegionId={selectedSourceMarket.id}
           onMarketSelect={handleItemSelect}
           onLoadMoreMarket={handleLoadMoreMarket}
           marketLoadingMore={marketLoadingMore}

@@ -7516,7 +7516,8 @@ app.post('/api/queue-planner', security.apiLimiter, security.verifyEveToken, asy
   try {
     const characterId = req.characterId;
     const {
-      regionId       = 10000002,
+      regionId         = 10000002,  // sell hub — where finished goods are priced/ranked
+      materialRegionId = regionId,  // buy hub — where materials would actually be purchased; defaults to regionId if the client didn't send one (old clients, or buy==sell)
       horizonHours   = 72,          // planning window; clipped to 6–168 h
       budgetCap      = null,        // null = full wallet
       includeCorpBps = false,
@@ -7525,6 +7526,11 @@ app.post('/api/queue-planner', security.apiLimiter, security.verifyEveToken, asy
     } = req.body;
 
     const safeRegionId = VALID_REGIONS.includes(parseInt(regionId)) ? parseInt(regionId) : 10000002;
+    // Was hardcoded to reuse safeRegionId (the SELL hub) for material pricing
+    // too — reported by the user: the shortfall panel priced materials at
+    // wherever "Sell At" was set, ignoring "Buy In" entirely. Materials are
+    // bought at the buy-in hub, so price them from there.
+    const safeMaterialRegionId = VALID_REGIONS.includes(parseInt(materialRegionId)) ? parseInt(materialRegionId) : safeRegionId;
     const safeHorizon  = Math.min(168, Math.max(6, parseInt(horizonHours) || 72));
     const horizonDays  = safeHorizon / 24;
 
@@ -7570,12 +7576,14 @@ app.post('/api/queue-planner', security.apiLimiter, security.verifyEveToken, asy
     const globalTeFactor = calcGlobalTeFactor({ skillMap, structureTeBonus, implants });
 
     // ── Prices for material cost re-scoring and shortfall valuation ──────────
-    // Follows the safeRegionId the user actually selected — was hardcoded to
-    // Jita regardless of region, so the shortfall panel priced materials at a
-    // different market than fetchQueueCandidates was scoring recommendations
-    // against (same request, two different hubs). Falls back to Jita if the
-    // selected region's cache isn't warm yet.
-    const prices = regionPriceCache.get(safeRegionId)?.prices || jitaPricesCache || {};
+    // Follows safeMaterialRegionId (the "Buy In" hub) — materials are what get
+    // purchased, so they should be priced where the user actually buys, which
+    // is not necessarily the same hub fetchQueueCandidates scores/ranks
+    // recommendations against (that's the "Sell At" hub, safeRegionId — finished
+    // goods revenue). This used to reuse safeRegionId for both, so the
+    // shortfall panel silently priced materials at wherever "Sell At" was set.
+    // Falls back to Jita if the selected region's cache isn't warm yet.
+    const prices = regionPriceCache.get(safeMaterialRegionId)?.prices || jitaPricesCache || {};
 
     // ── Job cost inputs (EIV × SCI + SCC + facility tax) ──────────────────────
     // Both calls are cheap, pre-warmed in-memory reads (same functions

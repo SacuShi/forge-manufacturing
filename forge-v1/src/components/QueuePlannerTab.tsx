@@ -69,7 +69,10 @@ interface QueuePlannerTabProps {
   queueCharacters: QueueCharacter[];
   /** Always the primary character's token — server session data lives under the primary */
   primaryToken: string | null;
+  /** "Sell At" hub — scores/ranks recommendations by where finished goods are sold */
   regionId: number;
+  /** "Buy In" hub — prices materials (per-recommendation cost + aggregate shortfall) where they're actually purchased */
+  materialRegionId: number;
   onSelectItem: (typeId: number, name: string) => void;
 }
 
@@ -107,7 +110,7 @@ function initials(name: string): string {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-const QueuePlannerTab: FC<QueuePlannerTabProps> = ({ queueCharacters, primaryToken, regionId, onSelectItem }) => {
+const QueuePlannerTab: FC<QueuePlannerTabProps> = ({ queueCharacters, primaryToken, regionId, materialRegionId, onSelectItem }) => {
   const [result,        setResult]        = useState<QueuePlanResult | null>(null);
   const [loading,       setLoading]       = useState(false);
   const [error,         setError]         = useState<string | null>(null);
@@ -149,6 +152,7 @@ const QueuePlannerTab: FC<QueuePlannerTabProps> = ({ queueCharacters, primaryTok
 
     apiPost<QueuePlanResult & { code?: string }>('/api/queue-planner', {
       regionId,
+      materialRegionId,
       horizonHours,
       budgetCap,
       includeCorpBps,
@@ -182,12 +186,12 @@ const QueuePlannerTab: FC<QueuePlannerTabProps> = ({ queueCharacters, primaryTok
           setLoading(false);
         }
       });
-  }, [primaryToken, queueCharacters, regionId, horizonHours, budgetCapInput, includeCorpBps, activityFilter]);
+  }, [primaryToken, queueCharacters, regionId, materialRegionId, horizonHours, budgetCapInput, includeCorpBps, activityFilter]);
 
   // Keep runPlanRef pointing at the latest closure so the retry setTimeout never calls a stale version
   useEffect(() => { runPlanRef.current = runPlan; }, [runPlan]);
 
-  useEffect(() => { if (primaryToken) runPlan(); }, [primaryToken, regionId]);  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (primaryToken) runPlan(); }, [primaryToken, regionId, materialRegionId]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // Clean up any pending retry on unmount
   useEffect(() => () => { if (sessionRetryRef.current) clearTimeout(sessionRetryRef.current); }, []);
@@ -490,7 +494,8 @@ const QueuePlannerTab: FC<QueuePlannerTabProps> = ({ queueCharacters, primaryTok
           <p className="qp-footnote">
             ISK/hr = estimated profit ÷ effective build time (ME/TE/skills/structure applied) ·
             profit is net of materials, job cost (SCI + SCC + facility tax), and your sales fees —
-            but does NOT include haul cost, unlike the per-item True Profit panel · Jita sell prices ·
+            but does NOT include haul cost, unlike the per-item True Profit panel ·
+            materials priced at your Buy In hub, finished goods at your Sell At hub ·
             runs capped at {result.horizonHours}h horizon and market liquidity ·
             character assignments are suggestive — start on whichever character meets the skill requirements
           </p>
