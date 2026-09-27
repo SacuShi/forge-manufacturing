@@ -60,7 +60,7 @@ import type {
   InterHubHaulResult,
 } from './types';
 import { MARKETS } from './components/MarketSelector';
-import { useAuth }       from './hooks/useAuth';
+import { useAuth, REMEMBER_PROMPT_SHOWN_KEY } from './hooks/useAuth';
 import { useItemDetail } from './hooks/useItemDetail';
 import { useItemNames }  from './hooks/useItemNames';
 import { useTrueCost }   from './hooks/useTrueCost';
@@ -283,12 +283,12 @@ const AppShell: FC = () => {
     if (auth.status !== 'authed') return;
     if (!auth.rememberEnabled) return;
     if (auth.rememberedCharacters.length === 0) return;
-    if (sessionStorage.getItem('forge_remember_prompt_shown') === 'true') return;
+    if (sessionStorage.getItem(REMEMBER_PROMPT_SHOWN_KEY) === 'true') return;
     setShowRestorePrompt(true);
   }, [auth.status, auth.rememberEnabled, auth.rememberedCharacters]);
 
   const dismissRestorePrompt = useCallback(() => {
-    sessionStorage.setItem('forge_remember_prompt_shown', 'true');
+    sessionStorage.setItem(REMEMBER_PROMPT_SHOWN_KEY, 'true');
     setShowRestorePrompt(false);
   }, []);
   const handleLoadRemembered = useCallback((ids: number[]) => {
@@ -1361,7 +1361,7 @@ const AppShell: FC = () => {
           <RememberedCharactersModal
             characters={auth.rememberedCharacters}
             onLoad={handleLoadRemembered}
-            onNotNow={dismissRestorePrompt}
+            onDone={dismissRestorePrompt}
             onForgetAll={handleForgetAllRemembered}
           />
         )}

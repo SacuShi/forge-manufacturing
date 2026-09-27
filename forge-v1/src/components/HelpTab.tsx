@@ -15,7 +15,7 @@ const S = {
   h1: {
     fontSize: 20,
     fontWeight: 700,
-    color: 'var(--color-accent)',
+    color: 'var(--color-accent-primary)',
     letterSpacing: 2,
     textTransform: 'uppercase' as const,
     marginBottom: 4,
@@ -33,7 +33,7 @@ const S = {
   h2: {
     fontSize: 13,
     fontWeight: 700,
-    color: 'var(--color-accent)',
+    color: 'var(--color-accent-primary)',
     letterSpacing: 1.5,
     textTransform: 'uppercase' as const,
     marginBottom: 10,
@@ -55,7 +55,7 @@ const S = {
   tip: {
     background: 'var(--color-bg-secondary)',
     border: '1px solid var(--color-border-light)',
-    borderLeft: '3px solid var(--color-accent)',
+    borderLeft: '3px solid var(--color-accent-primary)',
     borderRadius: 4,
     padding: '10px 14px',
     marginBottom: 12,

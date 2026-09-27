@@ -252,7 +252,7 @@ const LPStoreTab: FC<LPStoreTabProps> = ({ onSelectItem, selectedTypeId, lpPoint
                 borderBottom: lpPanelOpen ? '1px solid var(--color-border-light)' : 'none',
               }}
             >
-              <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-accent)', letterSpacing: '0.06em' }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-accent-primary)', letterSpacing: '0.06em' }}>
                 LP WALLET
               </span>
               {hasData && (
@@ -305,7 +305,7 @@ const LPStoreTab: FC<LPStoreTabProps> = ({ onSelectItem, selectedTypeId, lpPoint
                             key={fName}
                             style={{
                               borderRadius: 6, minWidth: 200, maxWidth: 260,
-                              border: `1px solid ${isActive ? 'var(--color-accent)' : 'var(--color-border-light)'}`,
+                              border: `1px solid ${isActive ? 'var(--color-accent-primary)' : 'var(--color-border-light)'}`,
                               background: isActive ? 'rgba(0,180,255,0.05)' : 'var(--color-bg-input)',
                               overflow: 'hidden',
                               transition: 'border-color 0.15s',
@@ -380,8 +380,8 @@ const LPStoreTab: FC<LPStoreTabProps> = ({ onSelectItem, selectedTypeId, lpPoint
                                     cursor: 'pointer', textAlign: 'center', fontWeight: 600,
                                     letterSpacing: '0.04em', textTransform: 'uppercase',
                                     background: isActive ? 'rgba(0,180,255,0.15)' : 'rgba(255,255,255,0.04)',
-                                    border: `1px solid ${isActive ? 'var(--color-accent)' : 'var(--color-border-light)'}`,
-                                    color: isActive ? 'var(--color-accent)' : 'var(--color-text-muted)',
+                                    border: `1px solid ${isActive ? 'var(--color-accent-primary)' : 'var(--color-border-light)'}`,
+                                    color: isActive ? 'var(--color-accent-primary)' : 'var(--color-text-muted)',
                                   }}
                                 >
                                   {isActive ? '✓ Filtering store — click to clear' : 'Filter store to this faction ↓'}
@@ -424,7 +424,7 @@ const LPStoreTab: FC<LPStoreTabProps> = ({ onSelectItem, selectedTypeId, lpPoint
                         <button
                           type="button"
                           onClick={e => { e.stopPropagation(); setMyLPOnly(false); setFactionId(0); }}
-                          style={{ marginLeft: 4, fontSize: 10, color: 'var(--color-accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                          style={{ marginLeft: 4, fontSize: 10, color: 'var(--color-accent-primary)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
                         >
                           × Clear filter
                         </button>
@@ -637,7 +637,7 @@ const LPStoreTab: FC<LPStoreTabProps> = ({ onSelectItem, selectedTypeId, lpPoint
                         <img src={itemIconUrl(o.type_id, 32, /blueprint|reaction formula/i.test(o.item_name) ? 'bpc' : 'icon')} alt="" width={24} height={24}
                           style={{ borderRadius: 3, flexShrink: 0 }}
                           onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
-                        <span style={{ color: 'var(--color-accent)' }}>{o.item_name}</span>
+                        <span style={{ color: 'var(--color-accent-primary)' }}>{o.item_name}</span>
                         {canAfford && (
                           <span title={`You can buy ${fmtNum(o.maxBuys ?? null)} of these`} style={{
                             fontSize: 9, fontWeight: 700, padding: '1px 4px', borderRadius: 3,

@@ -4,13 +4,14 @@
 // "Remember my characters" is on. Lets the user pick which ones to reload
 // instantly (no EVE SSO redirect) instead of re-adding every alt by hand.
 
-import { useState, type FC } from 'react';
+import { useState, useEffect, type FC } from 'react';
 import type { RememberedCharacter } from '../types';
 
 interface RememberedCharactersModalProps {
   characters: RememberedCharacter[];
   onLoad:     (characterIds: number[]) => void;
-  onNotNow:   () => void;
+  /** Close without loading anyone — whatever's checked is simply not acted on */
+  onDone:      () => void;
   onForgetAll: () => void;
 }
 
@@ -39,7 +40,7 @@ const S = {
     fontWeight: 700,
     letterSpacing: 1.5,
     textTransform: 'uppercase' as const,
-    color: 'var(--color-accent)',
+    color: 'var(--color-accent-primary)',
     marginBottom: 6,
   },
   subtitle: {
@@ -99,7 +100,7 @@ const S = {
     textDecoration: 'underline',
   },
   primaryBtn: {
-    background: 'var(--color-accent)',
+    background: 'var(--color-accent-primary)',
     border: 'none',
     borderRadius: 6,
     cursor: 'pointer',
@@ -131,11 +132,21 @@ function formatLastUsed(iso: string): string {
 }
 
 const RememberedCharactersModal: FC<RememberedCharactersModalProps> = ({
-  characters, onLoad, onNotNow, onForgetAll,
+  characters, onLoad, onDone, onForgetAll,
 }) => {
   const [selected, setSelected] = useState<Set<number>>(
     () => new Set(characters.filter((c) => !c.needsReauth).map((c) => c.characterId))
   );
+
+  // Re-sync defaults if `characters` arrives/changes after this modal already
+  // mounted (e.g. the parent's remember-list fetch resolves a beat later than
+  // the modal itself appears) — a plain useState lazy initializer only runs
+  // once on mount, so without this a late-arriving list could render with
+  // nothing checked and no way to tell why.
+  useEffect(() => {
+    setSelected(new Set(characters.filter((c) => !c.needsReauth).map((c) => c.characterId)));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [characters]);
 
   const toggle = (id: number) => {
     setSelected((prev) => {
@@ -179,8 +190,8 @@ const RememberedCharactersModal: FC<RememberedCharactersModalProps> = ({
             Forget all
           </button>
           <div>
-            <button type="button" style={S.secondaryBtn} onClick={onNotNow}>
-              Not now
+            <button type="button" style={S.secondaryBtn} onClick={onDone}>
+              Done
             </button>
             <button
               type="button"

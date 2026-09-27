@@ -91,6 +91,15 @@ const SESSION_START_KEY    = 'forge_session_start';
 // callback to decide whether to ask the server to capture this alt's refresh
 // token. Survives the redirect the same way ADDING_ALT_KEY does.
 const REMEMBER_ADD_KEY     = 'forge_remember_this_add';
+// One-shot marker for the "Welcome back" restore popup — set the first time
+// it's shown (or dismissed) this browser tab session, AND pre-emptively right
+// before an alt-add SSO redirect (see addCharacter below). That second part
+// matters: adding an alt reloads the whole page just like a fresh login does,
+// and without marking it here first, the popup would pop up again right after
+// adding an alt — a jarring interruption mid-workflow, reported by the user.
+// Exported so App.tsx (which owns the actual show/hide state) reads/writes
+// the same key instead of a duplicated string literal.
+export const REMEMBER_PROMPT_SHOWN_KEY = 'forge_remember_prompt_shown';
 
 const INACTIVITY_TIMEOUT_MS = 20 * 60 * 1000; // 20 min
 const ABSOLUTE_TIMEOUT_MS   = 60 * 60 * 1000; // 1 hour
@@ -889,6 +898,11 @@ export function useAuth(): AuthState & {
     sessionStorage.setItem(SESSION_STATE_KEY, state);
     sessionStorage.setItem(ADDING_ALT_KEY, 'true');
     if (rememberEnabled) sessionStorage.setItem(REMEMBER_ADD_KEY, 'true');
+    // Pre-emptively mark the restore popup as "shown" for this tab session —
+    // this redirect is about to reload the whole page (see REMEMBER_PROMPT_SHOWN_KEY
+    // comment above), and adding a character mid-session shouldn't surface a
+    // "reload your old characters?" prompt as a side effect of that reload.
+    sessionStorage.setItem(REMEMBER_PROMPT_SHOWN_KEY, 'true');
     setAddingAlt(true);
 
     window.location.href =

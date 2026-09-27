@@ -53,7 +53,7 @@ const S = {
     fontWeight: 700,
     letterSpacing: 1.5,
     textTransform: 'uppercase' as const,
-    color: 'var(--color-accent)',
+    color: 'var(--color-accent-primary)',
   },
   closeBtn: {
     background: 'none',
@@ -102,7 +102,7 @@ const S = {
     fontWeight: 700,
     letterSpacing: 1,
     textTransform: 'uppercase' as const,
-    color: 'var(--color-accent)',
+    color: 'var(--color-accent-primary)',
     background: 'rgba(var(--color-accent-rgb, 180,160,80), 0.15)',
     borderRadius: 3,
     padding: '2px 5px',
@@ -143,6 +143,19 @@ const S = {
     cursor: 'pointer',
     fontSize: 12,
     color: 'var(--color-text-secondary)',
+    letterSpacing: 0.3,
+  },
+  doneBtn: {
+    width: '100%',
+    marginTop: 10,
+    padding: '9px 0',
+    background: 'var(--color-accent-primary)',
+    border: 'none',
+    borderRadius: 6,
+    cursor: 'pointer',
+    fontSize: 12,
+    fontWeight: 700,
+    color: 'var(--color-bg-primary)',
     letterSpacing: 0.3,
   },
 };
@@ -319,6 +332,14 @@ const CharacterManagementModal: FC<CharacterManagementModalProps> = ({
           onClick={onAddCharacter}
         >
           {addingAlt ? 'Redirecting to EVE SSO…' : '+ Add Character'}
+        </button>
+
+        {/* Every action in this modal (toggle, add, remove, make primary,
+            forget) already takes effect immediately via its own API call —
+            there's nothing separate to "save". Done is just a clearly-labelled
+            second way to close, alongside the × in the header. */}
+        <button type="button" style={S.doneBtn} onClick={onClose}>
+          Done
         </button>
       </div>
     </div>
