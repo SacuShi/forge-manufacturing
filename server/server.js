@@ -2252,9 +2252,21 @@ async function pollHubESI(hubId) {
         runHubHistoryEnrichment(hubId).catch(e => console.error(`History enrichment error (${hubId}):`, e.message));
       }
     } else {
+      // Error-budget backoff (mid-pagination, unlike the all-pages-succeeded-but-
+      // empty case above) previously just logged a warning and kept whatever was
+      // already cached — with no path to Fuzzwork at all. If the currently cached
+      // book is itself empty (e.g. poisoned by an empty result from before this
+      // fix was deployed, or never successfully loaded this boot), that left the
+      // hub stuck serving nothing indefinitely, every poll cycle, since backoff
+      // alone never triggers a fallback. Fuzzwork doesn't touch ESI's rate limit,
+      // so it's safe to use here regardless of why ESI backed off.
       meta.fetching = false;
       meta.lastError = 'error-budget-backoff';
       console.warn(`⚠ ${cfg.name} ESI poll backed off (low error budget) — keeping last good book`);
+      if (!hubBooks[hubId] || hubBooks[hubId].size === 0) {
+        console.warn(`⚠ ${cfg.name} has no usable cached book — trying Fuzzwork`);
+        return pollFuzzworkHub(hubId); // schedules its own next poll — don't schedule here too
+      }
     }
   } catch (err) {
     meta.fetching = false;
