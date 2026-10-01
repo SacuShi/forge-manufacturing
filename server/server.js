@@ -2218,6 +2218,24 @@ async function pollHubESI(hubId) {
         const spreadPct = (bestSell && bestBuy) ? (spread / bestSell) * 100 : 0;
         newBook.set(typeId, { sell: bestSell, buy: bestBuy, spread, spreadPct, sellOrders: e.sells.length, buyOrders: e.buys.length, sellQtyTop, buyQtyTop, buyOrderBook });
       }
+      if (newBook.size === 0) {
+        // A "successful" fetch (every page returned 200, the error-budget check
+        // at line ~2189 never tripped) that still matches zero orders at a
+        // known-high-volume station (Jita, Amarr always have thousands listed)
+        // is not real data — it's degraded/rate-limited ESI pages slipping
+        // through as empty rather than erroring outright. Accepting this as
+        // success used to overwrite both hubBooks AND the persisted snapshot
+        // with an empty book, leaving nothing valid to fall back to on the
+        // next boot either (confirmed in production Oct 2026: a prior poll's
+        // empty result poisoned the snapshot, so even the boot-time snapshot
+        // load came back "0 types"). Keep whatever book we already have and
+        // let Fuzzwork fill the gap this cycle instead.
+        meta.fetching = false;
+        meta.lastError = 'empty-result-suspected-rate-limit';
+        console.warn(`⚠ ${cfg.name} ESI poll returned 0 types (suspected rate-limit degradation) — keeping last good book, trying Fuzzwork`);
+        return pollFuzzworkHub(hubId); // schedules its own next poll — don't schedule here too
+      }
+
       hubBooks[hubId] = newBook;
       Object.assign(hubMetas[hubId], { updatedAt: Date.now(), expiresAt: latestExpires || (Date.now() + TRADE_POLL_FALLBACK_MS), fetching: false, lastError: null, types: newBook.size });
       console.log(`⟳ ${cfg.name} book refreshed via ESI — ${newBook.size} types in ${((Date.now() - started) / 1000).toFixed(1)}s`);
@@ -2920,6 +2938,104 @@ async function getOrRefreshStructureToken() {
   }
   return poolToken || null;
 }
+
+// ── Keepstar structure-token (re-)authorisation flow ─────────────────────────
+// Manual recovery path for when the stored structure_token refresh token gets
+// revoked/expired (CCP returns an HTML error page instead of JSON in that case —
+// see "[KS token] DB refresh failed" in logs). Referenced by error messages
+// throughout this file and by test-keepstar-poll.js; was missing from the
+// route table entirely until restored here (found during the Oct 2026 outage
+// investigation — the normal session-pool token had been self-healing instead,
+// masking the fact that this manual path was a dead link).
+// Gated by FORGE_ADMIN_KEY (as a query param — this is a plain browser-visited
+// link, not an API call, so it can't use the X-Admin-Key header convention).
+const _ksAuthStates = new Map(); // state → expiry; short-lived CSRF nonce store
+
+function isAdminKeyValid(provided) {
+  const adminKey = process.env.FORGE_ADMIN_KEY;
+  if (!adminKey || !provided) return false;
+  const a = Buffer.from(String(provided));
+  const b = Buffer.from(adminKey);
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
+app.get('/api/ks-test-auth', (req, res) => {
+  if (!isAdminKeyValid(req.query.key)) return res.status(403).send('Forbidden — bad or missing ?key=');
+  if (!CORP_ENCRYPTION_KEY) return res.status(500).send('FORGE_CORP_KEY not configured on server');
+  if (!process.env.EVE_CLIENT_ID) return res.status(500).send('EVE_CLIENT_ID not configured on server');
+
+  const state = crypto.randomBytes(16).toString('hex');
+  _ksAuthStates.set(state, Date.now() + 10 * 60 * 1000); // 10 min to complete login
+
+  const redirectUri = `${req.protocol}://${req.get('host')}/api/ks-test-callback`;
+  const authorizeUrl = 'https://login.eveonline.com/v2/oauth/authorize?' + new URLSearchParams({
+    response_type: 'code',
+    redirect_uri:  redirectUri,
+    client_id:     process.env.EVE_CLIENT_ID,
+    scope:         'esi-markets.structure_markets.v1',
+    state,
+  });
+  res.redirect(authorizeUrl);
+});
+
+app.get('/api/ks-test-callback', async (req, res) => {
+  try {
+    const { code, state } = req.query;
+    const expiry = state && _ksAuthStates.get(state);
+    if (!expiry || Date.now() > expiry) return res.status(400).send('Invalid or expired state — start again from /api/ks-test-auth?key=...');
+    _ksAuthStates.delete(state);
+    if (!code) return res.status(400).send('Missing code');
+
+    const authHdr = 'Basic ' + Buffer.from(`${process.env.EVE_CLIENT_ID}:${process.env.EVE_CLIENT_SECRET}`).toString('base64');
+    const redirectUri = `${req.protocol}://${req.get('host')}/api/ks-test-callback`;
+    const tokenRes = await fetch('https://login.eveonline.com/v2/oauth/token', {
+      method:  'POST',
+      headers: { 'Authorization': authHdr, 'Content-Type': 'application/x-www-form-urlencoded', 'Host': 'login.eveonline.com' },
+      body:    `grant_type=authorization_code&code=${encodeURIComponent(code)}&redirect_uri=${encodeURIComponent(redirectUri)}`,
+    });
+    const tokenData = await tokenRes.json();
+    if (!tokenRes.ok || !tokenData.refresh_token) {
+      return res.status(400).send(`Token exchange failed: ${tokenData.error_description || tokenData.error || tokenRes.status}`);
+    }
+
+    // Identify the authorising character for the confirmation page (best-effort).
+    let charName = 'unknown character';
+    try {
+      const verifyRes = await fetch('https://login.eveonline.com/oauth/verify', {
+        headers: { Authorization: `Bearer ${tokenData.access_token}` },
+      });
+      if (verifyRes.ok) charName = (await verifyRes.json()).CharacterName || charName;
+    } catch (_) { /* best-effort only */ }
+
+    const enc = encryptToken(tokenData.refresh_token); // default key = CORP_ENCRYPTION_KEY
+    await dbRun(
+      `INSERT INTO structure_token (structure_id, enc_refresh_token, token_iv, token_tag, stored_at)
+       VALUES (?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(structure_id) DO UPDATE SET
+         enc_refresh_token = excluded.enc_refresh_token,
+         token_iv           = excluded.token_iv,
+         token_tag           = excluded.token_tag,
+         stored_at           = excluded.stored_at`,
+      [KEEPSTAR_STRUCTURE_ID, enc.ciphertext, enc.iv, enc.tag]
+    );
+
+    // Drop the in-memory pool so the next Keepstar fetch re-reads the fresh DB token
+    // immediately instead of waiting out whatever stale window it had cached.
+    _ksTkPool.token = null;
+    _ksTkPool.expiry = 0;
+    _ksTkPool.fromDb = false;
+
+    console.log(`✓ [KS auth] Structure token re-authorised by ${charName}`);
+    res.send(`<html><body style="font-family:sans-serif;padding:40px">
+      <h2 style="color:#2a2">✓ Keepstar structure token refreshed</h2>
+      <p>Authorised by <strong>${charName}</strong>. The stored refresh token has been updated — Keepstar market polling will use it on the next fetch.</p>
+    </body></html>`);
+  } catch (err) {
+    console.error('[KS auth] Callback failed:', err.message);
+    res.status(500).send(`Error: ${err.message}`);
+  }
+});
 
 // ── Haulage provider rate tables (Phase 2) ────────────────────────────────────
 // Approximate published rates — versioned. Users should verify against provider

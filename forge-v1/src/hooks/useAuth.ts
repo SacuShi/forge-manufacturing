@@ -989,8 +989,15 @@ export function useAuth(): AuthState & {
     const res = await apiPost<{ results: Array<{ characterId: number; name: string; access_token?: string; error?: string }> }>(
       '/api/remember/restore', { characterIds }, token
     );
+    // Sequential, not fire-and-forget: each alt's load triggers a full ESI sync
+    // (assets, blueprints, skills, jobs, wallet, standings, PI). Auto-restore now
+    // runs on every login (not gated behind a manual click anymore), so firing
+    // all of them concurrently here stacks extra ESI load on exactly the moment
+    // — right after a server restart, when the precompute job and hub pollers
+    // are already contending for the same ESI rate-limit budget — where it hurts
+    // most (see the Oct 2026 Jita/Amarr Station Trading outage).
     for (const r of res.results) {
-      if (r.access_token) loadAltCharacterData(r.access_token);
+      if (r.access_token) await loadAltCharacterData(r.access_token);
     }
     // Refresh the list so lastUsedAt / needsReauth reflect what just happened.
     fetchRememberState(token);
