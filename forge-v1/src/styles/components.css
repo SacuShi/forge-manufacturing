@@ -36,26 +36,6 @@
 .header-left  { display: flex; align-items: center; gap: 8px; }
 .header-right { display: flex; align-items: center; gap: 8px; }
 
-.logo {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--color-accent-primary);
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: 2px;
-  text-decoration: none;
-  margin-right: 4px;
-  flex-shrink: 0;
-}
-
-.logo-icon {
-  width: 20px;
-  height: 20px;
-  background: var(--color-accent-primary);
-  clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
-  flex-shrink: 0;
-}
 
 /* FORGE logo with pale blue hexagon and backronym */
 .forge-logo-container {
@@ -102,13 +82,6 @@
 .forge-letter {
   color: var(--color-accent-primary);
   font-weight: 600;
-}
-
-/* Forge SVG icon — themed via CSS so it responds to light/dark */
-.forge-icon path {
-  stroke: var(--color-accent-primary);
-  fill: var(--color-accent-primary);
-  fill-opacity: 0.15;
 }
 
 .btn {
@@ -2677,7 +2650,6 @@ tr:hover .ticker-pin-btn,
 }
 
 .login-logo    { display: flex; align-items: center; justify-content: center; }
-.login-logo .logo-icon { width: 48px; height: 48px; }
 
 .login-title    { font-size: 28px; font-weight: 700; letter-spacing: 4px; color: var(--color-accent-primary); }
 .login-subtitle { font-size: 12px; color: var(--color-text-tertiary); line-height: 1.6; }

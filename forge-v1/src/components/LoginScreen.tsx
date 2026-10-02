@@ -10,6 +10,7 @@
  */
 
 import type { FC } from 'react';
+import forgeLogo from '../assets/forge-logo.png';
 
 interface LoginScreenProps {
   onLogin: () => void;
@@ -21,7 +22,7 @@ const LoginScreen: FC<LoginScreenProps> = ({ onLogin, error, sessionExpired }) =
   <div className="login-screen">
     {/* ── Branding ──────────────────────────────────────────────────────────── */}
     <div className="login-logo">
-      <span className="logo-icon" aria-hidden="true" style={{ width: 32, height: 32 }} />
+      <img src={forgeLogo} alt="" aria-hidden="true" width={64} height={64} />
     </div>
 
     <h1 className="login-title">FORGE</h1>

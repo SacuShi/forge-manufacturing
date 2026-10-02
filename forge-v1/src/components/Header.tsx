@@ -21,6 +21,7 @@
 import type { FC } from 'react';
 import type { CharacterInfo, Market } from '../types';
 import { MarketSelector } from './MarketSelector';
+import forgeLogo from '../assets/forge-logo.png';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -97,20 +98,7 @@ const Header: FC<HeaderProps> = ({
         {/* Logo mark with backronym */}
         <div className="forge-logo-container" aria-label="FORGE Manufacturing Intelligence">
           <div className="forge-logo">
-            {/* Pale blue hexagon SVG */}
-            <svg
-              width="24"
-              height="24"
-              viewBox="0 0 24 24"
-              fill="none"
-              xmlns="http://www.w3.org/2000/svg"
-              className="forge-icon"
-            >
-              <path
-                d="M12 2L20.66 7V17L12 22L3.34 17V7L12 2Z"
-                strokeWidth="2"
-              />
-            </svg>
+            <img src={forgeLogo} alt="" className="forge-icon" width={24} height={24} />
             <span className="forge-text">FORGE</span>
           </div>
           <div className="forge-backronym">
