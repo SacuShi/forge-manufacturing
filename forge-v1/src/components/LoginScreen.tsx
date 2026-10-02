@@ -22,7 +22,7 @@ const LoginScreen: FC<LoginScreenProps> = ({ onLogin, error, sessionExpired }) =
   <div className="login-screen">
     {/* ── Branding ──────────────────────────────────────────────────────────── */}
     <div className="login-logo">
-      <img src={forgeLogo} alt="" aria-hidden="true" width={64} height={64} />
+      <img src={forgeLogo} alt="" aria-hidden="true" width={128} height={128} />
     </div>
 
     <h1 className="login-title">FORGE</h1>
