@@ -129,6 +129,36 @@
   --font-body-size: 13.5px;
   --font-line-height: 1.7;
 }
+/* Droid Sans: confirmed in use on zKillboard — a known-readable choice
+   among EVE fan tools, not just a guess at "sci-fi" styling. */
+[data-font='droidsans'] {
+  --font-sans: 'Droid Sans', system-ui, -apple-system, sans-serif;
+  --font-body-size: 13px;
+  --font-line-height: 1.55;
+}
+/* Orbitron: geometric sci-fi display face, common in space-game dashboards.
+   Not built for small body text, so sized up slightly with extra tracking
+   to stay legible rather than just decorative. */
+[data-font='orbitron'] {
+  --font-sans: 'Orbitron', system-ui, -apple-system, sans-serif;
+  --font-body-size: 13px;
+  --font-line-height: 1.6;
+  letter-spacing: 0.02em;
+}
+/* Rajdhani: sci-fi/techy but still has real lowercase letterforms, so it
+   reads fine at body sizes unlike pure display faces (Orbitron). */
+[data-font='rajdhani'] {
+  --font-sans: 'Rajdhani', system-ui, -apple-system, sans-serif;
+  --font-body-size: 14px;
+  --font-line-height: 1.5;
+}
+/* Share Tech Mono: an alternative terminal/mono look to the default
+   Courier New FORGE theme, same sci-fi-console register but less generic. */
+[data-font='sharetechmono'] {
+  --font-sans: 'Share Tech Mono', 'Courier New', monospace;
+  --font-body-size: 12.5px;
+  --font-line-height: 1.55;
+}
 
 /* ── Light mode — system preference fallback ────────────────────────────────── */
 @media (prefers-color-scheme: light) {

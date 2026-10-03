@@ -201,6 +201,10 @@ const Header: FC<HeaderProps> = ({
             <option value="inter">Inter</option>
             <option value="roboto">Roboto</option>
             <option value="lexend">Lexend (dyslexia-friendly)</option>
+            <option value="droidsans">Droid Sans</option>
+            <option value="rajdhani">Rajdhani (sci-fi)</option>
+            <option value="orbitron">Orbitron (sci-fi display)</option>
+            <option value="sharetechmono">Share Tech Mono</option>
           </select>
         </div>
 
