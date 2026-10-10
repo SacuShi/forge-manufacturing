@@ -249,6 +249,52 @@ async function importReactionFormulas(bpData) {
   console.log(`  ✓ Inserted ${inserted} reaction formulas (${materialsInserted} materials), ${skipped} already existed`);
 }
 
+// ── Step 3b: Manufacturing blueprints missing from the pre-seeded set ──────────
+// The original manufacturing rows were seeded outside this script, so new
+// blueprints CCP adds (e.g. the Akoman) never got a recipe. Insert only the
+// ones that are absent; existing rows are never touched.
+
+async function importMissingManufacturingBlueprints(bpData) {
+  console.log('\n═══ Step 3b: missing manufacturing blueprints ═══');
+
+  let inserted = 0, materialsInserted = 0, present = 0;
+  const added = [];
+
+  await dbRun('BEGIN TRANSACTION');
+
+  for (const [bpId, bp] of Object.entries(bpData)) {
+    const act = bp.activities?.manufacturing;
+    if (!act) continue;
+
+    const product   = Object.values(act.products || {})[0];
+    const materials = Object.values(act.materials || {});
+    if (!product || materials.length === 0) continue;
+
+    const bpIdInt = parseInt(bpId);
+    const result = await dbRun(
+      `INSERT OR IGNORE INTO blueprints (blueprint_id, product_id, product_quantity, build_time, activity_id)
+       VALUES (?, ?, ?, ?, 1)`,
+      [bpIdInt, product.type_id, product.quantity || 1, act.time || 0]
+    );
+
+    if (result.changes === 0) { present++; continue; }
+
+    for (const mat of materials) {
+      await dbRun(
+        `INSERT OR IGNORE INTO blueprint_materials (blueprint_id, material_id, quantity) VALUES (?, ?, ?)`,
+        [bpIdInt, mat.type_id, mat.quantity]
+      );
+      materialsInserted++;
+    }
+    inserted++;
+    added.push(bpIdInt);
+  }
+
+  await dbRun('COMMIT');
+  console.log(`  ✓ Added ${inserted} new manufacturing blueprints (${materialsInserted} materials), ${present} already present`);
+  if (added.length) console.log(`  New blueprint IDs: ${added.join(', ')}`);
+}
+
 // ── Step 4: Ensure reaction component items exist in items table ───────────────
 
 async function ensureReactionItems(bpData, typesData) {
@@ -1141,6 +1187,7 @@ async function main() {
     await addMetaLevel(typesData);
     await importBlueprintSkills(bpData);
     await importReactionFormulas(bpData);
+    await importMissingManufacturingBlueprints(bpData);
     await ensureReactionItems(bpData, typesData);
     await ensureAllBlueprintItems(typesData);
     await importAllTypes(typesData);
