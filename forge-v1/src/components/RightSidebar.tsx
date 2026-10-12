@@ -21,7 +21,7 @@
  *   - No dangerouslySetInnerHTML.
  */
 
-import { useMemo, useState, useCallback, useRef, useEffect, Fragment, type FC } from 'react';
+import { useMemo, useState, useCallback, useRef, useEffect, Fragment, type FC, type ReactElement } from 'react';
 import type { ItemDetail, ItemDetailApiResponse, EsiBlueprint, Market, TrueCostResponse, AltCharacter, MaterialBreakdownResponse, BreakdownMaterial, JumpClone, MaterialStockCheckResponse, InterHubArbRow, InterHubHaulResult } from '../types';
 import { INVENTION_DECRYPTORS } from '../types';
 import { apiPost } from '../api/client';
@@ -49,8 +49,8 @@ interface RightSidebarProps {
   trueCostLoading: boolean;
   trueCostError:   string | null;
   onClose:         () => void;
-  /** Open the manufacturing setup modal */
-  onOpenSettings:  () => void;
+  /** Open the manufacturing setup modal (optionally scrolled to a section, e.g. 'haulage') */
+  onOpenSettings:  (section?: 'haulage') => void;
   /** Called when a material row or chain item is clicked — drills into that item */
   onSelectItem:    (typeId: number, name: string) => void;
   /** Navigate back one step in the drill-down history */
@@ -70,6 +70,8 @@ interface RightSidebarProps {
   // v1.20 — market liquidity for the selected item (drives the "days to clear" note)
   selectedVolume:       number | null;
   selectedLiquidityRisk: string | null;
+  /** 'jita' = this hub has no trading data for the item, so selectedVolume is Jita's */
+  selectedVolumeSource?: 'hub' | 'jita' | null;
   // v1.17.1 — implant selector for True Profit ISK/hr (default: none)
   activeImplants:       number[];
   /** v1.32.0 — jump clones (each may have mfg implants; drives the clone selector options) */
@@ -100,6 +102,8 @@ interface RightSidebarProps {
 // ── Constants ────────────────────────────────────────────────────────────────
 
 import { itemIconUrl } from '../utils/icons';
+import { jobQuantity } from '../utils/jobQuantity';
+import { priceFromSupply } from '../utils/hubSupply';
 
 // v1.17.1 — manufacturing-time implants offered in the True Profit implant selector.
 // Mirrors the server's INDUSTRY_IMPLANTS (mfg_time entries). type_id → {short, pct}.
@@ -133,23 +137,30 @@ const ChainTree: FC<ChainTreeProps> = ({ parentTypeId, regionId, ownedBlueprints
   const [data, setData]       = useState<MaterialBreakdownResponse | null>(breakdownCache.get(cacheKey) ?? null);
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState(false);
+  const [retry, setRetry]     = useState(0);   // bumps while the hub's prices are still loading
 
   useEffect(() => {
     const cached = breakdownCache.get(cacheKey);
     if (cached) { setData(cached); return; }
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
     setLoading(true);
     setError(false);
     apiPost<MaterialBreakdownResponse>('/api/material-breakdown', {
       typeId: parentTypeId, regionId, ownedBlueprints,
     })
       .then(res => { if (!cancelled) { breakdownCache.set(cacheKey, res); setData(res); } })
-      .catch(() => { if (!cancelled) setError(true); })
+      .catch(() => {
+        if (cancelled) return;
+        setError(true);
+        // most likely the hub's prices are still loading (HTTP 503): try again a few times
+        if (retry < 4) retryTimer = setTimeout(() => setRetry(n => n + 1), 6000);
+      })
       .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
     // ownedBlueprints reference is stable per render of RightSidebar; key on the IDs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [parentTypeId, regionId]);
+  }, [parentTypeId, regionId, retry]);
 
   const indent = 8 + depth * 12;
 
@@ -255,6 +266,13 @@ const ChainRow: FC<ChainRowProps> = ({ mat, regionId, ownedBlueprints, depth, on
 
         {/* Build-vs-buy verdict — the core chain insight */}
         <span style={{ fontSize: 9, flexShrink: 0, marginLeft: 4, textAlign: 'right' }}>
+          {(mat.priceScope === 'jita' || mat.priceScope === 'history' || mat.priceScope === 'none') && (
+            <span className="price-source-hist" title={mat.priceScope === 'jita'
+              ? 'None for sale at this hub — the buy price is Jita\'s current lowest sell (imported).'
+              : mat.priceScope === 'history' ? 'No sell orders at this hub or Jita — the 30-day average.' : 'No price available.'}>
+              {mat.priceScope === 'jita' ? 'J' : mat.priceScope === 'history' ? '~' : '?'}
+            </span>
+          )}
           {buildTotal != null ? (
             <>
               <span style={{
@@ -352,6 +370,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
   onBuildRunsChange,
   selectedVolume,
   selectedLiquidityRisk,
+  selectedVolumeSource = null,
   activeImplants,
   jumpClones,
   selectedImplants,
@@ -435,8 +454,10 @@ const RightSidebar: FC<RightSidebarProps> = ({
   // Falls back to blueprint ME only before True Cost data loads, then upgrades.
   // When blueprint not owned: ME = 0 → raw quantities regardless of structure/rigs.
   const blueprintME = blueprint?.material_efficiency ?? 0;
-  const effectiveME = trueCostData?.manufacturing_setup?.effective_me ?? blueprintME;
-  const meFactor    = Math.max(0, 1 - effectiveME / 100);
+  // The server returns the one material multiplier it priced the job with (blueprint ME ×
+  // structure × the saved rigs that cover THIS item, each at its security-scaled value).
+  const meFactor    = trueCostData?.manufacturing_setup?.material_multiplier
+                      ?? Math.max(0, 1 - blueprintME / 100);
 
   // ── Build runs free-input ────────────────────────────────────────────────
   // Local string state for immediate display feedback; parent (App.tsx) is
@@ -480,14 +501,16 @@ const RightSidebar: FC<RightSidebarProps> = ({
   const [copiedShortfall, setCopiedShortfall] = useState(false);
 
   const copyShortfall = useCallback(() => {
-    if (!apiDetail?.buildInfo?.materials) return;
+    // Until True Profit has loaded, the multiplier ignores your structure and rigs, so the list
+    // would over-state what to buy. Wait for the server's real multiplier.
+    if (!apiDetail?.buildInfo?.materials || !trueCostData?.manufacturing_setup) return;
     const runs = Math.max(1, parseInt(runsInputVal, 10) || 1);
     // Use same effective ME as the material list (blueprint + structure + rig bonuses)
     const mf = meFactor;
     const lines = apiDetail.buildInfo.materials
       .map(m => ({
         m,
-        short: Math.max(0, Math.max(1, Math.ceil(m.needed * mf)) * runs - m.have),
+        short: Math.max(0, jobQuantity(m.needed, runs, mf) - m.have),
       }))
       .filter(({ short }) => short > 0)
       .map(({ m, short }) => `${m.name} ${short}`);
@@ -507,11 +530,18 @@ const RightSidebar: FC<RightSidebarProps> = ({
         apply();
       } catch (_) { /* silent — clipboard unavailable */ }
     });
-  }, [apiDetail, runsInputVal, meFactor]);
+  }, [apiDetail, trueCostData, runsInputVal, meFactor]);
 
   // ── Shortfall list (materials short for the current runs/ME) ──────────────
   // Lifted out of the render IIFE so it can drive the stock-check fetch below.
-  // ME + runs-adjusted: mirrors /api/true-cost — max(1, ceil(qty × meFactor)) × runs
+  // ME + runs-adjusted: mirrors /api/true-cost — one rounding per job, ≥ 1 per run
+  // Price a purchase of `qty` units of a material from its supply (the hub's own orders first, the
+  // remainder imported from Jita) — the same algorithm /api/true-cost uses (utils/hubSupply.ts).
+  const buyFor = (m: { supply?: import('../utils/hubSupply').MaterialSupply | null; unitCost?: number }, qty: number) => {
+    if (m.supply) return priceFromSupply(m.supply, qty);
+    return null;
+  };
+
   const missing = useMemo(() => {
     if (!apiDetail?.buildInfo?.materials) return [];
     return apiDetail.buildInfo.materials
@@ -519,7 +549,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
         ...m,
         shortForRuns: Math.max(
           0,
-          Math.max(1, Math.ceil(m.needed * meFactor)) * displayRuns - m.have
+          jobQuantity(m.needed, displayRuns, meFactor) - m.have
         ),
       }))
       .filter(m => m.shortForRuns > 0);
@@ -531,23 +561,30 @@ const RightSidebar: FC<RightSidebarProps> = ({
   // of rows, so there's no hover-storm risk to guard against.
   const [stockCheck,        setStockCheck]        = useState<MaterialStockCheckResponse | null>(null);
   const [stockCheckOpen,    setStockCheckOpen]     = useState(false);
+  const [stockRetry,        setStockRetry]         = useState(0);
 
   useEffect(() => {
     setStockCheckOpen(false); // collapse the expanded detail when the item/shortfall changes
     if (missing.length === 0) { setStockCheck(null); return; }
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
     apiPost<MaterialStockCheckResponse>('/api/material-stock-check', {
       materials: missing.map(m => ({ materialId: m.materialId, needed: m.shortForRuns })),
       regionId:  materialRegionId,
       walletISK,
     })
-      .then(res => { if (!cancelled) setStockCheck(res); })
+      .then(res => {
+        if (cancelled) return;
+        setStockCheck(res && res.verdict ? res : null);
+        // the hub's price cache was still loading: ask again shortly
+        if (!(res && res.verdict) && res?.pricesWarm === false && stockRetry < 8) retryTimer = setTimeout(() => setStockRetry(n => n + 1), 5000);
+      })
       .catch(() => { if (!cancelled) setStockCheck(null); });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
     // missing is a derived array (new reference each render) — key on its actual
     // contents (material ids + shortfall qty) instead to avoid a refetch loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [missing.map(m => `${m.materialId}:${m.shortForRuns}`).join(','), materialRegionId, walletISK]);
+  }, [missing.map(m => `${m.materialId}:${m.shortForRuns}`).join(','), materialRegionId, walletISK, stockRetry]);
 
   // Since MainContent now passes product type_id, selectedTypeId IS the product typeId.
   // We only need a fallback strip for edge cases where blueprint type_id was passed.
@@ -1197,8 +1234,13 @@ const RightSidebar: FC<RightSidebarProps> = ({
                 </div>
 
                 {/* Cost summary row */}
+                {apiDetail.pricesWarm === false && (
+                  <div className="bp-ownership-note" style={{ marginBottom: 6 }}>
+                    ⏳ {materialMarketName}{selectedMarket.id !== materialRegionId ? ` / ${selectedMarket.name}` : ''} prices are still loading — this refreshes automatically.
+                  </div>
+                )}
                 {apiDetail.buildInfo.sellPriceSource === 'history_30d' && (
-                  <div className="price-hist-notice" style={{ marginBottom: 6 }}>
+                  <div className="bp-ownership-note" style={{ marginBottom: 6 }}>
                     ⚠ No live sell orders — profit estimated from 30-day trade average
                   </div>
                 )}
@@ -1210,10 +1252,9 @@ const RightSidebar: FC<RightSidebarProps> = ({
                 {/* Materials list — every row is clickable → drills into that item */}
                 <div className="mat-list">
                   {apiDetail.buildInfo.materials.map((mat) => {
-                    // ME + runs-adjusted needed — mirrors /api/true-cost formula exactly:
-                    //   max(1, ceil(base_qty × meFactor)) × runs
-                    // meFactor = 1 when blueprint not owned (ME 0), actual ME when owned.
-                    const needForRuns  = Math.max(1, Math.ceil(mat.needed * meFactor)) * displayRuns;
+                    // ME + runs-adjusted needed — mirrors /api/true-cost exactly: one rounding
+                    // per job, ≥ 1 per run. meFactor = the server's material multiplier.
+                    const needForRuns  = jobQuantity(mat.needed, displayRuns, meFactor);
                     const shortForRuns = Math.max(0, needForRuns - mat.have);
                     const ok           = shortForRuns <= 0;
                     // canManufacture: set by server from blueprints DB (any game blueprint exists)
@@ -1282,13 +1323,35 @@ const RightSidebar: FC<RightSidebarProps> = ({
                           {mat.have.toLocaleString()}/{needForRuns.toLocaleString()}
                         </span>
 
-                        {/* Per-material cost — runs-adjusted */}
-                        {mat.unitCost != null && mat.unitCost > 0 && (
-                          <span style={{ fontSize: 9, color: 'var(--color-text-tertiary)',
-                            marginLeft: 4, flexShrink: 0 }}>
-                            {formatISK(mat.unitCost * needForRuns)}
-                          </span>
-                        )}
+                        {/* Per-material cost — runs-adjusted, priced from the hub's own orders with the
+                            remainder imported from Jita (flagged). */}
+                        {(() => {
+                          const p    = buyFor(mat, needForRuns);
+                          const cost = p ? p.cost : (mat.unitCost ?? 0) * needForRuns;
+                          const tag  = !p ? null
+                            : p.scope === 'jita'    ? { t: 'J', tip: `None for sale at ${materialMarketName} — priced at Jita's lowest sell; has to be imported.` }
+                            : p.scope === 'mixed'   ? { t: 'J', tip: p.jitaQty > 0
+                                ? `${p.hubQty.toLocaleString()} from ${materialMarketName}; ${p.jitaQty.toLocaleString()} priced at Jita and imported${p.unfilledQty > 0 ? `; ${p.unfilledQty.toLocaleString()} more aren't listed anywhere and are priced at the last visible price` : ''}.`
+                                : `${p.hubQty.toLocaleString()} from ${materialMarketName}; the other ${p.unfilledQty.toLocaleString()} aren't listed at Jita either and are priced at the last visible price.` }
+                            : p.scope === 'history' ? { t: '~', tip: 'No sell orders at this hub or at Jita — priced at the 30-day average.' }
+                            : p.scope === 'none'    ? { t: '?', tip: 'No sell orders at this hub or at Jita, and no price history.' }
+                            : p.shortStock          ? { t: '!', tip: 'Not enough listed to fill this quantity — the rest is priced at the last visible price, so the real cost may be higher.' }
+                            : null;
+                          if (!(cost > 0) && !tag) return null;
+                          return (
+                            <>
+                              {cost > 0 && (
+                                <span style={{ fontSize: 9, color: 'var(--color-text-tertiary)',
+                                  marginLeft: 4, flexShrink: 0 }}>
+                                  {formatISK(cost)}
+                                </span>
+                              )}
+                              {tag && (
+                                <span className="price-source-hist" title={tag.tip}>{tag.t}</span>
+                              )}
+                            </>
+                          );
+                        })()}
 
                         {/* Drill-in arrow hint */}
                         <span style={{
@@ -1331,7 +1394,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
                   const message = stockCheck.verdict === 'ok'
                     ? `Missing materials are available on the ${materialMarketName} market — buying them now costs ${formatISK(stockCheck.totalCost)}, within your ${formatISK(walletISK)} wallet. Use Multibuy below to purchase the shortfall.`
                     : stockCheck.verdict === 'mixed'
-                    ? `${thinNames.join(', ')} ${thinNames.length === 1 ? 'has' : 'have'} limited stock on the ${materialMarketName} market right now — not enough listed to fill the full shortage. The rest can be bought for ~${formatISK(stockCheck.totalCost)}.`
+                    ? `${thinNames.join(', ')} ${thinNames.length === 1 ? 'has' : 'have'} limited stock on the ${materialMarketName} market right now — not enough listed to fill the full shortage. ${materialRegionId === 10000002 ? `Jita doesn't have enough listed; the rest is priced at the last visible price, so buying everything costs at least ~${formatISK(stockCheck.totalCost)}.` : `What ${materialMarketName} can't supply is priced at Jita and has to be imported; buying everything costs ~${formatISK(stockCheck.totalCost)}.`}`
                     : `Materials are in stock on the ${materialMarketName} market, but buying them (${formatISK(stockCheck.totalCost)}) would exceed your ${formatISK(walletISK)} wallet.`;
 
                   return (
@@ -1368,7 +1431,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
                 {/* Missing Materials banner + Multibuy — full-width, below stock-check pill */}
                 {missing.length > 0 && (() => {
                   const shortfallTotal = missing.reduce(
-                    (s, m) => s + m.shortForRuns * (m.unitCost ?? 0), 0
+                    (s, m) => s + (buyFor(m, m.shortForRuns)?.cost ?? m.shortForRuns * (m.unitCost ?? 0)), 0
                   );
                   const canAffordShortfall = shortfallTotal > 0 && walletISK >= shortfallTotal;
                   return (
@@ -1384,6 +1447,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
                           {shortfallTotal > 0 && <> · {formatISK(shortfallTotal)} to buy</>}
                         </span>
                         <button
+                          disabled={!trueCostData?.manufacturing_setup}
                           onClick={(e) => { e.stopPropagation(); copyShortfall(); }}
                           title={`Copy shortfall list to clipboard in EVE Multibuy format.\nPaste directly into the Multibuy window (right-click → Paste).\nQuantities are raw blueprint amounts × runs (before ME adjustment).`}
                           style={{
@@ -1822,20 +1886,144 @@ const RightSidebar: FC<RightSidebarProps> = ({
             )}
 
             {trueCostData && !trueCostLoading && !trueCostData.prices_warm && (
-              <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', padding: '4px 0 2px',
-                            display: 'flex', alignItems: 'center', gap: 5 }}>
-                <span style={{ color: 'var(--color-accent-primary)' }}>⟳</span>
-                Using cached estimates — live prices updating in background.
+              <div className="bp-ownership-note">
+                ⟳ Using cached estimates — live prices are updating in the background.
               </div>
             )}
 
+            {/* Data-quality notices — every one is an amber box (same as the "no blueprint" box): each says
+                exactly which assumption a figure leans on, never a silent substitution. */}
             {trueCostData && !trueCostLoading && trueCostData.sell_price_anomaly && (
-              <div style={{ fontSize: 11, color: 'var(--color-warning, #e8a838)', padding: '4px 0 2px',
-                            display: 'flex', alignItems: 'center', gap: 5 }}>
-                <span>⚠</span>
-                Outlier sell order — profit uses median price, not lowest ask.
+              <div className="bp-ownership-note">
+                ⚠ Outlier sell order — profit uses median price, not lowest ask.
               </div>
             )}
+            {trueCostData && !trueCostLoading && trueCostData.skills_source === 'none' && (
+              <div className="bp-ownership-note">
+                ⚠ Your skills aren&apos;t loaded on the server yet — fees and build time assume untrained
+                skills (level 0). Reload the page to refresh them.
+              </div>
+            )}
+            {trueCostData && !trueCostLoading && (trueCostData.manufacturing_setup?.invalid_rig_ids?.length ?? 0) > 0 && (
+              <div className="bp-ownership-note">
+                ⚠ {trueCostData.manufacturing_setup?.invalid_rig_ids?.length ?? 0} saved rig(s) are not valid in the
+                current game data and count as no bonus. Open Mfg Setup to re-select them.
+              </div>
+            )}
+            {trueCostData && !trueCostLoading && (trueCostData.manufacturing_setup?.ignored_rig_ids?.length ?? 0) > 0 && (
+              <div className="bp-ownership-note">
+                ⚠ {trueCostData.manufacturing_setup?.ignored_rig_ids?.length ?? 0} saved rig(s) can&apos;t apply to
+                your structure (wrong size, no structure, or more than 3) and are ignored. Open Mfg Setup to fix them.
+              </div>
+            )}
+            {trueCostData && !trueCostLoading
+              && (trueCostData.manufacturing_setup?.rigs?.length ?? 0) > 0
+              && trueCostData.manufacturing_setup.security_known === false && (
+              <div className="bp-ownership-note">
+                ⚠ Your build system&apos;s security isn&apos;t known — rig bonuses are shown at highsec values.
+              </div>
+            )}
+            {/* Where the money figures' prices came from: the hub's own orders, Jita for what the hub can't supply. */}
+            {trueCostData && !trueCostLoading && (() => {
+              const ms = trueCostData.material_sourcing;
+              const hc = trueCostData.haul_cost;
+              const nameOf = (id: number) =>
+                apiDetail?.buildInfo?.materials?.find(m => m.materialId === id)?.name
+                ?? itemNames.get(id) ?? `Material #${id}`;
+              const list = (ids: number[]) => {
+                const names = ids.map(nameOf);
+                return names.length <= 3 ? names.join(', ') : `${names.slice(0, 3).join(', ')} and ${names.length - 3} more`;
+              };
+              const haulLink = (
+                <button type="button" onClick={() => onOpenSettings('haulage')}
+                  style={{ background: 'none', border: 'none', padding: 0, color: 'inherit', font: 'inherit',
+                           textDecoration: 'underline', cursor: 'pointer' }}>
+                  ⚙ Mfg Setup → Haulage
+                </button>
+              );
+              const notes: ReactElement[] = [];
+              let haulAdviceShown = false;   // only one "set up haulage" box per panel
+              if (ms) {
+                const none = ms.lines.filter(l => l.scope === 'jita').map(l => l.material_id);
+                const part = ms.lines.filter(l => l.scope === 'mixed').map(l => l.material_id);
+                if (none.length + part.length > 0) {
+                  if (hc.haul_enabled === false || hc.leg1_configured === false) haulAdviceShown = true;
+                  notes.push(
+                    <div key="import" className="bp-ownership-note">
+                      ⚠ {none.length > 0 && <>{list(none)} {none.length === 1 ? 'is' : 'are'} not stocked at {materialMarketName}</>}
+                      {none.length > 0 && part.length > 0 && '; '}
+                      {part.length > 0 && <>{list(part)} {part.length === 1 ? 'is' : 'are'} only partly stocked there</>}
+                      . What {materialMarketName} can&apos;t supply is priced at Jita ({formatISK(ms.import_cost)}) and has to be imported.{' '}
+                      {hc.haul_enabled === false || hc.leg1_configured === false
+                        ? <>For an accurate True Profit, set up your haulage costs in {haulLink}.</>
+                        : hc.import_leg_route_known === false
+                          ? <>The route from Jita to your build system couldn&apos;t be looked up, so the import freight is NOT included — try again shortly.</>
+                          : (hc.import_leg_cost ?? 0) > 0
+                            ? <>Import freight is included: {formatISK(hc.import_leg_cost ?? 0)} for {Math.round(hc.import_leg_volume_m3 ?? 0).toLocaleString()} m³ over {hc.import_leg_jumps ?? 0} jumps, using your Leg 1 haulage settings ({haulLink}).</>
+                            : hc.haul_enabled === undefined ? null
+                              : <>No import freight was added (your build system is Jita, or these items have no volume data).</>}
+                    </div>
+                  );
+                }
+                const short = ms.lines.filter(l => l.short_stock).map(l => l.material_id);
+                if (short.length > 0) {
+                  notes.push(
+                    <div key="short" className="bp-ownership-note">
+                      ⚠ Not enough {list(short)} is listed at {materialMarketName} or at Jita to fill the full quantity — the rest is priced at the last visible price, so the real cost may be higher.
+                    </div>
+                  );
+                }
+                const hist = ms.lines.filter(l => l.scope === 'history').map(l => l.material_id);
+                const nothing = ms.lines.filter(l => l.scope === 'none').map(l => l.material_id);
+                if (!ms.jita_unavailable && hist.length + nothing.length > 0) {
+                  notes.push(
+                    <div key="nodata" className="bp-ownership-note">
+                      ⚠ {hist.length > 0 && <>No one is selling {list(hist)} at {materialMarketName} or Jita — priced at its 30-day average. </>}
+                      {nothing.length > 0 && <>{list(nothing)} {nothing.length === 1 ? 'has' : 'have'} no price at all, so {nothing.length === 1 ? 'it is' : 'they are'} missing from the material cost.</>}
+                    </div>
+                  );
+                }
+                if (ms.jita_unavailable && ms.lines.some(l => l.short_stock || l.scope === 'none' || l.scope === 'history')) {
+                  notes.push(
+                    <div key="nojita" className="bp-ownership-note">
+                      ⚠ Jita prices aren&apos;t loaded yet, so imports couldn&apos;t be priced. Refresh in a moment.
+                    </div>
+                  );
+                }
+              }
+              if (trueCostData.sell_price_scope === 'jita') {
+                notes.push(
+                  <div key="sell" className="bp-ownership-note">
+                    ⚠ {displayName} isn&apos;t for sale at {selectedMarket.name}, so the sale price is Jita&apos;s current lowest sell
+                    and fees and freight assume you sell it at Jita.{' '}
+                    {haulAdviceShown ? null
+                      : hc.haul_enabled === false ? <>Set up your haulage costs in {haulLink} to include the freight to Jita.</>
+                      : hc.leg2_route_known === false ? null
+                      : hc.leg2_jumps === 0 ? <>You build in Jita&apos;s system, so there is no freight to Jita.</>
+                      : hc.leg2_cost === 0 ? <>Set up your Leg 2 (goods out) haulage in {haulLink} to include the freight to Jita.</>
+                      : <>Freight to Jita is included.</>}
+                  </div>
+                );
+              } else if (trueCostData.sell_listing && (trueCostData.sell_listing.spread_ratio ?? 0) >= 5) {
+                const sl = trueCostData.sell_listing;
+                notes.push(
+                  <div key="thin" className="bp-ownership-note">
+                    ⚠ Thin market at {selectedMarket.name}: the lowest sell is {Math.round(sl.spread_ratio ?? 0)}× the highest buy
+                    ({formatISK(sl.hub_highest_buy)}){sl.units_listed != null && <> with only {sl.units_listed.toLocaleString()} unit{sl.units_listed === 1 ? '' : 's'} listed</>}.
+                    Nobody may be paying that price — treat this profit as a best case.
+                  </div>
+                );
+              }
+              if (hc.haul_enabled && (hc.leg1_route_known === false || hc.leg2_route_known === false)) {
+                notes.push(
+                  <div key="route" className="bp-ownership-note">
+                    ⚠ Couldn&apos;t look up the route for {hc.leg1_route_known === false && hc.leg2_route_known === false ? 'your materials-in and goods-out freight' : hc.leg1_route_known === false ? 'your materials-in freight' : 'your goods-out freight'}, so
+                    that freight is NOT included in this figure. Try again shortly.
+                  </div>
+                );
+              }
+              return <>{notes}</>;
+            })()}
 
             {trueCostData && !trueCostLoading && (
               <div className="cost-breakdown-row">
@@ -1889,10 +2077,26 @@ const RightSidebar: FC<RightSidebarProps> = ({
                               <span style={{ color: 'var(--color-success)' }}>+{strMe}%</span>
                             </div>
                           )}
-                          {rigMe > 0 && (
-                            <div className="cost-tooltip-row">
-                              <span>Rig ME ({rigMe.toFixed(1)}% total)</span>
-                              <span style={{ color: 'var(--color-success)' }}>+{rigMe.toFixed(1)}%</span>
+                          {(trueCostData.manufacturing_setup?.rigs ?? []).map((r) => (
+                            <div key={r.id} className="cost-tooltip-row" style={r.applies ? undefined : { opacity: 0.55 }}>
+                              <span>
+                                {r.name.replace(/^Standup /, '')}
+                                {r.applies
+                                  ? ` (${r.base_me_pct}%${r.security_mult !== 1 ? ` × ${r.security_mult}` : ''})`
+                                  : (trueCostData.manufacturing_setup?.product_family_known === false
+                                      ? ' — coverage unknown for this item type'
+                                      : ' — not for this item type')}
+                              </span>
+                              <span style={{ color: r.applies ? 'var(--color-success)' : undefined }}>
+                                {r.applies ? `+${r.eff_me_pct.toFixed(2)}%` : '—'}
+                              </span>
+                            </div>
+                          ))}
+                          {rigMe === 0 && (trueCostData.manufacturing_setup?.rigs?.length ?? 0) > 0
+                            && trueCostData.manufacturing_setup?.product_family_known === false && (
+                            <div className="cost-tooltip-row" style={{ opacity: 0.7 }}>
+                              <span>Rig coverage for this item type isn&apos;t mapped — no rig bonus applied</span>
+                              <span>—</span>
                             </div>
                           )}
                           {(isT2 || strMe > 0 || rigMe > 0) && (
@@ -1944,7 +2148,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
                       <button
                         type="button"
                         className="cost-configure-link"
-                        onClick={onOpenSettings}
+                        onClick={() => onOpenSettings()}
                       >
                         Configure
                       </button>
@@ -2131,8 +2335,8 @@ const RightSidebar: FC<RightSidebarProps> = ({
                 {/* Box 4 — True Profit (with full formula + haulage breakdown tooltip) */}
                 {(() => {
                   const h = trueCostData.haul_cost;
-                  const leg1Active = h.leg1_method !== 'user_defined' || h.leg1_rate > 0;
-                  const leg2Active = h.leg2_method !== 'user_defined' || h.leg2_rate > 0;
+                  const leg1Active = h.leg1_method !== 'user_defined' || h.leg1_rate > 0 || h.leg1_configured === true;
+                  const leg2Active = h.leg2_method !== 'user_defined' || h.leg2_rate > 0 || h.leg2_configured === true;
                   const haulConfigured = leg1Active || leg2Active;
                   // True when every active leg is self-haul (no contracted freight cost)
                   const allSelfHaul =
@@ -2231,6 +2435,15 @@ const RightSidebar: FC<RightSidebarProps> = ({
                                       : h.leg1_jumps > 0 ? ' · loading…' : ' · same location')
                                 }
                               </div>
+                            )}
+                            {/* Jita import leg — materials the buy hub can't supply */}
+                            {(h.import_leg_cost ?? 0) > 0 && (
+                              <div className="cost-tooltip-sub">
+                                {`Jita import: ${formatISK(h.import_leg_cost ?? 0)} · ${Math.round(h.import_leg_volume_m3 ?? 0).toLocaleString()} m³ · ${h.import_leg_jumps ?? 0} jumps`}
+                              </div>
+                            )}
+                            {h.import_leg_route_known === false && (
+                              <div className="cost-tooltip-sub">Jita import: route unknown — freight not included</div>
                             )}
                             {/* Leg 2 — Goods out */}
                             {leg2Active && (
@@ -2340,10 +2553,17 @@ const RightSidebar: FC<RightSidebarProps> = ({
               }
 
               return (
-                <div className="liquidity-note" title={liq.tip}>
-                  <span className={`liq-dot liq-${liq.dot}`} aria-hidden="true" />
-                  <span>{body}</span>
-                </div>
+                <>
+                  <div className="liquidity-note" title={liq.tip}>
+                    <span className={`liq-dot liq-${liq.dot}`} aria-hidden="true" />
+                    <span>{body}</span>
+                  </div>
+                  {selectedVolumeSource === 'jita' && selectedLiquidityRisk !== 'contract_only' && (
+                    <div className="bp-ownership-note">
+                      ⚠ There&apos;s no trading data for {selectedMarket.name} yet, so this daily volume is Jita&apos;s.
+                    </div>
+                  )}
+                </>
               );
             })()}
 
@@ -2383,8 +2603,8 @@ const RightSidebar: FC<RightSidebarProps> = ({
             {trueCostData && !trueCostLoading && (() => {
               const h = trueCostData.haul_cost;
               // Show box if any method is non-default or rates > 0
-              const leg1Active = h.leg1_method !== 'user_defined' || h.leg1_rate > 0;
-              const leg2Active = h.leg2_method !== 'user_defined' || h.leg2_rate > 0;
+              const leg1Active = h.leg1_method !== 'user_defined' || h.leg1_rate > 0 || h.leg1_configured === true;
+              const leg2Active = h.leg2_method !== 'user_defined' || h.leg2_rate > 0 || h.leg2_configured === true;
               if (!leg1Active && !leg2Active) return null;
 
               const methodLabel = (m: string, ship: string | null, label: string | null) => {
@@ -2425,6 +2645,24 @@ const RightSidebar: FC<RightSidebarProps> = ({
                           <span style={{ color: 'var(--color-text-tertiary)' }}>
                             {leg1Active && h.leg1_jumps === 0 ? 'Same location' : 'Not configured'}
                           </span>
+                        </div>
+                      )}
+                      {/* Jita import leg — materials the buy hub can't supply */}
+                      {(h.import_leg_cost ?? 0) > 0 && (
+                        <>
+                          <div className="cost-tooltip-row">
+                            <span>Jita import{jumpStr(h.import_leg_jumps ?? 0)}</span>
+                            <span>{formatISK(h.import_leg_cost ?? 0)}</span>
+                          </div>
+                          <div className="cost-tooltip-sub">
+                            Materials the buy hub can&apos;t supply · {Math.round(h.import_leg_volume_m3 ?? 0).toLocaleString()} m³ · Leg 1 settings
+                          </div>
+                        </>
+                      )}
+                      {h.import_leg_route_known === false && (
+                        <div className="cost-tooltip-row">
+                          <span>Jita import</span>
+                          <span style={{ color: 'var(--color-warning)' }}>route unknown — not included</span>
                         </div>
                       )}
                       {/* Leg 2 */}

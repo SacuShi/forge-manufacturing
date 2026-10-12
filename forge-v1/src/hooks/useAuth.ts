@@ -406,6 +406,9 @@ export function useAuth(): AuthState & {
             done,
             activityId: job.activity_id,
             endDate:    job.end_date,
+            facilityId: job.facility_id,
+            blueprintTypeId: job.blueprint_type_id,
+            cost:       job.cost,
           };
         });
         addLog('Industry Jobs', 'ok', `${activeJobs.length} active`);
@@ -723,6 +726,9 @@ export function useAuth(): AuthState & {
           done,
           activityId: job.activity_id,
           endDate:    job.end_date,
+          facilityId: job.facility_id,
+          blueprintTypeId: job.blueprint_type_id,
+          cost:       job.cost,
         };
       });
 
@@ -737,12 +743,18 @@ export function useAuth(): AuthState & {
         standingsScopeGranted = true;
       }
 
-      // Note: we deliberately do NOT post session-data here for the alt's own token.
-      // App.tsx fires a debounced combined re-POST (under the primary's token) once
-      // all alts finish loading, which overwrites the primary's server session with
-      // the merged skills/assets/blueprints. Posting individually per alt would:
-      //   (a) fire N extra requests during login burst → hits rate limit, and
-      //   (b) get immediately overwritten by the combined re-POST anyway.
+      // We deliberately do NOT post the full session-data here for the alt's own token: App.tsx fires
+      // one debounced combined re-POST (under the primary's token) once all alts finish loading, and
+      // per-alt full sessions would hit the rate limit in the login burst and run structure discovery.
+      // What each alt DOES need on its own is its skills and standings: when it is picked as the "fee
+      // character" in the item panel, the server prices True Profit with that character's levels, and
+      // without them it would fall back to level 0. This is a small, separate request.
+      if (skillData.length > 0) {
+        apiPost('/api/skill-snapshot', {
+          skills:    skillData,
+          standings: standingsScopeGranted ? standingsData : null,
+        }, acc).catch(() => { /* non-fatal: the panel then says the skills aren't loaded */ });
+      }
 
       const bpoCount = bData.filter((bp) => bp.quantity === -1).length;
 

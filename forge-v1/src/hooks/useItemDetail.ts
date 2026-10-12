@@ -44,6 +44,8 @@ export function useItemDetail(
     }
 
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let tries = 0;
     setDetail(null);
     setLoading(true);
     setError(null);
@@ -51,38 +53,46 @@ export function useItemDetail(
     const headers: HeadersInit = { 'Content-Type': 'application/json' };
     if (token) (headers as Record<string, string>)['Authorization'] = `Bearer ${token}`;
 
-    apiFetch('/api/item-details', {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        typeId,
-        assets,
-        ownedBlueprints: blueprints,
-        regionId,
-        materialRegionId,
-      }),
-    })
-      .then(async (res) => {
-        if (!res.ok) {
-          const body = (await res.json().catch(() => ({}))) as { error?: string };
-          throw new Error(body.error ?? `HTTP ${res.status}`);
-        }
-        return res.json() as Promise<ItemDetailApiResponse>;
+    // A hub whose price cache is still loading answers pricesWarm:false (it never quotes Jita data
+    // under the hub's name). Ask again quietly a few times so the figures appear without a click.
+    const load = () => {
+      apiFetch('/api/item-details', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          typeId,
+          assets,
+          ownedBlueprints: blueprints,
+          regionId,
+          materialRegionId,
+        }),
       })
-      .then((data) => {
-        if (!cancelled) {
+        .then(async (res) => {
+          if (!res.ok) {
+            const body = (await res.json().catch(() => ({}))) as { error?: string };
+            throw new Error(body.error ?? `HTTP ${res.status}`);
+          }
+          return res.json() as Promise<ItemDetailApiResponse>;
+        })
+        .then((data) => {
+          if (cancelled) return;
           setDetail(data);
           setLoading(false);
-        }
-      })
-      .catch((e: unknown) => {
-        if (!cancelled) {
-          setError(e instanceof Error ? e.message : String(e));
-          setLoading(false);
-        }
-      });
+          if (data.pricesWarm === false && tries < 6) {
+            tries += 1;
+            timer = setTimeout(load, 6000);
+          }
+        })
+        .catch((e: unknown) => {
+          if (!cancelled) {
+            setError(e instanceof Error ? e.message : String(e));
+            setLoading(false);
+          }
+        });
+    };
+    load();
 
-    return () => { cancelled = true; };
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
   // assets and blueprints are included so the panel refreshes if the user's
   // holdings change while the same item is selected (e.g. after an alt loads).
   // They are stable memoised references in App.tsx and only change when data changes.

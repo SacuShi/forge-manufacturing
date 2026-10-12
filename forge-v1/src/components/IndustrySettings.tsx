@@ -13,7 +13,10 @@
  */
 
 import { useState, useEffect, useCallback, useRef, useMemo, type FC } from 'react';
-import type { IndustrySettings, HaulMethod, Market, SystemSearchResult } from '../types';
+import type {
+  IndustrySettings, HaulMethod, Market, SystemSearchResult,
+  IndustryRigsResponse, StructureFitSuggestion, JobCostCheck,
+} from '../types';
 import { apiGet, apiPost } from '../api/client';
 import { FREIGHT_SHIPS } from '../data/freightShips';
 
@@ -158,6 +161,15 @@ const STRUCTURE_RIG_SIZE: Record<number, 'M' | 'L' | 'XL'> = {
 
 const MAX_RIGS = 3;
 
+/** hi ≥ 0.45 (shown as 0.5+), low 0 < sec < 0.45, null ≤ 0 (incl. wormholes). Same rule as the server. */
+function securityClassOf(sec: number | null | undefined): 'hi' | 'low' | 'null' | null {
+  if (typeof sec !== 'number' || !isFinite(sec)) return null;
+  if (sec >= 0.45) return 'hi';
+  if (sec > 0)     return 'low';
+  return 'null';
+}
+const SEC_CLASS_LABEL = { hi: 'highsec', low: 'lowsec', null: 'nullsec / wormhole' } as const;
+
 // ── Props ─────────────────────────────────────────────────────────────────────
 
 // Hub system IDs — used to auto-zero haul legs when mfg system matches a hub
@@ -225,14 +237,24 @@ interface IndustrySettingsProps {
   onSaved:      (settings: IndustrySettings) => void;
   /** v1.7 — primary + alt characters with skill data for self-haul ship selection */
   characters?:  CharacterSkillData[];
+  /** Section to scroll to when the modal opens (the haulage notices in the item panel link here) */
+  focusSection?: 'haulage' | null;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
 const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
   open, token, initial, sourceMarket, sellMarket, onClose, onSaved,
-  characters = [],
+  characters = [], focusSection = null,
 }) => {
+  // Scroll straight to the haulage section when opened from a haulage notice.
+  useEffect(() => {
+    if (!open || focusSection !== 'haulage') return;
+    const t = setTimeout(() => {
+      document.getElementById('settings-haulage')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    }, 120);
+    return () => clearTimeout(t);
+  }, [open, focusSection]);
   // ── Form state ─────────────────────────────────────────────────────────────
   const [systemQuery,    setSystemQuery]    = useState('');
   const [systemId,       setSystemId]       = useState<number | null>(null);
@@ -240,6 +262,15 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
   const [structureId,    setStructureId]    = useState<number | null>(null);
   const [selectedRigs,   setSelectedRigs]   = useState<number[]>([]);
   const [facilityTax,    setFacilityTax]    = useState(0);
+  // Real game stats + context that make the setup honest: security of the chosen system (rig
+  // bonuses scale by it), CCP's published rig values, rigs that were dropped, and what other
+  // FORGE pilots report for the same structure.
+  const [systemSecurity, setSystemSecurity] = useState<number | null>(null);
+  const [droppedRigCount, setDroppedRigCount] = useState(0);
+  const [sizeDroppedCount, setSizeDroppedCount] = useState(0);
+  const [rigStats,       setRigStats]       = useState<IndustryRigsResponse | null>(null);
+  const [fitSuggestions, setFitSuggestions] = useState<StructureFitSuggestion[]>([]);
+  const [jobCheck,       setJobCheck]       = useState<JobCostCheck | null>(null);
   const [expandedCats,   setExpandedCats]   = useState<Set<string>>(new Set());
 
   // ── Haulage state (Phase 1 + Phase 2) ─────────────────────────────────────
@@ -288,7 +319,18 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
       setSystemName(initial.system_name);
       setSystemQuery(initial.system_name ?? '');
       setStructureId(initial.structure_type_id);
-      setSelectedRigs(JSON.parse(initial.rig_ids || '[]') as number[]);
+      // Saved rigs that aren't in the picker's catalog (stale ids from an older picker) can't be
+      // selected, so say so instead of dropping them silently.
+      let savedRigs: number[] = [];
+      try {
+        const parsed: unknown = JSON.parse(initial.rig_ids || '[]');
+        if (Array.isArray(parsed)) savedRigs = parsed.map(Number).filter(Number.isFinite);
+      } catch { /* corrupt value → treat as no saved rigs */ }
+      const catalogIds = new Set(MANUFACTURING_RIGS.map((r) => r.type_id));
+      setSelectedRigs(savedRigs.filter((id) => catalogIds.has(id)));
+      setDroppedRigCount(savedRigs.filter((id) => !catalogIds.has(id)).length);
+      setSizeDroppedCount(0);
+      setSystemSecurity(initial.system_security ?? null);
       setFacilityTax(initial.facility_tax ?? 0);
       setHaulEnabled(initial.haul_enabled ?? false);
       setLeg1Method((initial.leg1_method ?? 'user_defined') as HaulMethod);
@@ -315,6 +357,9 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
       setSystemQuery('');
       setStructureId(null);
       setSelectedRigs([]);
+      setDroppedRigCount(0);
+      setSizeDroppedCount(0);
+      setSystemSecurity(null);
       setFacilityTax(0);
       setHaulEnabled(false);
       setLeg1Method('user_defined'); setLeg2Method('user_defined');
@@ -329,11 +374,47 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
     }
   }, [open, initial]);
 
+  // CCP's published rig values (static game data) — fetched once, shown next to each rig.
+  useEffect(() => {
+    if (!open || !token || rigStats) return;
+    let cancelled = false;
+    apiGet<IndustryRigsResponse>('/api/industry-rigs', token)
+      .then((r) => { if (!cancelled) setRigStats(r); })
+      .catch(() => { /* optional enhancement — picker works without it */ });
+    return () => { cancelled = true; };
+  }, [open, token, rigStats]);
+
+  // FORGE's install-cost estimate vs what CCP actually charged for the character's running jobs.
+  useEffect(() => {
+    if (!open || !token) { setJobCheck(null); return; }
+    let cancelled = false;
+    apiGet<JobCostCheck>('/api/job-cost-check', token)
+      .then((r) => { if (!cancelled) setJobCheck(r); })
+      .catch(() => { if (!cancelled) setJobCheck(null); });
+    return () => { cancelled = true; };
+  }, [open, token, initial]);
+
+  // What other FORGE pilots report for this system + structure type (anonymous).
+  useEffect(() => {
+    // Clear first: suggestions for the previous system/structure type must never stay visible (or
+    // be applied) while the new request is in flight.
+    setFitSuggestions([]);
+    if (!open || !token || !systemId || structureId === null) return;
+    let cancelled = false;
+    apiGet<{ suggestions: StructureFitSuggestion[] }>(
+      `/api/structure-fit-suggestions?system_id=${systemId}&structure_type_id=${structureId}`, token
+    )
+      .then((r) => { if (!cancelled) setFitSuggestions(r.suggestions ?? []); })
+      .catch(() => { if (!cancelled) setFitSuggestions([]); });
+    return () => { cancelled = true; };
+  }, [open, token, systemId, structureId]);
+
   // ── System autocomplete ────────────────────────────────────────────────────
   const handleSystemInput = useCallback((value: string) => {
     setSystemQuery(value);
     setSystemId(null);   // clear resolved system until user picks from list
     setSystemName(null);
+    setSystemSecurity(null);
     setShowSuggestions(true);
 
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -361,6 +442,7 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
   const handlePickSystem = useCallback((result: SystemSearchResult) => {
     setSystemId(result.system_id);
     setSystemName(result.system_name);
+    setSystemSecurity(result.security ?? null);
     setSystemQuery(result.system_name);
     setSuggestions([]);
     setShowSuggestions(false);
@@ -423,21 +505,41 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
     }));
   }, [rigSize]);
 
+  // Security class of the chosen system: engineering rig bonuses are multiplied by it
+  // (CCP's per-rig values: highsec ×1, lowsec ×1.9, nullsec/wormhole ×2.1 for standard rigs).
+  const secClass = securityClassOf(systemSecurity);
+  const fmtNum = (n: number) => String(Math.round(n * 100) / 100);
+  const rigStatText = (typeId: number): string | null => {
+    const s = rigStats?.rigs?.[String(typeId)];
+    if (!s) return null;
+    const mult = secClass ? (s.sec?.[secClass] ?? null) : null;
+    const scaled = (v: number) => (mult && mult !== 1 ? ` → ${fmtNum(v * mult)}% here` : '');
+    const parts: string[] = [];
+    const mat = s.matPct || s.thukkerMatPct || 0;   // Thukker rigs keep their material bonus in a separate game attribute
+    if (mat)       parts.push(`ME ${fmtNum(mat)}%${scaled(mat)}`);
+    if (s.timePct) parts.push(`TE ${fmtNum(s.timePct)}%${scaled(s.timePct)}`);
+    return parts.join(' · ') || null;
+  };
+
   // If the structure type changes (or is cleared), drop any selected rigs that
   // no longer fit the new size — prevents saving e.g. an XL rig against a
   // Raitaru after switching structures mid-edit.
   useEffect(() => {
-    setSelectedRigs((prev) => {
-      const validIds = new Set(
-        (rigSize ? MANUFACTURING_RIGS.filter((r) => r.size === rigSize) : []).map((r) => r.type_id)
-      );
-      const filtered = prev.filter((id) => validIds.has(id));
-      return filtered.length === prev.length ? prev : filtered;
-    });
-  }, [rigSize]);
+    const validIds = new Set(
+      (rigSize ? MANUFACTURING_RIGS.filter((r) => r.size === rigSize) : []).map((r) => r.type_id)
+    );
+    const kept = selectedRigs.filter((id) => validIds.has(id));
+    if (kept.length !== selectedRigs.length) {
+      setSizeDroppedCount(selectedRigs.length - kept.length);   // never drop rigs silently
+      setSelectedRigs(kept);
+    }
+  }, [rigSize, selectedRigs]);
 
   // Auto-zero: if mfg system matches the source or sell hub's main station
   const leg1AutoZero = !!(systemId && HUB_SYSTEM_IDS[sourceMarket.id] === systemId);
+  // Leg 1 is only truly "no haul" when the buy hub is Jita AND sits at the build system. For any other
+  // buy hub the Leg 1 rates still price the materials that hub can't supply, which are imported from Jita.
+  const leg1SaveZero = leg1AutoZero && sourceMarket.id === 10000002;
   const leg2AutoZero = !!(systemId && HUB_SYSTEM_IDS[sellMarket.id]   === systemId);
 
   const handleSave = useCallback(async () => {
@@ -453,10 +555,10 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
         facility_tax:      isNpc ? 0 : facilityTax,
         haul_enabled:      haulEnabled,
         // Phase 1 compat
-        leg1_haul_rate:    leg1AutoZero ? 0 : leg1Rate,
+        leg1_haul_rate:    leg1SaveZero ? 0 : leg1Rate,
         leg2_haul_rate:    leg2AutoZero ? 0 : leg2Rate,
         // Phase 2
-        leg1_method:          leg1AutoZero ? 'user_defined' : leg1Method,
+        leg1_method:          leg1SaveZero ? 'user_defined' : leg1Method,
         leg2_method:          leg2AutoZero ? 'user_defined' : leg2Method,
         leg1_collateral:      leg1Collateral,
         leg2_collateral:      leg2Collateral,
@@ -480,10 +582,15 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
         structure_type_id: structureId,
         rig_ids:           JSON.stringify(isNpc ? [] : selectedRigs),
         facility_tax:      isNpc ? 0 : facilityTax,
+        // Carry the derived fields forward so reopening the modal in the same session still
+        // scales rig values by the system's security (the save response only returns {ok:true}).
+        system_security:   systemSecurity,
+        security_class:    securityClassOf(systemSecurity),
+        invalid_rig_ids:   [],
         haul_enabled:      haulEnabled,
-        leg1_haul_rate:    leg1AutoZero ? 0 : leg1Rate,
+        leg1_haul_rate:    leg1SaveZero ? 0 : leg1Rate,
         leg2_haul_rate:    leg2AutoZero ? 0 : leg2Rate,
-        leg1_method:       leg1AutoZero ? 'user_defined' : leg1Method,
+        leg1_method:       leg1SaveZero ? 'user_defined' : leg1Method,
         leg2_method:       leg2AutoZero ? 'user_defined' : leg2Method,
         leg1_collateral:   leg1Collateral,    leg2_collateral:   leg2Collateral,
         leg1_isk_per_jump: leg1IskPerJump,    leg2_isk_per_jump: leg2IskPerJump,
@@ -501,8 +608,8 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
     } finally {
       setSaving(false);
     }
-  }, [canSave, token, systemId, systemName, structureId, isNpc, selectedRigs,
-      facilityTax, haulEnabled, leg1AutoZero, leg2AutoZero,
+  }, [canSave, token, systemId, systemName, systemSecurity, structureId, isNpc, selectedRigs,
+      facilityTax, haulEnabled, leg1AutoZero, leg1SaveZero, leg2AutoZero,
       leg1Method, leg2Method, leg1Rate, leg2Rate,
       leg1Collateral, leg2Collateral, leg1IskPerJump, leg2IskPerJump,
       leg1FlatTotal, leg2FlatTotal, leg1ServiceLabel, leg2ServiceLabel,
@@ -600,6 +707,70 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
                 {isNpc ? '— N/A for NPC station' : `(${selectedRigs.length}/${MAX_RIGS} selected)`}
               </span>
             </div>
+            {droppedRigCount > 0 && (
+              <div style={{ fontSize: 12, color: 'var(--color-warning, #e8a838)', marginBottom: 6 }}>
+                ⚠ {droppedRigCount} previously saved rig{droppedRigCount > 1 ? 's were' : ' was'} not valid in the
+                current game data and {droppedRigCount > 1 ? 'were' : 'was'} removed. Re-select your rigs
+                below, then save.
+              </div>
+            )}
+            {sizeDroppedCount > 0 && (
+              <div style={{ fontSize: 12, color: 'var(--color-warning, #e8a838)', marginBottom: 6 }}>
+                ⚠ {sizeDroppedCount} selected rig{sizeDroppedCount > 1 ? "s don't" : " doesn't"} fit this
+                structure&apos;s size and {sizeDroppedCount > 1 ? 'were' : 'was'} removed (a Raitaru takes
+                M-Set rigs, an Azbel L-Set, a Sotiyo XL-Set).
+              </div>
+            )}
+            {!isNpc && !secClass && systemId && (
+              <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginBottom: 6 }}>
+                ℹ This system&apos;s security isn&apos;t known — rig values are shown for highsec; nullsec and
+                lowsec bonuses are larger.
+              </div>
+            )}
+            {!isNpc && secClass && (
+              <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginBottom: 6 }}>
+                {systemName ?? 'This system'} is {SEC_CLASS_LABEL[secClass]}
+                {typeof systemSecurity === 'number' ? ` (security ${systemSecurity.toFixed(1)})` : ''} — rig
+                bonuses are scaled for it, as shown next to each rig. A rig only affects the item types it is built for.
+              </div>
+            )}
+            {!isNpc && fitSuggestions.length > 0 && (
+              <div style={{ border: '1px solid var(--color-border-medium)', borderRadius: 6,
+                            padding: '8px 10px', marginBottom: 8, fontSize: 12 }}>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                  Other FORGE pilots report this for {systemName ?? 'this system'}:
+                </div>
+                {fitSuggestions.slice(0, 3).map((s, i) => (
+                  <div key={`${s.rig_ids.join('-')}-${i}`}
+                       style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4 }}>
+                    <div style={{ flex: 1 }}>
+                      {s.same_structure ? <strong>Your structure: </strong> : null}
+                      {s.rig_names.map((n) => n.replace(/^Standup /, '')).join(' · ')}
+                      <span style={{ opacity: 0.7 }}>
+                        {' '}— {s.reports} pilot{s.reports > 1 ? 's' : ''}, {s.facility_tax}% tax
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn"
+                      disabled={!rigSize}
+                      onClick={() => {
+                        const allowed = new Set(
+                          MANUFACTURING_RIGS.filter((r) => r.size === rigSize).map((r) => r.type_id)
+                        );
+                        setSelectedRigs(s.rig_ids.filter((id) => allowed.has(id)).slice(0, MAX_RIGS));
+                        setFacilityTax(s.facility_tax);
+                      }}
+                    >
+                      Use these
+                    </button>
+                  </div>
+                ))}
+                <div style={{ fontSize: 11, opacity: 0.7 }}>
+                  Reported by other users — check it matches your structure before saving.
+                </div>
+              </div>
+            )}
             {RIG_CATEGORIES.map(({ category, rigs }) => (
               <div key={category} className="rig-category">
                 <button
@@ -629,7 +800,12 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
                             checked={isChecked}
                             onChange={() => handleRigToggle(rig.type_id)}
                           />
-                          <span>{rig.name}</span>
+                          <span>
+                            {rig.name}
+                            {rigStatText(rig.type_id) && (
+                              <span style={{ opacity: 0.65 }}> — {rigStatText(rig.type_id)}</span>
+                            )}
+                          </span>
                         </label>
                       );
                     })}
@@ -661,10 +837,24 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
               />
               <span style={{ color: 'var(--color-text-secondary)', fontSize: 13 }}>%</span>
             </div>
+            {jobCheck?.summary && jobCheck.summary.diff_pct !== null && (
+              <div style={{ marginTop: 10, fontSize: 12, color: 'var(--color-text-secondary)' }}>
+                <strong>Install-cost check (your saved setup):</strong> your {jobCheck.summary.compared} running manufacturing
+                job{jobCheck.summary.compared > 1 ? 's were' : ' was'} charged {fmtISK(jobCheck.summary.actual_total)} ISK;
+                FORGE estimates {fmtISK(jobCheck.summary.predicted_total)} ISK
+                ({jobCheck.summary.diff_pct > 0 ? '+' : ''}{jobCheck.summary.diff_pct.toFixed(1)}%).
+                {Math.abs(jobCheck.summary.diff_pct) > 10 &&
+                  ' A gap this large usually means the system, structure type or facility tax above does not match where you installed them.'}
+                <div style={{ fontSize: 11, opacity: 0.7 }}>
+                  The estimate uses today&apos;s system cost index; jobs paid the index in force when they were installed,
+                  so small differences are normal.
+                </div>
+              </div>
+            )}
           </div>
 
           {/* ── Haulage ───────────────────────────────────────────────────── */}
-          <div className="settings-section">
+          <div className="settings-section" id="settings-haulage">
             <div className="settings-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
                 <input type="checkbox" checked={haulEnabled} onChange={(e) => setHaulEnabled(e.target.checked)} />
@@ -723,8 +913,14 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
                         <span className="haul-leg-title">{isLeg1 ? 'Materials in' : 'Goods out'}</span>
                         <span className="haul-leg-route">{routeLabel}</span>
                       </div>
+                      {isLeg1 && sourceMarket.id !== 10000002 && (
+                        <div className="settings-label-sub" style={{ fontSize: 10, margin: '2px 0 4px' }}>
+                          These rates also price any materials {sourceMarket.name} doesn&apos;t stock — they&apos;re imported from Jita
+                          to {systemName ?? 'your build system'} and costed with the same method and rate.
+                        </div>
+                      )}
 
-                      {autoZero ? (
+                      {(isLeg1 ? leg1SaveZero : autoZero) ? (
                         <div className="haul-leg-autozero">Same location — no haul needed · 0 ISK/m³</div>
                       ) : (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>

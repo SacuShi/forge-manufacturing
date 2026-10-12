@@ -146,6 +146,7 @@ function mapToMarketItems(
       priceSource:      item.price_source ?? null,
       avg30dPrice:      item.avg_30d_price ?? null,
       avgDailyVolume:   item.avg_daily_volume ?? null,
+      volumeSource:     item.volume_source ?? null,
       liquidityRisk:    item.liquidity_risk ?? null,
       haulCostPerUnit:  item.haul_cost_per_unit ?? 0,
       haulIskPerM3:     item.haul_isk_per_m3    ?? 0,
@@ -247,6 +248,8 @@ const AppShell: FC = () => {
   // v1.2.0 — Industry settings + settings modal
   const [industrySettings, setIndustrySettings] = useState<IndustrySettings | null>(null);
   const [settingsOpen,     setSettingsOpen]     = useState(false);
+  // Which part of Mfg Setup to scroll to when it opens (e.g. the haulage notice links straight to it)
+  const [settingsFocus,    setSettingsFocus]    = useState<'haulage' | null>(null);
   // Bumped on every settings save (system/structure/rigs/tax) so useTrueCost's
   // effect re-fires — /api/true-cost reads rig_ids etc. fresh from the DB per
   // request, but none of useTrueCost's other params change on a rig pick alone,
@@ -400,12 +403,14 @@ const AppShell: FC = () => {
    * Using a string key avoids including large arrays in the effect dependency.
    */
   const combinedDataVersion = useMemo(() => {
-    const skillHash = bestSkillsArray.reduce((acc, s) => acc + s.active_skill_level, 0);
+    const skillHash = bestSkillsArray.reduce((acc, s) => acc + s.active_skill_level, 0)
+      // the main's OWN levels are posted too (fees use them), so a change there must re-post as well
+      + 1000 * auth.skills.reduce((acc, s) => acc + s.active_skill_level, 0);
     // Include sorted alt IDs so adding/removing a zero-asset alt (same counts) still
     // triggers a re-POST to keep the server session in sync.
     const altIds    = activeAltCharacters.map((a) => a.characterId).sort().join(',');
     return `${allBlueprints.length}:${combinedAssets.length}:${bestSkillsArray.length}:${skillHash}:${altIds}`;
-  }, [allBlueprints, combinedAssets, bestSkillsArray, activeAltCharacters]);
+  }, [allBlueprints, combinedAssets, bestSkillsArray, activeAltCharacters, auth.skills]);
 
   // v1.33.1 — "Can Build Now" map for Market Opportunities' Can Build pill: owned
   // materials + wallet ISK cover each owned blueprint's shortfall. Reuses
@@ -765,7 +770,8 @@ const AppShell: FC = () => {
         prices:    {},
         wallet:    auth.character?.walletISK ?? 0,
         jobs:      allActiveJobs,
-        skills:    bestSkillsArray,
+        skills:    bestSkillsArray,          // best level of each skill across all loaded characters (build filters)
+        own_skills: auth.skills,             // THIS character's own levels — fees and build time use these
         standings: auth.hasStandingsScope ? auth.primaryStandings : null,
       }, auth.token ?? undefined).catch(() => { /* non-fatal */ });
     }, 1500);
@@ -884,6 +890,7 @@ const AppShell: FC = () => {
     : null;
   const selectedVolume       = selectedItem?.avgDailyVolume ?? null;
   const selectedLiquidityRisk = selectedItem?.liquidityRisk ?? null;
+  const selectedVolumeSource  = selectedItem?.volumeSource ?? null;
 
   const handleLoadMoreMarket = useCallback(async () => {
     // Use a ref guard (not state) so the check is synchronous — prevents two rapid
@@ -1269,7 +1276,7 @@ const AppShell: FC = () => {
         onLogout={auth.logout}
         onMarketChange={market => loadMarket(market, selectedSourceMarket)}
         onSourceMarketChange={market => loadMarket(selectedMarket, market)}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={() => { setSettingsFocus(null); setSettingsOpen(true); }}
         canDockKeestar={auth.canDockKeestar}
       />
 
@@ -1384,6 +1391,9 @@ const AppShell: FC = () => {
           onSelectArbItem={handleSelectArbItem}
           regionId={selectedMarket.id}
           materialRegionId={selectedSourceMarket.id}
+          onOpenSettings={(section) => { setSettingsFocus(section ?? null); setSettingsOpen(true); }}
+          importHaulConfigured={!!industrySettings?.haul_enabled && ((industrySettings.leg1_method ?? 'user_defined') !== 'user_defined'
+            || (industrySettings.leg1_haul_rate ?? 0) > 0 || (industrySettings.leg1_isk_per_jump ?? 0) > 0 || (industrySettings.leg1_flat_total ?? 0) > 0)}
           onMarketSelect={handleItemSelect}
           onLoadMoreMarket={handleLoadMoreMarket}
           marketLoadingMore={marketLoadingMore}
@@ -1452,7 +1462,7 @@ const AppShell: FC = () => {
           trueCostLoading={trueCostLoading}
           trueCostError={trueCostError}
           onClose={handleCloseDetail}
-          onOpenSettings={() => setSettingsOpen(true)}
+          onOpenSettings={(section) => { setSettingsFocus(section ?? null); setSettingsOpen(true); }}
           onSelectItem={handleSelectItem}
           onBack={handlePanelBack}
           canGoBack={panelHistory.length > 0}
@@ -1465,6 +1475,7 @@ const AppShell: FC = () => {
           onBuildRunsChange={setBuildRuns}
           selectedVolume={selectedVolume}
           selectedLiquidityRisk={selectedLiquidityRisk}
+          selectedVolumeSource={selectedVolumeSource}
           activeImplants={auth.implants}
           jumpClones={auth.jumpClones}
           selectedImplants={selectedImplants}
@@ -1509,15 +1520,17 @@ const AppShell: FC = () => {
       {/* v1.2.0 — Manufacturing Setup modal */}
       <IndustrySettingsModal
         open={settingsOpen}
+        focusSection={settingsFocus}
         token={auth.token}
         initial={industrySettings}
         sourceMarket={selectedSourceMarket}
         sellMarket={selectedMarket}
-        onClose={() => setSettingsOpen(false)}
+        onClose={() => { setSettingsOpen(false); setSettingsFocus(null); }}
         onSaved={(settings) => {
           setIndustrySettings(settings);
           setSettingsVersion((v) => v + 1);
           setSettingsOpen(false);
+          setSettingsFocus(null);
         }}
         characters={[
           ...(auth.character ? [{

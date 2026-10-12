@@ -213,6 +213,12 @@ const ItemTable: FC<ItemTableProps> = ({
                 <span className={`num ${profitClass}`}>
                   {formatISK(item.profitPerRun)}
                 </span>
+                {item.priceSource === 'jita_fallback' && (
+                  <span
+                    className="price-source-hist"
+                    title="This hub has none listed for sale, so the sell price is Jita's current lowest sell (the sale is assumed at Jita)."
+                  >J</span>
+                )}
                 {item.priceSource === 'history_30d' && (
                   <span
                     className="price-source-hist"
@@ -271,6 +277,12 @@ const ItemTable: FC<ItemTableProps> = ({
                       <span className="num" style={{ color: 'var(--color-text-secondary)' }}>
                         {isContract ? 'contract' : formatPerDay(item.avgDailyVolume)}
                       </span>
+                      {!isContract && item.volumeSource === 'jita' && (
+                        <span
+                          className="price-source-hist"
+                          title="No trading data for this hub, so this is Jita's daily volume."
+                        >J</span>
+                      )}
                     </span>
                   </td>
                 );

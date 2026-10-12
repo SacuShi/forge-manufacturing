@@ -49,6 +49,7 @@ const ResearchTab: FC<ResearchTabProps> = ({ blueprints, regionId, onSelectItem,
   const [error, setError]     = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>('saving');
   const [buildsPerMonth, setBuildsPerMonth] = useState('10');
+  const [retry, setRetry] = useState(0);   // bumps while the hub's prices are still loading
 
   // Owned BPOs only (runs === -1) — payload the endpoint needs.
   const ownedBpos = useMemo(
@@ -61,16 +62,21 @@ const ResearchTab: FC<ResearchTabProps> = ({ blueprints, regionId, onSelectItem,
   useEffect(() => {
     if (ownedBpos.length === 0) { setData({ items: [], research_time_available: false }); return; }
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
     setLoading(true);
     setError(null);
     apiPost<ResearchRoiResponse>('/api/me-research-roi', {
       blueprints: ownedBpos, regionId, targetME: 10,
     })
       .then(res => { if (!cancelled) setData(res); })
-      .catch(() => { if (!cancelled) setError('Failed to compute research ROI.'); })
+      .catch(() => {
+        if (cancelled) return;
+        setError('Failed to compute research ROI — if the market prices are still loading this will retry shortly.');
+        if (retry < 4) retryTimer = setTimeout(() => setRetry(n => n + 1), 6000);
+      })
       .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [ownedBpos, regionId]);
+    return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
+  }, [ownedBpos, regionId, retry]);
 
   const builds = Math.max(0, parseInt(buildsPerMonth, 10) || 0);
 

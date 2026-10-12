@@ -134,6 +134,10 @@ interface MainContentProps {
   regionId: number;
   /** "Buy In" hub — Queue Planner prices materials (per-recommendation cost + shortfall) here, not at regionId (the "Sell At" hub) */
   materialRegionId: number;
+  /** Opens Mfg Setup (optionally scrolled to a section) — the planner's haulage notice links to it */
+  onOpenSettings?: (section?: 'haulage') => void;
+  /** Haulage is on AND Leg 1 has a rate/method, i.e. Jita imports can be costed (not the same as the Haul column flag) */
+  importHaulConfigured?: boolean;
 
   // v1.4.0 — Corp tab props
   token:            string | null;
@@ -204,6 +208,8 @@ const MainContent: FC<MainContentProps> = ({
   onSelectArbItem,
   regionId,
   materialRegionId,
+  onOpenSettings,
+  importHaulConfigured,
   haulConfigOpen       = false,
   onHaulConfigOpen,
   onHaulConfigClose    = () => {},
@@ -1218,6 +1224,8 @@ const MainContent: FC<MainContentProps> = ({
           regionId={regionId}
           materialRegionId={materialRegionId}
           onSelectItem={onSelectItem}
+          onOpenSettings={onOpenSettings}
+          haulConfigured={importHaulConfigured}
         />
       )}
 

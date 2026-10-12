@@ -46,6 +46,11 @@ interface AggregateMaterial {
   shortage:    number;
   jitaSell:    number;
   shortageISK: number;
+  /** 'hub' = all from the buy hub; 'mixed'/'jita' = (part of) it is imported from Jita; 'history'/'none' = no live price */
+  priceScope?: 'hub' | 'mixed' | 'jita' | 'history' | 'none' | null;
+  hubQty?:     number;
+  importQty?:  number;
+  shortStock?: boolean;
 }
 
 interface QueuePlanResult {
@@ -56,6 +61,10 @@ interface QueuePlanResult {
   totalMatSpend:      number;
   totalJobCost:       number;
   totalShortageISK:   number;
+  /** false while the buy hub's price cache is loading */
+  pricesWarm?:        boolean;
+  /** materials the buy hub can't fully supply (the rest is priced at Jita and must be imported) */
+  importMaterials?:   number;
   walletBalance:      number;
   effectiveBudget:    number;
   horizonHours:       number;
@@ -74,6 +83,10 @@ interface QueuePlannerTabProps {
   /** "Buy In" hub — prices materials (per-recommendation cost + aggregate shortfall) where they're actually purchased */
   materialRegionId: number;
   onSelectItem: (typeId: number, name: string) => void;
+  /** Opens Mfg Setup scrolled to a section — the haulage notice links to it */
+  onOpenSettings?: (section?: 'haulage') => void;
+  /** Haulage is on AND Leg 1 has a rate/method, so Jita imports can be costed */
+  haulConfigured?: boolean;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -110,7 +123,7 @@ function initials(name: string): string {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-const QueuePlannerTab: FC<QueuePlannerTabProps> = ({ queueCharacters, primaryToken, regionId, materialRegionId, onSelectItem }) => {
+const QueuePlannerTab: FC<QueuePlannerTabProps> = ({ queueCharacters, primaryToken, regionId, materialRegionId, onSelectItem, onOpenSettings, haulConfigured }) => {
   const [result,        setResult]        = useState<QueuePlanResult | null>(null);
   const [loading,       setLoading]       = useState(false);
   const [error,         setError]         = useState<string | null>(null);
@@ -463,6 +476,12 @@ const QueuePlannerTab: FC<QueuePlannerTabProps> = ({ queueCharacters, primaryTok
             )
           )}
 
+          {result.pricesWarm === false && (
+            <div className="bp-ownership-note">
+              ⏳ The Buy In hub&apos;s prices are still loading, so this plan uses its last stored estimates. Run the planner again in a few seconds.
+            </div>
+          )}
+
           {/* ── Aggregate shopping list ── */}
           {result.aggregateMaterials.length > 0 && (
             <>
@@ -472,10 +491,33 @@ const QueuePlannerTab: FC<QueuePlannerTabProps> = ({ queueCharacters, primaryTok
                   {result.aggregateMaterials.length} materials · {formatISK(result.totalShortageISK)} total
                 </span>
               </div>
+              {(result.importMaterials ?? 0) > 0 && (
+                <div className="bp-ownership-note">
+                  ⚠ {result.importMaterials} material{result.importMaterials === 1 ? " isn't" : "s aren't"} fully stocked at your Buy In hub. What it can&apos;t
+                  supply is priced at Jita and has to be imported (marked <strong>J</strong> below). These plan figures don&apos;t include freight —{' '}
+                  {haulConfigured
+                    ? <>open an item&apos;s True Profit for the figure with your import freight included.</>
+                    : <>for an accurate profit, set up your haulage costs in{' '}
+                        <button type="button" onClick={() => onOpenSettings?.('haulage')}
+                          style={{ background: 'none', border: 'none', padding: 0, color: 'inherit', font: 'inherit', textDecoration: 'underline', cursor: 'pointer' }}>
+                          ⚙ Mfg Setup → Haulage
+                        </button>.</>}
+                </div>
+              )}
               <div className="qp-mat-grid">
                 {result.aggregateMaterials.map(m => (
                   <div key={m.typeId} className="qp-mat-row">
-                    <span className="qp-mat-name">{m.name}</span>
+                    <span className="qp-mat-name">
+                      {m.name}
+                      {(m.priceScope === 'jita' || m.priceScope === 'mixed') && (
+                        <span className="price-source-hist" title={m.priceScope === 'jita'
+                          ? 'None for sale at the Buy In hub — priced at Jita and imported.'
+                          : `${(m.hubQty ?? 0).toLocaleString()} from the Buy In hub; the other ${(m.importQty ?? 0).toLocaleString()} priced at Jita and imported.`}>J</span>
+                      )}
+                      {(m.priceScope === 'history' || m.priceScope === 'none') && (
+                        <span className="price-source-hist" title="No sell orders at the Buy In hub or Jita.">?</span>
+                      )}
+                    </span>
                     <span className="qp-mat-have">{m.have > 0 ? `have ${m.have.toLocaleString()}` : '—'}</span>
                     <span className="qp-mat-short">need {m.shortage.toLocaleString()}</span>
                     <span className="qp-mat-cost">{m.shortageISK > 0 ? formatISKDisplay(m.shortageISK) : '—'}</span>

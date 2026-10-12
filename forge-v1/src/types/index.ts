@@ -1,3 +1,4 @@
+import type { MaterialSupply } from '../utils/hubSupply';
 /**
  * FORGE v1.0 — Shared TypeScript interfaces
  *
@@ -35,12 +36,14 @@ export interface MarketItem {
   buildTimeMinutes: number;
   owned: OwnedStatus;
   canBuild: boolean;
-  /** 'jita' | 'history_30d' | 'no_data' | region string — price source for sell price */
+  /** 'jita' | 'jita_fallback' (the hub lists none, so Jita's price) | 'history_30d' | 'no_data' | region string — price source for sell price */
   priceSource?: string | null;
   /** 30-day average price when sell orders are absent (display reference only) */
   avg30dPrice?: number | null;
   /** v1.20 — mean daily units traded on the market (from ESI 30-day history). Liquidity signal. */
   avgDailyVolume?: number | null;
+  /** Where avgDailyVolume came from: 'hub' = this hub's own trading; 'jita' = no data for this hub, Jita's volume shown */
+  volumeSource?: 'hub' | 'jita' | null;
   /** v1.20 — liquidity classification from the precompute: 'low_volume' | 'contract_only' | 'extreme_margin' | 'no_buy_orders' | 'suspicious_spread' | null (liquid) */
   liquidityRisk?: string | null;
   /** v1.7 — haul cost for 1 finished unit (goods-out leg) */
@@ -99,6 +102,12 @@ export interface ActiveJob {
   activityId?: number;
   /** Raw ISO end_date from ESI — used by TickerBar for live countdown */
   endDate?: string;
+  /** ESI facility_id: the station/structure the job runs in (> 2^31 for player structures) */
+  facilityId?: number;
+  /** Blueprint type_id the job was installed from */
+  blueprintTypeId?: number;
+  /** Install cost CCP actually charged (job fee + facility tax), ISK */
+  cost?: number;
 }
 
 /** v1.32.0 — Jump clone with its installed implants (from ESI /characters/{id}/clones/) */
@@ -241,6 +250,8 @@ export interface EsiJob {
   status: 'active' | 'delivered' | 'cancelled' | 'paused';
   end_date: string; // ISO 8601
   facility_id: number;
+  /** Job install cost (system fee + facility tax) charged by CCP, ISK */
+  cost?: number;
 }
 
 /** ESI character public info from /characters/{id}/ */
@@ -270,6 +281,7 @@ export interface TopProfitableItem {
   material_count: number;
   computed_at: string;
   avg_daily_volume: number | null;
+  volume_source?: 'hub' | 'jita' | null;
   market_group_id: number | null;
   liquidity_risk: string | null;
   /** 'jita' | 'history_30d' | 'no_data' | 'region_XXXXXXX' — indicates which price source was used */
@@ -316,8 +328,12 @@ export interface ItemDetailMaterial {
   have: number;
   shortage: number;
   unitCost?: number;
+  /** Where one unit would come from: the hub's own sell orders, Jita (hub has none), a 30-day average, or nowhere */
+  unitScope?: 'hub' | 'jita' | 'history' | 'none' | null;
   totalCost?: number;
   shortfallCost?: number;
+  /** The hub's and Jita's sell depth, so the panel can price any quantity (see utils/hubSupply.ts) */
+  supply?: MaterialSupply | null;
   /** True if a blueprint exists in the game DB for this material (chain drill-down available) */
   canManufacture?: boolean;
   /** PI tier if this is a planetary commodity: 1=P1 2=P2 3=P3 4=P4. Null/absent if not PI. */
@@ -401,15 +417,20 @@ export interface ItemDetailApiResponse {
     median: number;
     /** 30-day average trade price from ESI history — non-zero when no live sell orders */
     avg30d?: number;
+    /** 'jita' = the hub lists none, so this is Jita's lowest sell, not the hub's */
+    sellScope?: 'hub' | 'jita';
   };
+  /** false while the hub's price cache is loading (no Jita data is quoted in its place) */
+  pricesWarm?: boolean;
   buildInfo?: {
+    pricesWarm?: boolean;
     blueprintOwned: boolean;
     canBuild: boolean;
     materials: ItemDetailMaterial[];
     totalCost: number;
     profit: number;
     profitMargin: number;
-    /** 'live' | 'history_30d' | 'no_data' — indicates whether sell price came from live orders or historical average */
+    /** 'live' | 'jita_fallback' | 'history_30d' | 'no_data' — live orders at the hub, Jita's live price (hub lists none), or a historical average */
     sellPriceSource?: string;
   };
   /** v1.12.0 — pricing derived from public single-item exchange contracts in-region. */
@@ -452,6 +473,8 @@ export interface BreakdownMaterial {
   /** Buy-from-market unit price (sell-sourced, matching True Profit). */
   unitCost: number;
   buyPricePerUnit: number;
+  /** Where the buy price came from: the hub's own sell orders, Jita's (the hub lists none), a 30-day average, or nowhere. */
+  priceScope?: 'hub' | 'jita' | 'history' | 'none';
   /** Cheapest per-unit build cost (recursive). Null when not producible. */
   mfgCostPerUnit: number | null;
   /** True if a blueprint/reaction produces this sub-material (further expandable). */
@@ -641,6 +664,8 @@ export interface QueueCharacter {
 export interface SystemSearchResult {
   system_id:   number;
   system_name: string;
+  /** Security status (rig bonuses scale by its class); null when unknown */
+  security?:   number | null;
 }
 
 export type HaulMethod = 'user_defined' | 'red_frog' | 'black_frog' | 'pushx' | 'self_haul';
@@ -654,6 +679,14 @@ export interface IndustrySettings {
   rig_ids:              string;
   /** Stored as percentage 0–100 */
   facility_tax:         number;
+  /** Structure this setup was matched to from the character's own jobs (set by the server) */
+  structure_id?:         number | null;
+  structure_name?:       string | null;
+  /** Security status of system_id and its class — rig bonuses scale by it (set by the server) */
+  system_security?:      number | null;
+  security_class?:       'hi' | 'low' | 'null' | null;
+  /** Saved rig ids that no longer exist in the game data (set by the server) */
+  invalid_rig_ids?:      number[];
   /** Region ID of the hub where materials are sourced (default 10000002 = Jita) */
   material_region_id?:   number;
   material_region_name?: string | null;
@@ -713,6 +746,44 @@ export interface FeeRates {
   facility_tax:         number;
   /** True if the character has configured a manufacturing system */
   setup_configured:     boolean;
+}
+
+/** One Standup manufacturing rig as published by CCP (GET /api/industry-rigs) */
+export interface IndustryRigStat {
+  name:    string;
+  size:    'M' | 'L' | 'XL';
+  family:  string;
+  /** Material reduction at highsec, % */
+  matPct:  number;
+  /** Thukker rigs only: a second, separate material bonus on capital components, % */
+  thukkerMatPct?: number;
+  /** Time reduction at highsec, % */
+  timePct: number;
+  /** Multiplier applied to the bonuses by system security class */
+  sec:     { hi: number; low: number; null: number };
+}
+
+export interface IndustryRigsResponse {
+  rigs: Record<string, IndustryRigStat>;
+  structures: Record<string, { name: string; matMult: number; costMult: number; timeMult: number }>;
+}
+
+/** One suggestion from GET /api/structure-fit-suggestions (anonymous, counts only) */
+export interface StructureFitSuggestion {
+  /** True when the report is for the same structure as the requester's own (never reveals which) */
+  same_structure:   boolean;
+  rig_ids:          number[];
+  rig_names:        string[];
+  facility_tax:     number;
+  reports:          number;
+}
+
+/** GET /api/job-cost-check — estimated vs actual job install cost */
+export interface JobCostCheck {
+  configured: boolean;
+  jobs: Array<{ name: string; runs: number; actual: number; predicted: number; diff_pct: number | null }>;
+  skipped?: { other_facility: number; not_manufacturing: number; no_cost: number; no_recipe: number };
+  summary: { compared: number; actual_total: number; predicted_total: number; diff_pct: number | null } | null;
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -854,6 +925,19 @@ export interface TrueCostResponse {
     total:          number;
     leg1_cost:      number;
     leg2_cost:      number;
+    /** Jita → build-system freight for the materials the buy hub can't supply (costed with the Leg 1 settings) */
+    import_leg_cost?:        number;
+    import_leg_volume_m3?:   number;
+    import_leg_jumps?:       number;
+    /** false when the route couldn't be looked up — the import freight is then NOT included */
+    import_leg_route_known?: boolean;
+    /** false when the Leg 1 / Leg 2 route couldn't be looked up — that freight is then NOT included */
+    leg1_route_known?:       boolean;
+    leg2_route_known?:       boolean;
+    leg2_configured?:        boolean;
+    haul_enabled?:           boolean;
+    /** haulage is on AND Leg 1 has a rate/method — i.e. import freight can actually be costed */
+    leg1_configured?:        boolean;
     leg1_volume_m3: number;
     leg2_volume_m3: number;
     /** Phase 1 compat — raw ISK/m³ for user_defined; 0 for provider methods */
@@ -894,6 +978,8 @@ export interface TrueCostResponse {
     industry_level:          number;
     advanced_industry_level: number;
     structure_te_bonus_pct:  number;
+    /** Combined build-time multiplier: TE × skills (incl. science) × structure × covering rigs × implant */
+    time_multiplier?:        number;
     mfg_implant:    { name: string; pct: number } | null;
     reproc_implant: { name: string; pct: number } | null;
   };
@@ -914,7 +1000,51 @@ export interface TrueCostResponse {
     structure_me_bonus?: number;
     rig_me_bonus?:       number;
     effective_me?:       number;
+    /** The one multiplier every material quantity uses (blueprint ME × structure × covering rigs) */
+    material_multiplier?: number;
+    structure_cost_mult?: number;
+    system_security?:     number | null;
+    security_class?:      'hi' | 'low' | 'null' | null;
+    security_known?:      boolean;
+    product_family?:      string | null;
+    product_family_known?: boolean;
+    /** Saved rig ids that do not exist in the game data (counted as no bonus) */
+    invalid_rig_ids?:     number[];
+    /** Real rigs that cannot apply (wrong size for the structure, NPC station, or beyond 3 slots) */
+    ignored_rig_ids?:     number[];
+    /** Every saved rig with its real, security-scaled stats and whether it covers this item */
+    rigs?: Array<{
+      id: number; name: string; size: 'M' | 'L' | 'XL';
+      applies: boolean;
+      base_me_pct: number; eff_me_pct: number;
+      base_te_pct: number; eff_te_pct: number;
+      security_mult: number;
+    }>;
   };
+
+  /** Where skills/standings came from: live session, saved snapshot, or none (⇒ level-0 fees/times) */
+  skills_source?:        'session' | 'snapshot' | 'none';
+  skills_updated_at?:    string | null;
+  /** 'hub'/'region' = the sell hub's own lowest sell (station / region-wide); 'jita' = none listed there, so Jita's lowest sell and the sale is assumed at Jita */
+  sell_price_scope?:     'hub' | 'region' | 'jita' | null;
+  /** The hub the sale (fees, freight) is priced at: the sell hub, or Jita when sell_price_scope is 'jita' */
+  sell_hub_id?:          number;
+  sell_listing?: { units_listed: number | null; hub_highest_buy: number; spread_ratio: number | null } | null;
+  /** Of the buy hub's OWN prices: how many came from the hub station vs the region-wide fallback */
+  material_price_scope?: { hub: number; region: number } | null;
+  /** How each material was bought: the hub's own orders, imported from Jita, or short on both */
+  material_sourcing?: {
+    lines: Array<{
+      material_id: number; qty: number; scope: 'hub' | 'mixed' | 'jita' | 'history' | 'none';
+      hub_qty: number; jita_qty: number; unfilled_qty: number;
+      unit_cost: number; cost: number; hub_cost: number; import_cost: number;
+      approx: boolean; short_stock: boolean;
+    }>;
+    jita_lines: number; mixed_lines: number; short_lines: number;
+    import_cost: number;
+    /** true when Jita's prices aren't loaded, so imports couldn't be priced */
+    jita_unavailable: boolean;
+  } | null;
 }
 
 /** v1.33.3 — one material's live sell-order check from /api/material-stock-check */
@@ -926,16 +1056,24 @@ export interface MaterialStockCheckResult {
   orderCount:   number;
   /** Real walked-book cost to buy min(availableQty, needed) units */
   cost:         number;
-  /** true when availableQty >= needed — this material's shortage can be fully filled right now */
+  /** true when availableQty >= needed — the hub alone can fill this shortage right now */
   covered:      boolean;
+  /** units (and their cost) that have to be imported from Jita because the hub can't supply them */
+  importQty?:   number;
+  importCost?:  number;
+  scope?:       'hub' | 'mixed' | 'jita' | 'history' | 'none';
+  shortStock?:  boolean;
 }
 
 export interface MaterialStockCheckResponse {
   /** 'ok' = fully fixable now; 'mixed' = one or more materials are thin; 'blocked' = stock is fine but cost > wallet */
   verdict:   'ok' | 'mixed' | 'blocked';
+  /** Full cost of the purchase: what the hub supplies plus what is imported from Jita */
   totalCost: number;
   wallet:    number;
   materials: MaterialStockCheckResult[];
+  /** false while the hub's price cache is loading — ask again shortly */
+  pricesWarm?: boolean;
 }
 
 // ── 7. STATION TRADING TYPES (v1.27.0) ──────────────────────────────────────

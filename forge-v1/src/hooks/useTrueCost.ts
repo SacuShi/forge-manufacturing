@@ -108,7 +108,8 @@ export function useTrueCost(
           setData(result);
           // If the server returned estimated (cached DB) prices, schedule a
           // silent retry so we upgrade to live prices once the warm finishes.
-          if (!result.prices_warm) {
+          // also while Jita's prices (needed to price imports) are still loading
+          if (!result.prices_warm || result.material_sourcing?.jita_unavailable) {
             retryTimerRef.current = setTimeout(() => {
               if (!cancelled) fetchTrueCost(true /* silent */);
             }, WARM_RETRY_MS);
