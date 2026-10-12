@@ -1,6 +1,7 @@
 {
   "name": "forge-server",
   "version": "1.5.1",
+  "license": "MIT",
   "description": "F.O.R.G.E. — Fabrication, Operations, Resource & Guidance Engine — EVE Online manufacturing intelligence server",
   "main": "server.js",
   "scripts": {

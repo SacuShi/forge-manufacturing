@@ -77,3 +77,13 @@ All fees are character-specific, not generic defaults:
 
 ### v1.5.1 and earlier
 See git log for prior history.
+
+## License
+
+F.O.R.G.E. is open source under the [MIT License](LICENSE) — Copyright (c) 2026 SacuShi.
+
+**EVE Online and CCP content.** FORGE is an independent third-party tool and is not affiliated with, endorsed by or
+sponsored by CCP hf. EVE Online, the EVE logo, EVE and all associated logos and designs are the intellectual property of
+CCP hf. Game data used by FORGE (the Static Data Export and ESI data, including the generated files in
+`server/lib/industry-data/`) and item images are the property of CCP hf. and are used under CCP's developer terms;
+the MIT License above covers FORGE's own source code only, not CCP's content.
