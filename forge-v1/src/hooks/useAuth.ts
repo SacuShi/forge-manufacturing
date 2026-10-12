@@ -51,6 +51,7 @@ import type {
   RememberedCharacter,
 } from '../types';
 import { esiFetchAll, esiGet, apiGet, apiPost } from '../api/client';
+import { splitAssetSafety, isInAssetSafety } from '../utils/assetSafety';
 
 // ── EVE OAuth constants (must match EVE Developer Portal registration) ────────
 
@@ -566,13 +567,16 @@ export function useAuth(): AuthState & {
       }
 
       // ── Build CharacterInfo ──────────────────────────────────────────────
-      const bpoCount = bData.filter((bp) => bp.quantity === -1).length;
+      // blueprints locked in Asset Safety can't be used, so they aren't counted
+      const safeP = splitAssetSafety(aData);
+      const usableBpP = safeP.safetyIds.size === 0 ? bData : bData.filter((b) => !isInAssetSafety(b, safeP.safetyIds));
+      const bpoCount = usableBpP.filter((bp) => bp.quantity === -1).length;
       setCharacter({
         characterId:    cid,
         name:           charInfo.name,
         walletISK:      wallet,
         activeJobCount: activeJobs.length,
-        blueprintCount: bData.length,
+        blueprintCount: usableBpP.length,
         bpoCount,
         activeJobs,
         lpPoints,
@@ -581,9 +585,11 @@ export function useAuth(): AuthState & {
       // ── 10. Cache session on FORGE server (required for AI chat) ──────────
       setLoadStep('Caching session data…');
       try {
+        // Items locked in Asset Safety can't be used for manufacturing, so the server never sees them.
+        const safe = splitAssetSafety(aData);
         await apiPost('/api/session-data', {
-          assets:    aData,
-          blueprints: bData,
+          assets:    safe.usable,
+          blueprints: safe.safetyIds.size === 0 ? bData : bData.filter((b) => !isInAssetSafety(b, safe.safetyIds)),
           prices:    {},
           wallet,
           jobs:      activeJobs,
@@ -756,7 +762,9 @@ export function useAuth(): AuthState & {
         }, acc).catch(() => { /* non-fatal: the panel then says the skills aren't loaded */ });
       }
 
-      const bpoCount = bData.filter((bp) => bp.quantity === -1).length;
+      const safeA = splitAssetSafety(aData);
+      const usableBpA = safeA.safetyIds.size === 0 ? bData : bData.filter((b) => !isInAssetSafety(b, safeA.safetyIds));
+      const bpoCount = usableBpA.filter((bp) => bp.quantity === -1).length;
 
       // ── Replace stub with fully-loaded alt (if not removed mid-load) ──────
       if (!altCancelledRef.current.has(cid)) {
@@ -770,7 +778,7 @@ export function useAuth(): AuthState & {
             skills:      skillData,
             activeJobs,
             walletISK:        wallet,
-            blueprintCount:   bData.length,
+            blueprintCount:   usableBpA.length,
             bpoCount,
             activeJobCount:   activeJobs.length,
             hasStandingsScope: standingsScopeGranted,

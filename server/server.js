@@ -444,6 +444,18 @@ async function runMigrations() {
   `);
 
   await dbRun(`CREATE INDEX IF NOT EXISTS idx_corp_assets_corp ON corp_assets (corp_id)`);
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_corp_assets_loc  ON corp_assets (location_id)`);   // the Asset Safety view walks location_id
+  // Corp items locked in Asset Safety (CCP: location_id 2004; the wrap is type 60): the wrap, anything flagged
+  // AssetSafety, and everything nested inside them. They can't be used for manufacturing, so calculations skip them.
+  await dbRun(`DROP VIEW IF EXISTS corp_asset_safety_items`);
+  await dbRun(`CREATE VIEW corp_asset_safety_items AS
+    WITH RECURSIVE s(corp_id, item_id) AS (
+      SELECT corp_id, item_id FROM corp_assets
+       WHERE type_id = 60 OR location_id = 2004 OR location_flag = 'AssetSafety'
+      UNION
+      SELECT a.corp_id, a.item_id FROM corp_assets a JOIN s ON a.location_id = s.item_id AND a.corp_id = s.corp_id
+    )
+    SELECT corp_id, item_id FROM s`);
   await dbRun(`CREATE INDEX IF NOT EXISTS idx_corp_assets_type ON corp_assets (type_id)`);
 
   await dbRun(`
@@ -5549,7 +5561,7 @@ async function executeAiTool(toolUse, { characterId, req, jobs, blueprints, asse
         const cbSearch = String(toolUse.input.search || '').replace(/[^a-zA-Z0-9 '\-]/g, '').trim();
         const cbType   = toolUse.input.type || 'all';
         const cbLimit  = Math.min(toolUse.input.limit || 50, 200);
-        let cbWhere = 'WHERE cb.corp_id = ?';
+        let cbWhere = `WHERE cb.corp_id = ? AND ${CORP_BP_USABLE_SQL}`;   // blueprints locked in Asset Safety can't be used
         const cbParams = [access.corpId];
         if (cbType === 'BPO') cbWhere += ' AND cb.runs = -1';
         else if (cbType === 'BPC') cbWhere += ' AND cb.runs >= 0';
@@ -7150,6 +7162,13 @@ const PI_FACTORY_CYCLE_TIME = { 1: 1800, 2: 3600, 3: 3600, 4: 86400 };          
 // We leave headroom for other parameters in the same query (e.g. piIds + bpIds).
 const SQL_VARIABLE_LIMIT = 950;
 
+// SQL predicate for corp_blueprints rows (alias cb) that are usable: not in a corp Asset Safety wrap, not located at
+// CCP's Asset Safety location (2004), not flagged AssetSafety, and not inside anything that is (view corp_asset_safety_items).
+const CORP_BP_USABLE_SQL = `(COALESCE(cb.location_flag, '') != 'AssetSafety'
+  AND COALESCE(cb.location_id, 0) != 2004
+  AND cb.item_id NOT IN (SELECT item_id FROM corp_asset_safety_items WHERE corp_id = cb.corp_id)
+  AND COALESCE(cb.location_id, 0) NOT IN (SELECT item_id FROM corp_asset_safety_items WHERE corp_id = cb.corp_id))`;
+
 /**
  * Fetches the name and cycle time for a PI schematic from ESI and caches the result.
  *
@@ -7606,8 +7625,8 @@ async function buildOwnedBpMap({ ownedBlueprints, includeCorpBps, characterId, e
       if (corpAccess.isDirector && corpAccess.corpId) {
         await ensureCorpDataFresh(corpAccess.corpId, eveToken);
         const corpBps = await dbAll(
-          `SELECT type_id, material_efficiency, time_efficiency, runs
-           FROM corp_blueprints WHERE corp_id = ?`,
+          `SELECT cb.type_id, cb.material_efficiency, cb.time_efficiency, cb.runs
+           FROM corp_blueprints cb WHERE cb.corp_id = ? AND ${CORP_BP_USABLE_SQL}`,
           [corpAccess.corpId]
         );
         for (const bp of corpBps) {
@@ -12951,7 +12970,8 @@ app.get('/api/corp/blueprints',
       const limit  = Math.min(200, parseInt(req.query.limit  || '100') || 100);
       const offset = Math.min(Math.max(0, parseInt(req.query.offset || '0') || 0), 100000);
 
-      let whereClause = 'WHERE cb.corp_id = ?';
+      // Blueprints locked in a corp Asset Safety wrap can't be used, so they aren't listed (meta.safety_hidden says how many).
+      let whereClause = `WHERE cb.corp_id = ? AND ${CORP_BP_USABLE_SQL}`;
       const params = [corpId];
 
       if (type === 'BPO') {
@@ -12989,10 +13009,15 @@ app.get('/api/corp/blueprints',
         params
       );
 
+      const bpHidden = await dbGet(
+        `SELECT COUNT(*) AS n FROM corp_blueprints cb WHERE cb.corp_id = ? AND NOT ${CORP_BP_USABLE_SQL}`, [corpId]
+      );
+
       res.json({
         blueprints,
         meta: {
           total:          total?.n ?? 0,
+          safety_hidden:  bpHidden?.n ?? 0,
           limit,
           offset,
           corp_name:       req.corpName,
@@ -13022,7 +13047,8 @@ app.get('/api/corp/assets',
       const limit  = Math.min(500, parseInt(req.query.limit  || '200') || 200);
       const offset = Math.min(Math.max(0, parseInt(req.query.offset || '0') || 0), 100000);
 
-      let whereClause = 'WHERE ca.corp_id = ?';
+      // Items locked in a corp Asset Safety wrap can't be used, so they aren't listed (meta.safety_hidden says how many).
+      let whereClause = `WHERE ca.corp_id = ? AND ca.item_id NOT IN (SELECT item_id FROM corp_asset_safety_items WHERE corp_id = ca.corp_id)`;
       const params = [corpId];
 
       if (search) {
@@ -13054,10 +13080,17 @@ app.get('/api/corp/assets',
         params
       );
 
+      const assetsHidden = await dbGet(
+        `SELECT COUNT(*) AS n FROM corp_assets ca
+          WHERE ca.corp_id = ? AND ca.type_id != 60
+            AND ca.item_id IN (SELECT item_id FROM corp_asset_safety_items WHERE corp_id = ca.corp_id)`, [corpId]
+      );
+
       res.json({
         assets,
         meta: {
           total:          total?.n ?? 0,
+          safety_hidden:  assetsHidden?.n ?? 0,
           limit,
           offset,
           corp_name:       req.corpName,

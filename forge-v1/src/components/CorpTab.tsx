@@ -85,6 +85,7 @@ const CorpBlueprintsView: FC<CorpBlueprintsProps> = ({ token, regionId, onSelect
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [typeFilter,  setTypeFilter]  = useState<'all' | 'BPO' | 'BPC'>('all');
   const [total,       setTotal]       = useState(0);
+  const [safetyHidden, setSafetyHidden] = useState(0);
   const [lastRefresh, setLastRefresh] = useState<string | null>(null);
   const [bpSort,      setBpSort]      = useState<BpSortField>('iskPerHour');
   const [bpSortDir,   setBpSortDir]   = useState<'asc' | 'desc'>('desc');
@@ -110,11 +111,12 @@ const CorpBlueprintsView: FC<CorpBlueprintsProps> = ({ token, regionId, onSelect
       });
       const data = await apiGet<{
         blueprints: CorpBlueprint[];
-        meta: { total: number; last_refresh_at: string | null };
+        meta: { total: number; safety_hidden?: number; last_refresh_at: string | null };
       }>(`/api/corp/blueprints?${params}`, token);
       if (myId !== loadIdRef.current) return; // stale — a newer request is in flight
       setBlueprints(data.blueprints);
       setTotal(data.meta.total);
+      setSafetyHidden(data.meta.safety_hidden ?? 0);
       setLastRefresh(data.meta.last_refresh_at);
     } catch (e) {
       if (myId !== loadIdRef.current) return;
@@ -194,6 +196,11 @@ const CorpBlueprintsView: FC<CorpBlueprintsProps> = ({ token, regionId, onSelect
   return (
     <div className="corp-sub-content">
       {/* Toolbar */}
+      {safetyHidden > 0 && (
+        <div className="bp-ownership-note" style={{ marginBottom: 10 }}>
+          ⚠ {safetyHidden.toLocaleString()} item{safetyHidden === 1 ? ' is' : 's are'} locked in your corporation's Asset Safety and {safetyHidden === 1 ? "isn't" : "aren't"} listed here: they can't be used until released.
+        </div>
+      )}
       <div className="corp-toolbar">
         <input
           type="search"
@@ -347,6 +354,7 @@ const CorpAssetsView: FC<CorpAssetsProps> = ({ token, onSelectItem }) => {
   const [search,          setSearch]          = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [total,           setTotal]           = useState(0);
+  const [safetyHiddenA,    setSafetyHiddenA]   = useState(0);
   const [lastRefresh,     setLastRefresh]     = useState<string | null>(null);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -367,10 +375,11 @@ const CorpAssetsView: FC<CorpAssetsProps> = ({ token, onSelectItem }) => {
       });
       const data = await apiGet<{
         assets: CorpAsset[];
-        meta: { total: number; last_refresh_at: string | null };
+        meta: { total: number; safety_hidden?: number; last_refresh_at: string | null };
       }>(`/api/corp/assets?${params}`, token);
       setAssets(data.assets);
       setTotal(data.meta.total);
+      setSafetyHiddenA(data.meta.safety_hidden ?? 0);
       setLastRefresh(data.meta.last_refresh_at);
     } catch (e) {
       setError((e as Error).message);
@@ -391,6 +400,11 @@ const CorpAssetsView: FC<CorpAssetsProps> = ({ token, onSelectItem }) => {
 
   return (
     <div className="corp-sub-content">
+      {safetyHiddenA > 0 && (
+        <div className="bp-ownership-note" style={{ marginBottom: 10 }}>
+          ⚠ {safetyHiddenA.toLocaleString()} item{safetyHiddenA === 1 ? ' is' : 's are'} locked in your corporation's Asset Safety and {safetyHiddenA === 1 ? "isn't" : "aren't"} listed here: they can't be used until released.
+        </div>
+      )}
       <div className="corp-toolbar">
         <input type="search" className="corp-search"
           placeholder="Search assets…" value={search}

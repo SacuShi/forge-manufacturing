@@ -39,6 +39,8 @@
  */
 
 import { useState, useMemo, useEffect, type FC } from 'react';
+import { findAssetSafetyItemIds, ASSET_SAFETY_LOCATION_ID, ASSET_SAFETY_WRAP_TYPE_ID } from '../utils/assetSafety';
+import AssetSafetyPanel from './AssetSafetyPanel';
 import type {
   MarketItem,
   SortField,
@@ -112,6 +114,8 @@ interface MainContentProps {
   assets: EsiAsset[];
   /** Raw per-item assets (with real location_ids) — used by the Assets tab */
   rawAssets?: EsiAsset[];
+  /** Blueprints locked in Asset Safety (left out of the list above) */
+  safetyBlueprintCount?: number;
   activeJobs: ActiveJob[];
   itemNames: Map<number, string>;
   /** v1.33.0 — combined wallet ISK across in-scope characters, for the "✓ Can Build Now" pill */
@@ -201,6 +205,7 @@ const MainContent: FC<MainContentProps> = ({
   blueprints,
   assets,
   rawAssets = [],
+  safetyBlueprintCount = 0,
   activeJobs,
   itemNames,
   walletISK,
@@ -247,6 +252,8 @@ const MainContent: FC<MainContentProps> = ({
   // v1.33.0 — "Can Build Now" filter: owned materials + wallet ISK cover the shortfall
   const [bpBuildableOnly, setBpBuildableOnly] = useState(false);
   const [assetSearch,      setAssetSearch]      = useState('');
+  // Items locked in Asset Safety are hidden by default (they can't be used); the pill shows them.
+  const [hideAssetSafety,  setHideAssetSafety]  = useState(true);
   const [assetSort,        setAssetSort]        = useState<'qty' | 'name' | 'location'>('location');
   const [assetSortDir,     setAssetSortDir]     = useState<1 | -1>(1);
   // Tracks which location sections the user has opened. Empty = all collapsed (default).
@@ -418,6 +425,9 @@ const MainContent: FC<MainContentProps> = ({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blueprints, bpSearch, bpFilter, bpBuildableOnly, itemNames, bpProfits, bpMetadata, bpSort, bpSortDir]);
 
+  // Items in Asset Safety wraps (kept out of every calculation; shown only when the pill is off).
+  const safetyIds = useMemo(() => findAssetSafetyItemIds(rawAssets), [rawAssets]);
+
   const assetGroups = useMemo(() => {
     // Map each item_id → its direct location_id so we can walk the parent chain.
     // Items inside ships/containers have location_id = the ship/container's item_id.
@@ -439,9 +449,16 @@ const MainContent: FC<MainContentProps> = ({
     const g = new Map<string, { name: string; qty: number; typeId: number; locationId: number }>();
     rawAssets.forEach((a) => {
       const name       = itemNames.get(a.type_id) ?? `Item #${a.type_id}`;
-      const locationId = resolveStation(a.location_id);
+      // The wrap container itself is just the box: only what is inside it is listed.
+      if (a.type_id === ASSET_SAFETY_WRAP_TYPE_ID) return;
+      const inSafety   = safetyIds.has(a.item_id);
+      if (inSafety && hideAssetSafety) return;                  // the pill: view assets WITHOUT Asset Safety
+      let locationId   = resolveStation(a.location_id);
       // Skip items whose resolved location is 0 (no real location data)
       if (!locationId) return;
+      // Asset Safety items are grouped apart from the same station's usable items (negative id = "locked in a wrap
+      // at |id|"; -2004 = not yet delivered anywhere), so they can never be mistaken for, or merged with, usable stock.
+      if (inSafety) locationId = -locationId;
       const key  = `${a.type_id}:${locationId}`;
       const prev = g.get(key);
       if (prev) {
@@ -454,13 +471,39 @@ const MainContent: FC<MainContentProps> = ({
       .filter(({ name }) =>
         !assetSearch || name.toLowerCase().includes(assetSearch.toLowerCase())
       );
-  }, [rawAssets, itemNames, assetSearch]);
+  }, [rawAssets, itemNames, assetSearch, safetyIds, hideAssetSafety]);
 
   const assetLocationIds = useMemo(
-    () => [...new Set(assetGroups.map((g) => g.locationId))],
+    () => [...new Set(assetGroups.map((g) => Math.abs(g.locationId)).filter((id) => id !== ASSET_SAFETY_LOCATION_ID))],
     [assetGroups],
   );
   const locationNames = useLocationNames(assetLocationIds, primaryToken);
+
+  // Header text for a location group; Asset Safety groups say what they are.
+  const locationLabelFor = (id: number): string | undefined => {
+    if (id >= 0) return locationNames.get(id);
+    const base = -id;
+    if (base === ASSET_SAFETY_LOCATION_ID) return 'Asset Safety — not yet delivered to a station';
+    const place = locationNames.get(base);
+    return place ? `${place} · Asset Safety wrap (locked)` : undefined;
+  };
+
+  const safetyWrapCount = useMemo(() => rawAssets.filter((a) => a.type_id === ASSET_SAFETY_WRAP_TYPE_ID).length, [rawAssets]);
+
+  // What is locked in Asset Safety (independent of the pill and the search box): drives the fee panel.
+  const safetyHoldings = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const a of rawAssets) {
+      if (a.type_id === ASSET_SAFETY_WRAP_TYPE_ID || !safetyIds.has(a.item_id)) continue;
+      m.set(a.type_id, (m.get(a.type_id) ?? 0) + a.quantity);
+    }
+    return [...m.entries()].map(([typeId, qty]) => ({ typeId, qty }));
+  }, [rawAssets, safetyIds]);
+
+  // Blueprints and formulas aren't sold on the market (they trade by contract), so they can't be valued at a Jita price.
+  const isBlueprintName = (typeId: number) => /(blueprint|formula)$/i.test(itemNames.get(typeId) ?? '');
+  const safetyValuable  = useMemo(() => safetyHoldings.filter((h) => !isBlueprintName(h.typeId)), [safetyHoldings, itemNames]); // eslint-disable-line react-hooks/exhaustive-deps
+  const safetyUnvaluedTypes = safetyHoldings.length - safetyValuable.length;
 
   // BPO/BPC lookup — built from the full blueprints list (quantity === -1 → BPO).
   // Used by the Assets tab to pick the correct CCP icon variant per item.
@@ -504,8 +547,8 @@ const MainContent: FC<MainContentProps> = ({
         const qb = b.items.reduce((s, it) => s + it.qty, 0);
         return (qa - qb) * assetSortDir;
       }
-      const la = locationNames.get(a.locationId) ?? '';
-      const lb = locationNames.get(b.locationId) ?? '';
+      const la = locationLabelFor(a.locationId) ?? '';
+      const lb = locationLabelFor(b.locationId) ?? '';
       return la.localeCompare(lb) * (assetSort === 'name' ? 1 : assetSortDir);
     });
     for (const { locationId, items } of sorted) {
@@ -693,6 +736,12 @@ const MainContent: FC<MainContentProps> = ({
 
       {activeTab === 'blueprints' && (
         <div className="main-panel">
+          {safetyBlueprintCount > 0 && (
+            <div className="bp-ownership-note" style={{ marginBottom: 10 }}>
+              ⚠ {safetyBlueprintCount.toLocaleString()} blueprint{safetyBlueprintCount === 1 ? ' is' : 's are'} locked in Asset Safety, so {safetyBlueprintCount === 1 ? 'it isn\'t' : 'they aren\'t'} listed
+              here and can&apos;t be used to build anything until released (see the Assets tab for the release cost).
+            </div>
+          )}
           {/* Search + filter controls */}
           <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
             <input
@@ -943,8 +992,13 @@ const MainContent: FC<MainContentProps> = ({
             </div>
           )}
 
+          {/* Asset Safety: these items can't be used, so they are hidden by default and kept out of every calculation */}
+          {(safetyHoldings.length > 0 || safetyWrapCount > 0) && (
+            <AssetSafetyPanel holdings={safetyValuable} unvaluedTypes={safetyUnvaluedTypes} wrapCount={safetyWrapCount} hidden={hideAssetSafety} />
+          )}
+
           {/* Sort pills — Location/Qty sorts groups; Item sorts within each group */}
-          <div style={{ display: 'flex', gap: 4, marginBottom: 10 }}>
+          <div style={{ display: 'flex', gap: 4, marginBottom: 10, flexWrap: 'wrap' }}>
             {(['location', 'qty', 'name'] as const).map((field) => {
               const labels = { location: 'Location', qty: 'Quantity', name: 'Item' };
               const active = assetSort === field;
@@ -964,6 +1018,20 @@ const MainContent: FC<MainContentProps> = ({
                 </button>
               );
             })}
+            {safetyHoldings.length > 0 && (
+              <button
+                type="button"
+                className={`pill-filter${hideAssetSafety ? ' active' : ''}`}
+                aria-pressed={hideAssetSafety}
+                style={{ marginLeft: 'auto' }}
+                title={hideAssetSafety
+                  ? 'Asset Safety items are hidden — click to show them'
+                  : 'Asset Safety items are shown — click to hide them'}
+                onClick={() => { setHideAssetSafety(h => !h); setAssetExportSet(new Set()); setLastExportIdx(null); }}
+              >
+                Hide Asset Safety ({safetyHoldings.length})
+              </button>
+            )}
           </div>
           <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 250px)' }}>
             {[...locationGroups].sort((a, b) => {
@@ -974,11 +1042,11 @@ const MainContent: FC<MainContentProps> = ({
                 return (qa - qb) * dir;
               }
               // Location sort (default) and Item sort both sort groups by location name
-              const la = locationNames.get(a.locationId) ?? '';
-              const lb = locationNames.get(b.locationId) ?? '';
+              const la = locationLabelFor(a.locationId) ?? '';
+              const lb = locationLabelFor(b.locationId) ?? '';
               return la.localeCompare(lb) * (assetSort === 'name' ? 1 : dir);
             }).map(({ locationId, items }) => {
-              const locationLabel = locationNames.get(locationId);
+              const locationLabel = locationLabelFor(locationId);
               const isCollapsed   = !expandedLocs.has(locationId);
               const sortedItems   = assetSort === 'name'
                 ? [...items].sort((a, b) => a.name.localeCompare(b.name) * assetSortDir)
@@ -1114,7 +1182,10 @@ const MainContent: FC<MainContentProps> = ({
             {locationGroups.length === 0 && (
               <div style={{ color: 'var(--color-text-tertiary)', fontSize: 12,
                 padding: 24, textAlign: 'center' }}>
-                {rawAssets.length === 0 ? 'No assets found.' : 'No assets match your search.'}
+                {rawAssets.length === 0 ? 'No assets found.'
+                  : (hideAssetSafety && safetyHoldings.length > 0 && !assetSearch)
+                    ? 'Everything you own is locked in Asset Safety (hidden). Switch off “Hide Asset Safety” to see it.'
+                    : 'No assets match your search.'}
               </div>
             )}
           </div>

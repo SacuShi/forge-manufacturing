@@ -494,7 +494,7 @@ const QueuePlannerTab: FC<QueuePlannerTabProps> = ({ queueCharacters, primaryTok
               {(result.importMaterials ?? 0) > 0 && (
                 <div className="bp-ownership-note">
                   ⚠ {result.importMaterials} material{result.importMaterials === 1 ? " isn't" : "s aren't"} fully stocked at your Buy In hub. What it can&apos;t
-                  supply is priced at Jita and has to be imported (marked <strong>J</strong> below). These plan figures don&apos;t include freight —{' '}
+                  supply is priced at Jita and has to be imported or manufactured (marked <strong>J</strong> below). These plan figures don&apos;t include freight —{' '}
                   {haulConfigured
                     ? <>open an item&apos;s True Profit for the figure with your import freight included.</>
                     : <>for an accurate profit, set up your haulage costs in{' '}
@@ -511,8 +511,8 @@ const QueuePlannerTab: FC<QueuePlannerTabProps> = ({ queueCharacters, primaryTok
                       {m.name}
                       {(m.priceScope === 'jita' || m.priceScope === 'mixed') && (
                         <span className="price-source-hist" title={m.priceScope === 'jita'
-                          ? 'None for sale at the Buy In hub — priced at Jita and imported.'
-                          : `${(m.hubQty ?? 0).toLocaleString()} from the Buy In hub; the other ${(m.importQty ?? 0).toLocaleString()} priced at Jita and imported.`}>J</span>
+                          ? 'None for sale at the Buy In hub — priced at Jita; has to be imported or manufactured.'
+                          : `${(m.hubQty ?? 0).toLocaleString()} from the Buy In hub; the other ${(m.importQty ?? 0).toLocaleString()} priced at Jita (import or manufacture them).`}>J</span>
                       )}
                       {(m.priceScope === 'history' || m.priceScope === 'none') && (
                         <span className="price-source-hist" title="No sell orders at the Buy In hub or Jita.">?</span>

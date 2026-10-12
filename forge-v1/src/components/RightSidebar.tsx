@@ -1329,9 +1329,9 @@ const RightSidebar: FC<RightSidebarProps> = ({
                           const p    = buyFor(mat, needForRuns);
                           const cost = p ? p.cost : (mat.unitCost ?? 0) * needForRuns;
                           const tag  = !p ? null
-                            : p.scope === 'jita'    ? { t: 'J', tip: `None for sale at ${materialMarketName} — priced at Jita's lowest sell; has to be imported.` }
+                            : p.scope === 'jita'    ? { t: 'J', tip: `None for sale at ${materialMarketName} — priced at Jita's lowest sell; has to be imported or manufactured.` }
                             : p.scope === 'mixed'   ? { t: 'J', tip: p.jitaQty > 0
-                                ? `${p.hubQty.toLocaleString()} from ${materialMarketName}; ${p.jitaQty.toLocaleString()} priced at Jita and imported${p.unfilledQty > 0 ? `; ${p.unfilledQty.toLocaleString()} more aren't listed anywhere and are priced at the last visible price` : ''}.`
+                                ? `${p.hubQty.toLocaleString()} from ${materialMarketName}; ${p.jitaQty.toLocaleString()} priced at Jita (import or manufacture them)${p.unfilledQty > 0 ? `; ${p.unfilledQty.toLocaleString()} more aren't listed anywhere and are priced at the last visible price` : ''}.`
                                 : `${p.hubQty.toLocaleString()} from ${materialMarketName}; the other ${p.unfilledQty.toLocaleString()} aren't listed at Jita either and are priced at the last visible price.` }
                             : p.scope === 'history' ? { t: '~', tip: 'No sell orders at this hub or at Jita — priced at the 30-day average.' }
                             : p.scope === 'none'    ? { t: '?', tip: 'No sell orders at this hub or at Jita, and no price history.' }
@@ -1394,7 +1394,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
                   const message = stockCheck.verdict === 'ok'
                     ? `Missing materials are available on the ${materialMarketName} market — buying them now costs ${formatISK(stockCheck.totalCost)}, within your ${formatISK(walletISK)} wallet. Use Multibuy below to purchase the shortfall.`
                     : stockCheck.verdict === 'mixed'
-                    ? `${thinNames.join(', ')} ${thinNames.length === 1 ? 'has' : 'have'} limited stock on the ${materialMarketName} market right now — not enough listed to fill the full shortage. ${materialRegionId === 10000002 ? `Jita doesn't have enough listed; the rest is priced at the last visible price, so buying everything costs at least ~${formatISK(stockCheck.totalCost)}.` : `What ${materialMarketName} can't supply is priced at Jita and has to be imported; buying everything costs ~${formatISK(stockCheck.totalCost)}.`}`
+                    ? `${thinNames.join(', ')} ${thinNames.length === 1 ? 'has' : 'have'} limited stock on the ${materialMarketName} market right now — not enough listed to fill the full shortage. ${materialRegionId === 10000002 ? `Jita doesn't have enough listed; the rest is priced at the last visible price, so buying everything costs at least ~${formatISK(stockCheck.totalCost)}.` : `What ${materialMarketName} can't supply is priced at Jita and has to be imported or manufactured; buying everything costs ~${formatISK(stockCheck.totalCost)}.`}`
                     : `Materials are in stock on the ${materialMarketName} market, but buying them (${formatISK(stockCheck.totalCost)}) would exceed your ${formatISK(walletISK)} wallet.`;
 
                   return (
@@ -1930,10 +1930,12 @@ const RightSidebar: FC<RightSidebarProps> = ({
               const nameOf = (id: number) =>
                 apiDetail?.buildInfo?.materials?.find(m => m.materialId === id)?.name
                 ?? itemNames.get(id) ?? `Material #${id}`;
-              const list = (ids: number[]) => {
-                const names = ids.map(nameOf);
-                return names.length <= 3 ? names.join(', ') : `${names.slice(0, 3).join(', ')} and ${names.length - 3} more`;
-              };
+              // one bullet per item, never a run-on sentence
+              const bullets = (ids: number[]) => (
+                <ul className="notice-list">
+                  {ids.map(id => <li key={id}>{nameOf(id)}</li>)}
+                </ul>
+              );
               const haulLink = (
                 <button type="button" onClick={() => onOpenSettings('haulage')}
                   style={{ background: 'none', border: 'none', padding: 0, color: 'inherit', font: 'inherit',
@@ -1950,10 +1952,9 @@ const RightSidebar: FC<RightSidebarProps> = ({
                   if (hc.haul_enabled === false || hc.leg1_configured === false) haulAdviceShown = true;
                   notes.push(
                     <div key="import" className="bp-ownership-note">
-                      ⚠ {none.length > 0 && <>{list(none)} {none.length === 1 ? 'is' : 'are'} not stocked at {materialMarketName}</>}
-                      {none.length > 0 && part.length > 0 && '; '}
-                      {part.length > 0 && <>{list(part)} {part.length === 1 ? 'is' : 'are'} only partly stocked there</>}
-                      . What {materialMarketName} can&apos;t supply is priced at Jita ({formatISK(ms.import_cost)}) and has to be imported.{' '}
+                      {none.length > 0 && <>⚠ Not stocked at {materialMarketName}:{bullets(none)}</>}
+                      {part.length > 0 && <>{none.length === 0 && '⚠ '}Only partly stocked at {materialMarketName}:{bullets(part)}</>}
+                      What {materialMarketName} can&apos;t supply is priced at Jita ({formatISK(ms.import_cost)}) and has to be imported or manufactured.{' '}
                       {hc.haul_enabled === false || hc.leg1_configured === false
                         ? <>For an accurate True Profit, set up your haulage costs in {haulLink}.</>
                         : hc.import_leg_route_known === false
@@ -1969,7 +1970,8 @@ const RightSidebar: FC<RightSidebarProps> = ({
                 if (short.length > 0) {
                   notes.push(
                     <div key="short" className="bp-ownership-note">
-                      ⚠ Not enough {list(short)} is listed at {materialMarketName} or at Jita to fill the full quantity — the rest is priced at the last visible price, so the real cost may be higher.
+                      ⚠ Not enough is listed at {materialMarketName} or at Jita to fill the full quantity of these — the rest is priced at the last visible price, so the real cost may be higher:
+                      {bullets(short)}
                     </div>
                   );
                 }
@@ -1978,8 +1980,8 @@ const RightSidebar: FC<RightSidebarProps> = ({
                 if (!ms.jita_unavailable && hist.length + nothing.length > 0) {
                   notes.push(
                     <div key="nodata" className="bp-ownership-note">
-                      ⚠ {hist.length > 0 && <>No one is selling {list(hist)} at {materialMarketName} or Jita — priced at its 30-day average. </>}
-                      {nothing.length > 0 && <>{list(nothing)} {nothing.length === 1 ? 'has' : 'have'} no price at all, so {nothing.length === 1 ? 'it is' : 'they are'} missing from the material cost.</>}
+                      {hist.length > 0 && <>⚠ No one is selling these at {materialMarketName} or Jita — priced at their 30-day average:{bullets(hist)}</>}
+                      {nothing.length > 0 && <>{hist.length === 0 && '⚠ '}No price at all, so these are missing from the material cost:{bullets(nothing)}</>}
                     </div>
                   );
                 }

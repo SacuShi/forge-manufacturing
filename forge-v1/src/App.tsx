@@ -76,6 +76,7 @@ import ChatPanel             from './components/ChatPanel';
 import LoginScreen           from './components/LoginScreen';
 import LoadingScreen         from './components/LoadingScreen';
 import IndustrySettingsModal      from './components/IndustrySettings';
+import { findAssetSafetyItemIds, isInAssetSafety } from './utils/assetSafety';
 import CharacterManagementModal  from './components/CharacterManagementModal';
 import HelpTab                   from './components/HelpTab';
 import TradingStandalone     from './components/TradingStandalone';
@@ -328,11 +329,30 @@ const AppShell: FC = () => {
 
   const primaryInScope = viewCharacterId === null || viewCharacterId === auth.character?.characterId;
 
-  // All blueprints across in-scope characters (used for ownership badges + market filtering)
-  const allBlueprints = useMemo<EsiBlueprint[]>(() => [
+  // Raw assets from all in-scope characters, preserving per-item location_id.
+  // Used by the Assets tab to show per-location grouping.
+  const allRawAssets = useMemo<EsiAsset[]>(() => {
+    const result: EsiAsset[] = [];
+    if (primaryInScope) result.push(...auth.assets);
+    activeAltCharacters.forEach((a) => result.push(...a.assets));
+    return result;
+  }, [primaryInScope, auth.assets, activeAltCharacters]);
+
+  // Items locked in Asset Safety wraps can't be used for manufacturing: they are kept out of EVERY calculation
+  // (have/needed, shortfalls, buildable-now, the Queue Planner, the server session) — see utils/assetSafety.ts.
+  const safetyIds = useMemo(() => findAssetSafetyItemIds(allRawAssets), [allRawAssets]);
+
+  // All USABLE blueprints across in-scope characters (used for ownership badges + market filtering).
+  // Blueprints stuck in Asset Safety are left out; safetyBlueprintCount lets the Blueprints tab say so.
+  const allBlueprintsRaw = useMemo<EsiBlueprint[]>(() => [
     ...(primaryInScope ? auth.blueprints : []),
     ...activeAltCharacters.flatMap((a) => a.blueprints),
   ], [primaryInScope, auth.blueprints, activeAltCharacters]);
+  const allBlueprints = useMemo<EsiBlueprint[]>(
+    () => safetyIds.size === 0 ? allBlueprintsRaw : allBlueprintsRaw.filter((b) => !isInAssetSafety(b, safetyIds)),
+    [allBlueprintsRaw, safetyIds],
+  );
+  const safetyBlueprintCount = allBlueprintsRaw.length - allBlueprints.length;
 
   // Fetch blueprint metadata (metaLevel + productTypeId) eagerly at login so icons
   // are ready before the user opens the My Blueprints tab.
@@ -350,20 +370,14 @@ const AppShell: FC = () => {
       .catch(() => {});
   }, [allBlueprints]);
 
-  // Raw assets from all in-scope characters, preserving per-item location_id.
-  // Used by the Assets tab to show per-location grouping.
-  const allRawAssets = useMemo<EsiAsset[]>(() => {
-    const result: EsiAsset[] = [];
-    if (primaryInScope) result.push(...auth.assets);
-    activeAltCharacters.forEach((a) => result.push(...a.assets));
-    return result;
-  }, [primaryInScope, auth.assets, activeAltCharacters]);
-
-  // Combined assets summed by type_id — used by useItemDetail for have/needed
+  // Combined USABLE assets summed by type_id (Asset Safety contents excluded) — used by useItemDetail for have/needed
   const combinedAssets = useMemo<EsiAsset[]>(() => {
     const map = new Map<number, number>();
     const add = (assets: EsiAsset[]) =>
-      assets.forEach((a) => map.set(a.type_id, (map.get(a.type_id) ?? 0) + a.quantity));
+      assets.forEach((a) => {
+        if (safetyIds.has(a.item_id)) return;       // locked in Asset Safety: not usable, not counted
+        map.set(a.type_id, (map.get(a.type_id) ?? 0) + a.quantity);
+      });
     if (primaryInScope) add(auth.assets);
     activeAltCharacters.forEach((a) => add(a.assets));
     // Convert back to EsiAsset[] (server/hooks expect an array)
@@ -371,7 +385,7 @@ const AppShell: FC = () => {
       type_id, quantity,
       item_id: type_id, location_id: 0, location_flag: 'Hangar', is_singleton: false,
     }));
-  }, [primaryInScope, auth.assets, activeAltCharacters]);
+  }, [primaryInScope, auth.assets, activeAltCharacters, safetyIds]);
 
   // Best skill level per skill_id across in-scope characters (for market filtering)
   const bestSkillsArray = useMemo(() => {
@@ -462,13 +476,13 @@ const AppShell: FC = () => {
   useEffect(() => {
     if (auth.status !== 'authed' || itemNamesLoading) return;
     const unknown = new Set<number>();
-    combinedAssets.forEach(a => { if (!itemNames.has(a.type_id)) unknown.add(a.type_id); });
-    allBlueprints.forEach(bp => { if (!itemNames.has(bp.type_id)) unknown.add(bp.type_id); });
+    allRawAssets.forEach(a => { if (!itemNames.has(a.type_id)) unknown.add(a.type_id); });   // includes Asset Safety items (shown in the Assets tab)
+    allBlueprintsRaw.forEach(bp => { if (!itemNames.has(bp.type_id)) unknown.add(bp.type_id); });
     if (unknown.size > 0) resolveUnknown([...unknown]);
   // resolveUnknown changes identity when names changes, so omit it to avoid infinite loop;
   // the auth.status + itemNamesLoading gate ensures this only runs once per login.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auth.status, itemNamesLoading, combinedAssets, allBlueprints]);
+  }, [auth.status, itemNamesLoading, allRawAssets, allBlueprintsRaw]);
 
   // ── PI: all characters with their tokens (always all, not filtered by isolation) ──
   // PI is best viewed combined — each colony card shows who owns it.
@@ -1383,6 +1397,7 @@ const AppShell: FC = () => {
           blueprints={allBlueprints}
           assets={combinedAssets}
           rawAssets={allRawAssets}
+          safetyBlueprintCount={safetyBlueprintCount}
           activeJobs={allActiveJobs}
           itemNames={itemNames}
           walletISK={totalWalletISK}

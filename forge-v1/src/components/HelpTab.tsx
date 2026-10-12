@@ -178,7 +178,8 @@ const HelpTab: FC = () => (
           <div style={S.cardTitle}>◎ Buy in</div>
           <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
             Where you source raw materials. FORGE uses the <em>cheapest sell-order price</em> at this hub
-            to calculate your material costs. Default: Jita — the cheapest source for almost all inputs.
+            to calculate your material costs, working up the order book if you need more than the cheapest
+            order holds. Default: Jita — the cheapest source for almost all inputs.
           </div>
         </div>
         <div style={S.card}>
@@ -192,6 +193,24 @@ const HelpTab: FC = () => (
 
       <div style={S.tip}>💡 <strong>Typical setup:</strong> Buy in = Jita, Sell at = wherever you plan to list.
         If you manufacture and sell at the same hub, set both identically.</div>
+
+      <p style={S.p}><strong>When a hub doesn't have what you need:</strong></p>
+      <ul style={S.ul}>
+        <li style={S.li}>Every hub is priced from <strong>its own market</strong> — its own prices, its own stock and its own daily volume.</li>
+        <li style={S.li}>If your <strong>Buy in</strong> hub has none of a material for sale, or not enough for the job, FORGE prices
+          what the hub <em>can</em> supply at the hub's price and the rest at <strong>Jita's current price</strong>,
+          and tells you in an amber notice. Those materials are marked <strong>J</strong> in the materials list:
+          you'll have to import or manufacture them.</li>
+        <li style={S.li}>If your <strong>Sell at</strong> hub has none of the finished item listed, the sale price is Jita's current
+          lowest sell, and fees and freight assume you sell it at Jita.</li>
+        <li style={S.li}>A <strong>J</strong> next to a "sellable per day" number means there's no trading data for that hub
+          yet, so you're seeing Jita's volume.</li>
+        <li style={S.li}>If a hub's prices are still loading you'll see "loading" — FORGE never shows another hub's prices
+          under the wrong name.</li>
+      </ul>
+      <div style={S.tip}>💡 Importing from Jita costs money. Set your haulage costs in <strong>⚙ Mfg Setup → Haulage</strong>
+        (the amber notice has a shortcut link) and True Profit will include the freight for the Jita leg
+        using your <strong>Materials in</strong> rates.</div>
     </Section>
 
     {/* ── Mfg Setup ── */}
@@ -206,9 +225,21 @@ const HelpTab: FC = () => (
         <li style={S.li}><strong>Structure type</strong> — Raitaru, Azbel, Sotiyo (engineering complexes) each give
           different material and time efficiency bonuses. NPC stations give no bonus at all.</li>
         <li style={S.li}><strong>Rigs</strong> — T1 and T2 ME/TE rigs on your structure further reduce material waste
-          or build time, but only for specific item categories.</li>
+          or build time, but <em>only for the item types each rig is built for</em> (a ship rig doesn't help modules).
+          FORGE follows the game's rules: at most 3 rigs, the rig size must match your structure (Raitaru M, Azbel L,
+          Sotiyo XL), and an NPC station takes none. Rig bonuses are also multiplied by the security of your system
+          (×1.9 in lowsec, ×2.1 in nullsec and wormholes), and the panel shows each rig's real value and whether it applies
+          to the item you're looking at. A rig that can't apply is flagged instead of being counted.</li>
         <li style={S.li}><strong>Facility tax</strong> — the structure owner's tax on top of the SCI. Often 0–3% in
           alliance structures; up to 10% or more in public citadels.</li>
+        <li style={S.li}><strong>Haulage</strong> — tick <em>Haulage Costs</em> and set your rates so freight is part of True Profit.
+          <em> Materials in</em> covers the run from your Buy in hub to your build system, and also any materials you have to
+          import from Jita when your Buy in hub doesn't stock them. <em>Goods out</em> covers the run to your Sell at hub.</li>
+        <li style={S.li}><strong>Install-cost check</strong> — compares what CCP actually charged for your running jobs with FORGE's
+          estimate, so you can spot a wrong system, structure or tax setting.</li>
+        <li style={S.li}><strong>Suggestions from other pilots</strong> — for a system and structure type, FORGE can show the rig sets
+          other pilots report, with a one-click <em>Use these</em>. It's anonymous, only appears once at least two pilots report
+          the same thing, and never changes your setup without you saving it. Always check it matches your structure.</li>
       </ul>
       <div style={S.tip}>💡 An Azbel with T2 ME rigs for your item category can improve profit by 5–15% vs an NPC
         station. Always set this to your actual build location for accurate numbers.</div>
@@ -230,6 +261,20 @@ const HelpTab: FC = () => (
       </ul>
       <div style={S.tip}>💡 Use <strong>⚙ Mfg Setup</strong> to set your manufacturing structure before reading True Profit —
         the number in the table is an estimate; the right panel is the accurate figure for your specific character and structure.</div>
+
+      <p style={S.p}><strong>Reading the True Profit panel:</strong></p>
+      <ul style={S.ul}>
+        <li style={S.li}><strong>Amber boxes</strong> tell you exactly which assumption a figure leans on: materials priced at Jita
+          because your hub doesn't stock them, a sale priced at Jita, no price for an item, skills not loaded yet, a rig that
+          doesn't apply, or a thin market where the lowest sell is far above any buy order. Read them before trusting a number.</li>
+        <li style={S.li}><strong>Materials</strong> are priced the way you'd really buy them: your hub's cheapest orders first, working up
+          its order book, with any shortfall taken from Jita. Quantities follow the game's rounding — one rounding for the
+          whole job, not per run.</li>
+        <li style={S.li}>Pick a character in the <strong>True Profit</strong> drop-down to price fees and build time with
+          <em> that</em> character's own skills (Accounting, Broker Relations, Industry…).</li>
+        <li style={S.li}>The <strong>Market Opportunities</strong> table is a quick, rough ranking (lowest-sell prices, no fees, no
+          freight). The right-hand panel is the full, personalised figure.</li>
+      </ul>
     </Section>
 
     {/* ── Your Blueprints ── */}
@@ -252,6 +297,16 @@ const HelpTab: FC = () => (
           This means your wallet covers the shortfall; use the <strong>📋 Multibuy</strong> button to copy the shopping list for EVE's Multibuy window.</li>
         <li style={S.li}><strong>ME level</strong> — material efficiency research level. ME 10 is the maximum for T1 items.
           Even ME 5 meaningfully reduces material cost on expensive T2 products.</li>
+      </ul>
+      <p style={S.p}><strong>Blueprints in Asset Safety:</strong></p>
+      <ul style={S.ul}>
+        <li style={S.li}>When a structure is destroyed (or you trigger Asset Safety by hand), its contents are bundled into an
+          <em> Asset Safety Wrap</em>. Anything in a wrap — including blueprints — is locked until you release it, so it
+          can't be used to build anything.</li>
+        <li style={S.li}>FORGE therefore <strong>leaves those blueprints out</strong>: they aren't listed here, don't count as owned,
+          and aren't offered by the Queue Planner or the AI advisor. An amber note at the top of this tab says how many are hidden.</li>
+        <li style={S.li}>Once you release them in-game (15% of their value to a station in another system, 0.5% within the same system)
+          they appear here again automatically. The <strong>My Assets</strong> tab shows what the release would cost.</li>
       </ul>
     </Section>
 
@@ -279,6 +334,19 @@ const HelpTab: FC = () => (
         <li style={S.li}><strong>Blueprint icons</strong> — blueprints appear with their correct icon:
           blue = BPO, pale = BPC, teal = Reaction Formula, orange = Sleeper blueprint.</li>
         <li style={S.li}><strong>Click any item</strong> to open its market data and True Profit panel on the right.</li>
+        <li style={S.li}><strong>Hide Asset Safety</strong> pill — items locked in Asset Safety wraps are hidden by default because
+          you can't use them. Switch the pill off to see them in their own groups, labelled <em>Asset Safety</em>.</li>
+      </ul>
+      <p style={S.p}><strong>Asset Safety:</strong></p>
+      <ul style={S.ul}>
+        <li style={S.li}>Asset Safety isn't a station — it's a wrap that holds your items until you release them. After 20 days
+          the game moves it to an NPC station in a nearby system, but the items stay locked inside until you pay to release them.</li>
+        <li style={S.li}>Items in Asset Safety are <strong>kept out of every calculation</strong>: they don't count as materials you
+          own, don't reduce a shortfall, and don't make anything "Can Build Now".</li>
+        <li style={S.li}>When you have items in Asset Safety, an amber box shows their value at <strong>current Jita prices</strong> and the
+          release cost — <strong>15%</strong> of the value to a station in another system, or <strong>0.5%</strong> to a station in the
+          same system as the original structure (you can choose that after 5 days). CCP actually bases the fee on average market
+          prices, so treat FORGE's figure as an estimate.</li>
       </ul>
       <p style={S.p}><strong>Sending items to Appraise:</strong></p>
       <ul style={S.ul}>
@@ -365,6 +433,12 @@ const HelpTab: FC = () => (
         <li style={S.li}><strong>Planned slots</strong> show the recommended next jobs. Each recommendation shows
           the product name, run count, and expected ISK/hr.</li>
       </ul>
+      <ul style={S.ul}>
+        <li style={S.li}>It prices materials with the same rules as True Profit: your <strong>Buy in</strong> hub first, anything it
+          can't supply from Jita. Those materials are marked <strong>J</strong> in the shopping list and an amber note says how many
+          you'd have to import. The plan figures don't include freight; open an item's True Profit for the figure with freight.</li>
+        <li style={S.li}>Reaction jobs are timed with your Reactions skill, and blueprints locked in Asset Safety are never offered.</li>
+      </ul>
       <div style={S.tip}>💡 Queue Planner only recommends blueprints you own. Add more characters and their
         blueprints appear automatically in the pool.</div>
     </Section>
@@ -410,6 +484,9 @@ const HelpTab: FC = () => (
         If you hold a Director or equivalent role in your corporation, the Corp tab gives you a read-only view of
         your corporation's blueprint and asset library — the same grouped display as Your Blueprints and
         My Assets, but for corp hangars.
+      </p>
+      <p style={S.p}>
+        Corporation blueprints that are locked in a corp Asset Safety wrap are not offered by the Queue Planner or the AI advisor.
       </p>
       <div style={S.tip}>💡 Corp access requires a character with Director-level ESI permissions logged in.
         If you see "Director access required", add or re-authorise a Director character via Add Character.</div>
@@ -502,6 +579,10 @@ const HelpTab: FC = () => (
         Close it yourself with <strong>×</strong> or by clicking outside it whenever you're done.
       </p>
 
+      <div style={S.tip}>💡 FORGE remembers each character's skills, so fees and build times stay correct for every character you pick
+        in the <strong>True Profit</strong> drop-down. After an update, log in (or refresh) once so every character's skills are saved —
+        until then the panel says the skills aren't loaded and uses untrained levels.</div>
+
       <div style={S.tip}>💡 Each <strong>+ Add Character</strong> click is a real EVE SSO login for that
         character — CCP's own login page, never FORGE. FORGE only ever receives a short-lived access token
         from CCP, never your password.</div>
@@ -547,6 +628,8 @@ const HelpTab: FC = () => (
           than the table estimate, your blueprint's ME is probably at 0 — research it or check your setup.</li>
         <li style={S.li}>For T2 manufacturing, always set <strong>Buy in</strong> to Jita even if you sell elsewhere —
           T2 materials (moon products, advanced components) are almost always cheapest at Jita.</li>
+        <li style={S.li}>See an amber box in True Profit? It's telling you which part of the number is an assumption — usually
+          materials being imported from Jita. Add your haulage costs in Mfg Setup so the freight is counted.</li>
         <li style={S.li}>To value a stockpile: Ctrl+click rows in <strong>My Assets</strong>, then hit <strong>Appraise →</strong>.
           Switch hubs instantly — C-J6MT Keepstar prices are available if you're in the Imperium.</li>
         <li style={S.li}>For null-sec loot buyback quotes: open Appraise, hit <strong>Jita Buy</strong>, set the

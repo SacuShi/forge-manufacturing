@@ -2247,6 +2247,15 @@ tr:hover .ticker-pin-btn,
 .liquidity-note strong { color: var(--color-text-primary); font-weight: 600; }
 
 /* v1.22 — "you don't own the blueprint" honesty badge under True Profit */
+/* bullet lists inside an amber notice (one item per line) */
+.bp-ownership-note .notice-list {
+  margin: 4px 0 6px 18px;
+  padding: 0;
+}
+.bp-ownership-note .notice-list li {
+  margin: 0;
+}
+
 .bp-ownership-note {
   margin: 6px 0 2px;
   padding: 6px 9px;

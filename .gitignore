@@ -63,3 +63,6 @@ ecosystem.config.js
 
 # Industry mechanics data generated from CCP game data (required at runtime by lib/industry-math.js)
 !server/lib/industry-data/*.json
+
+# Logo source images and scratch material (not part of the app)
+design-assets/
