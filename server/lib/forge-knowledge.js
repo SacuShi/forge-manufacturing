@@ -147,22 +147,28 @@ Skills: Interplanetary Consolidation L1–5 = 2–6 planets. Command Center Upgr
 
     manufacturing_formulas: `Manufacturing Formulas (canonical):
 
-── Effective ME ──
-effectiveME = blueprintME + structureMEbonus + Σ(rigMEbonus)
-adjQty[mat] = max(1, ceil(baseQty × max(0, 1 − effectiveME/100))) × runs
+── Material multiplier (the factors MULTIPLY — they are never added together) ──
+materialMult = (1 − blueprintME/100) × structureMult × Π over the rigs that cover the item (1 − rigBonus × securityMult / 100)
+qty[mat]     = max(runs, ceil(round(baseQty × runs × materialMult, 2)))   ← rounded ONCE per job, minimum 1 per run
 
-Structure ME bonuses: NPC 0% | Raitaru +1% | Azbel +1% | Sotiyo +1%
-Standup {M,L,XL}-Set rig ME bonuses (M=Raitaru, L=Azbel, XL=Sotiyo — a rig only
-fits its own structure's size):
-  T1 rigs: +2.0% each | T2 rigs: +2.4% each | max 3 rigs, no stacking penalty
-Example — Sotiyo + ME10 BP + 3× Standup XL-Set Ship Manufacturing Efficiency II:
-  effectiveME = 10 + 1 + 7.2 = 18.2%; on a 10B carrier build: ~820M extra saving vs NPC
+structureMult: NPC station 1.0 | Raitaru, Azbel, Sotiyo 0.99 (1% less material)
+Standup {M,L,XL}-Set rigs (M=Raitaru, L=Azbel, XL=Sotiyo — a rig only fits its own structure's size):
+  T1 rigs 2.0% material | T2 rigs 2.4% material | max 3 rigs
+  securityMult scales each rig's bonus (and its time bonus): highsec ×1.0 | lowsec ×1.9 | nullsec & wormhole ×2.1
+  (Thukker rigs are the exception: ×0.1 highsec/null, ×1.9 lowsec).
+  A rig only affects the item types it is built for: e.g. the XL "Ship" rig → ships only, "Equipment" → modules,
+  "Ammunition" → charges, "Drone and Fighter" → drones, the component rigs → components. Rigs for other
+  item types do nothing for the item being built.
+Example — Sotiyo in nullsec, ME10 BPO, one XL-Set Ship Manufacturing Efficiency II rig, building a ship:
+  materialMult = 0.90 × 0.99 × (1 − 0.024 × 2.1) = 0.846 → 15.4% less material than the ME 0 base quantity.
+Rigs in FORGE come from the user's Mfg Setup; the True Profit panel lists which rigs applied to the item.
 
 ── True Profit Formula ──
-Revenue       = lowestSell[hub] × productQty × runs
-Material Cost = Σ(adjQty[mat] × sellPrice[mat, sourceHub])
-EIV           = Σ(adjQty[mat] × adjustedPrice[mat])  ← EVE adjusted prices, NOT market
-Job Cost      = EIV × SCI + EIV × 0.04(SCC) + EIV × facilityTax%
+Revenue       = lowestSell[hub station] × productQty × runs  (region-wide best only when the hub has none)
+Material Cost = Σ(qty[mat] × sellPrice[mat, sourceHub station])
+EIV           = Σ(baseQty[mat] × adjustedPrice[mat]) × runs  ← BASE (ME 0) quantities × CCP adjusted prices, NOT market
+Job Cost      = EIV × (SCI × structureCostMult + facilityTax% + 0.04 SCC)
+                structureCostMult: NPC 1.0 | Raitaru 0.97 | Azbel 0.96 | Sotiyo 0.95 (applies to the SCI part only)
 Broker Fee    = revenue × max(1%, 3% − 0.3%×BrokerRelations − 0.03%×factionStanding − 0.02%×corpStanding)
 Trans. Tax    = revenue × max(0%, 7.5% × (1 − 0.11×Accounting))
 True Profit   = Revenue − MaterialCost − JobCost − BrokerFee − TransactionTax − HaulCost
@@ -258,7 +264,7 @@ P4 PI requirements:
   Supercarrier/Titan: ~10,000–50,000+ total P4 units
 
 Nullsec advantage: local minerals + alliance structure + rigs.
-Sotiyo + ME10 + 3× Standup XL-Set Ship Manufacturing Efficiency II rigs: effectiveME ~18.2% → ~820M saving vs NPC on 10B build.`
+Sotiyo + ME10 + a Standup XL-Set Ship Manufacturing Efficiency II rig in nullsec: material multiplier ≈ 0.846 (rigs are scaled ×2.1 in nullsec; only rigs covering the item type apply).`
   };
   return data[topic] || `Unknown topic "${topic}". Valid: ${Object.keys(data).join(', ')}`;
 }
@@ -635,11 +641,11 @@ job counts, research slots) directly without recalculating.
 ══ MANUFACTURING MECHANICS & FORMULAS ══
 
 ── Manufacturing Formulas Summary ──
-effectiveME = blueprintME + structureMEbonus + Σ(rigMEbonus)
-adjQty[mat] = max(1, ceil(baseQty × (1 − effectiveME/100))) × runs
-Structure ME: NPC 0%, Raitaru/Azbel/Sotiyo +1%. Rigs (null/WH): T1 +2%/rig, T2 +2.4%/rig (max 3).
+materialMult = (1 − blueprintME/100) × structureMult × Π(rigs covering the item: 1 − rigBonus × securityMult/100) — factors multiply, never add.
+qty[mat] = max(runs, ceil(round(baseQty × runs × materialMult, 2))) — rounded once per job.
+Structure: NPC ×1.0, Raitaru/Azbel/Sotiyo ×0.99. Rigs: T1 2%, T2 2.4% × security (highsec 1.0, lowsec 1.9, null/WH 2.1); a rig only affects the item types it is built for (max 3 rigs).
 True Profit = Revenue − MaterialCost − JobCost − BrokerFee − TransactionTax − HaulCost
-JobCost = EIV × (SCI + 0.04 SCC + facilityTax%); EIV uses CCP adjusted prices, NOT market prices.
+JobCost = EIV × (SCI × structureCostMult + facilityTax% + 0.04 SCC); EIV = Σ(BASE ME-0 qty × CCP adjusted price) × runs, NOT market prices. structureCostMult: Raitaru 0.97, Azbel 0.96, Sotiyo 0.95.
 SCC Surcharge is 4% for manufacturing/invention (the 18 Jul 2025 cut to 2% applies only to ME/TE research jobs).
 SCI: <1% excellent | 1–3% good null | 3–6% high | 8–12% trade hubs (avoid for mfg).
 For full formula breakdown, rig examples, or detailed SCI reference: get_forge_knowledge("manufacturing_formulas").

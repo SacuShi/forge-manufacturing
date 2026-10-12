@@ -11,6 +11,8 @@ const path = require('path');
 const helmet = require('helmet');
 const crypto = require('crypto');  // built-in — AES-256-GCM token encryption
 const security = require('./forge-security');
+const HP = require('./lib/hub-price');   // hub prices: own orders first, Jita fallback (always tagged), order depth
+const IM = require('./lib/industry-math');  // shared manufacturing mechanics (rigs, ME, EIV, job cost, time)
 
 // ── PATH-SENSITIVE LINES — DO NOT CHANGE TO RELATIVE PATHS ──────────────────
 // PM2's cwd is unreliable. These three lines MUST use __dirname.
@@ -296,6 +298,10 @@ async function runMigrations() {
 
   // v1.2.0 migration: product_id index for fast volume copy
   await dbRun(`CREATE INDEX IF NOT EXISTS idx_precomputed_product ON precomputed_profits (product_id)`);
+
+  // Where a row's daily volume came from: 'hub' (that hub's own trading) or 'jita' (the hub has no
+  // volume data of its own, so Jita's is shown and labelled as such). NULL = no volume known.
+  try { await dbRun(`ALTER TABLE precomputed_profits ADD COLUMN volume_source TEXT DEFAULT NULL`); } catch (_) { /* exists */ }
 
   // v1.2.0 migration: Industry settings per character
   await dbRun(`
@@ -691,6 +697,60 @@ async function runMigrations() {
     security_status   REAL
   )`);
   await dbRun(`CREATE INDEX IF NOT EXISTS idx_sde_systems_region ON sde_systems (region_id)`);
+
+  // Skill/standing/implant snapshot per character. The in-memory session expires (2h) and is
+  // lost on every restart; without this, a missing session silently priced fees and build time
+  // at skill level 0. Refreshed on every /api/session-data post.
+  await dbRun(`CREATE TABLE IF NOT EXISTS character_skill_snapshot (
+    character_id INTEGER PRIMARY KEY,
+    skills       TEXT NOT NULL DEFAULT '[]',
+    standings    TEXT NOT NULL DEFAULT '{}',
+    implants     TEXT NOT NULL DEFAULT '[]',
+    updated_at   TEXT NOT NULL
+  )`);
+
+  // Structure-fit registry: what rigs players actually run in the structures they build in.
+  // Learned from Mfg Setup saves + the structure behind the character's own industry jobs, so
+  // it can eventually pre-fill the setup. structure_id = 0 means "structure not identified".
+  await dbRun(`CREATE TABLE IF NOT EXISTS known_structures (
+    structure_id    INTEGER PRIMARY KEY,
+    name            TEXT,
+    solar_system_id INTEGER,
+    type_id         INTEGER,
+    owner_id        INTEGER,
+    first_seen      TEXT,
+    last_seen       TEXT
+  )`);
+  await dbRun(`CREATE TABLE IF NOT EXISTS structure_fit_reports (
+    structure_id      INTEGER NOT NULL DEFAULT 0,
+    character_id      INTEGER NOT NULL,
+    structure_type_id INTEGER,
+    system_id         INTEGER,
+    rig_ids           TEXT    NOT NULL DEFAULT '[]',
+    facility_tax      REAL    DEFAULT 0,
+    reported_at       TEXT    NOT NULL,
+    PRIMARY KEY (structure_id, character_id)
+  )`);
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_sfr_system ON structure_fit_reports (system_id, structure_type_id)`);
+  // Which characters have themselves resolved a structure through ESI with their OWN token. A cached
+  // known_structures row is only trusted for a character listed here, so one user can't use the
+  // shared cache to learn about a structure they have no access to.
+  await dbRun(`CREATE TABLE IF NOT EXISTS structure_access (
+    structure_id INTEGER NOT NULL,
+    character_id INTEGER NOT NULL,
+    verified_at  TEXT    NOT NULL,
+    PRIMARY KEY (structure_id, character_id)
+  )`);
+  try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN structure_id INTEGER DEFAULT NULL`); } catch (_) {}
+  try { await dbRun(`ALTER TABLE character_industry_settings ADD COLUMN structure_name TEXT DEFAULT NULL`); } catch (_) {}
+  // Seed the registry once from setups users have already saved.
+  await dbRun(`INSERT OR IGNORE INTO structure_fit_reports
+      (structure_id, character_id, structure_type_id, system_id, rig_ids, facility_tax, reported_at)
+    SELECT 0, s.character_id, s.structure_type_id, s.system_id, COALESCE(s.rig_ids, '[]'), COALESCE(s.facility_tax, 0), datetime('now')
+      FROM character_industry_settings s
+     WHERE s.structure_type_id IS NOT NULL AND s.system_id IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM structure_fit_reports r WHERE r.character_id = s.character_id)`);
+
   await dbRun(`CREATE TABLE IF NOT EXISTS sde_planets (
     planet_id        INTEGER PRIMARY KEY,
     system_id        INTEGER,
@@ -1294,18 +1354,54 @@ async function fetchRegionPrices(regionId) {
     }
   }
 
-  // Process into prices map
-  const prices = {};
+  // Process into prices map.
+  // For a trade hub, price at the hub STATION first: a region-wide lowest sell is often a
+  // station you can't actually buy from or list against (measured gaps of 3–11% on Drake,
+  // Caracal, 1MN Afterburner II, Megacyte). Items with no orders at the station fall back to
+  // the region-wide best so they still price (sellScope/buyScope say which was used).
+  const hubKey     = REGION_TO_HUB[regionId];
+  const hubStation = hubKey && !HUB_CONFIG[hubKey].isStructure ? HUB_CONFIG[hubKey].stationId : null;
+  const regionBest  = {};
+  const stationBest = {};
+  const slot = (map, id) => map[id] || (map[id] = { sell: Infinity, buy: 0 });
+  // Order depth (units for sale per price level) alongside the lowest price: whether a hub can
+  // supply the quantity a job needs is decided from this, not from the lowest price alone.
+  const regionDepthAcc  = HP.makeDepthAccumulator();
+  const stationDepthAcc = HP.makeDepthAccumulator();
 
   sellOrders.forEach(o => {
-    if (!prices[o.type_id]) prices[o.type_id] = { sell: Infinity, buy: 0 };
-    if (o.price < prices[o.type_id].sell) prices[o.type_id].sell = o.price;
+    const r = slot(regionBest, o.type_id);
+    if (o.price < r.sell) r.sell = o.price;
+    regionDepthAcc.add(o.type_id, o.price, o.volume_remain);
+    if (hubStation && o.location_id === hubStation) {
+      const s = slot(stationBest, o.type_id);
+      if (o.price < s.sell) s.sell = o.price;
+      stationDepthAcc.add(o.type_id, o.price, o.volume_remain);
+    }
+  });
+  buyOrders.forEach(o => {
+    const r = slot(regionBest, o.type_id);
+    if (o.price > r.buy) r.buy = o.price;
+    if (hubStation && o.location_id === hubStation) {
+      const s = slot(stationBest, o.type_id);
+      if (o.price > s.buy) s.buy = o.price;
+    }
   });
 
-  buyOrders.forEach(o => {
-    if (!prices[o.type_id]) prices[o.type_id] = { sell: Infinity, buy: 0 };
-    if (o.price > prices[o.type_id].buy) prices[o.type_id].buy = o.price;
-  });
+  const prices = {};
+  for (const typeId of Object.keys(regionBest)) {
+    const r = regionBest[typeId];
+    const s = stationBest[typeId];
+    const stationSell = s && s.sell !== Infinity;
+    const stationBuy  = s && s.buy > 0;
+    prices[typeId] = {
+      sell:       stationSell ? s.sell : r.sell,
+      buy:        stationBuy  ? s.buy  : r.buy,
+      sellScope:  hubStation ? (stationSell ? 'hub' : 'region') : 'region',
+      buyScope:   hubStation ? (stationBuy  ? 'hub' : 'region') : 'region',
+      regionSell: r.sell === Infinity ? 0 : r.sell,
+    };
+  }
 
   // Apply outlier filtering and calculate median
   let outlierMargin = 0, outlierNoBid = 0;
@@ -1354,7 +1450,17 @@ async function fetchRegionPrices(regionId) {
               `(${buyOrders.length} buy + ${sellOrders.length} sell orders` +
               `${outlierNote}) in ${(durationMs / 1000).toFixed(1)}s`);
 
-  return prices;
+  // Depth follows the same scope as the price: hub station orders when the station has any
+  // sell order for the type, otherwise the region-wide book.
+  const regionDepth  = regionDepthAcc.finish();
+  const stationDepth = stationDepthAcc.finish();
+  const depthOut = new Map();
+  for (const [typeId, d] of regionDepth) {
+    const s = stationBest[typeId];
+    const useStation = s && s.sell !== Infinity && stationDepth.has(Number(typeId));
+    depthOut.set(Number(typeId), useStation ? stationDepth.get(Number(typeId)) : d);
+  }
+  return HP.attachDepth(prices, depthOut);
 }
 
 // Fetch all orders from the C-J6MT Keepstar structure market and return a
@@ -1389,10 +1495,12 @@ async function fetchStructureMarketPrices() {
 
   // Aggregate to same {sell, buy, median} format as fetchRegionPrices
   const prices = {};
+  const depthAcc = HP.makeDepthAccumulator();
   allOrders.forEach(o => {
     if (!prices[o.type_id]) prices[o.type_id] = { sell: Infinity, buy: 0 };
     if (!o.is_buy_order && o.price < prices[o.type_id].sell) prices[o.type_id].sell = o.price;
     if ( o.is_buy_order && o.price > prices[o.type_id].buy)  prices[o.type_id].buy  = o.price;
+    if (!o.is_buy_order) depthAcc.add(o.type_id, o.price, o.volume_remain);
   });
 
   const MAX_SANE_PRICE = 100_000_000_000_000;
@@ -1418,7 +1526,7 @@ async function fetchStructureMarketPrices() {
   const durationMs = Date.now() - startTime;
   console.log(`✓ Keepstar market loaded — ${Object.keys(prices).length} types, ` +
               `${allOrders.length} orders in ${(durationMs / 1000).toFixed(1)}s`);
-  return prices;
+  return HP.attachDepth(prices, depthAcc.finish());
 }
 
 // EVE OAUTH
@@ -1771,6 +1879,20 @@ function setRegionPriceCache(regionId, prices) {
 }
 
 /**
+ * A hub's price map where each type the hub has no sell order for carries Jita's live lowest
+ * sell, tagged sellScope 'jita' (see lib/hub-price.js). Null when the hub's cache is cold —
+ * callers must treat that as "loading", never substitute Jita's whole map.
+ */
+function getHubPrices(regionId) {
+  const entry = regionPriceCache.get(regionId);
+  if (!entry) return null;
+  return HP.withJitaFallback(entry.prices, regionPriceCache.get(10000002)?.prices || null);
+}
+/** The hub's own raw prices (no Jita fallback) + Jita's, for depth-aware purchase pricing. */
+function getRawHubPrices(regionId) { return regionPriceCache.get(regionId)?.prices || null; }
+function getRawJitaPrices()        { return regionPriceCache.get(10000002)?.prices || null; }
+
+/**
  * Pre-warm price cache for all valid manufacturing regions.
  * Runs sequentially (not in parallel) to avoid simultaneous ESI hammering.
  * Skips regions that are already fresh (> 5 min remaining on TTL).
@@ -1796,6 +1918,25 @@ async function warmAllRegions() {
 
 // Tracks which regions have a background price-warm in flight (avoid duplicate fetches)
 const regionWarmingSet = new Set();
+const regionWarmFailedAt = new Map();
+
+/**
+ * Start a background price warm-up for a hub whose cache is cold (or, with refreshStale, expired).
+ * One at a time per hub, and a failed attempt is not retried for a minute — otherwise an ESI outage
+ * would make every request re-trigger a full region fetch.
+ */
+function kickRegionWarm(regionId, { refreshStale = false } = {}) {
+  const rid = Number(regionId);
+  if (!VALID_REGIONS.includes(rid) || regionWarmingSet.has(rid)) return;
+  const entry = regionPriceCache.get(rid);
+  if (entry && (!refreshStale || Date.now() < entry.expiry)) return;
+  if (Date.now() - (regionWarmFailedAt.get(rid) || 0) < 60_000) return;
+  regionWarmingSet.add(rid);
+  fetchRegionPrices(rid)
+    .then(prices => setRegionPriceCache(rid, prices))
+    .catch(() => { regionWarmFailedAt.set(rid, Date.now()); })
+    .finally(() => regionWarmingSet.delete(rid));
+}
 
 // 30-day average prices from ESI market history.
 // Used as tertiary fallback when live order book has no sell AND no buy orders.
@@ -3158,22 +3299,48 @@ function calcLegHaulCost(cfg, volumeM3, jumpCount, collateral) {
 // EVE solar-system topology is static — cache jump counts permanently.
 const jumpCountCache = new Map(); // key: 'originId:destId'
 
-async function getJumpCount(originId, destId) {
+// Returns null when the route could not be determined (ESI error), so callers that must not
+// treat "unknown" as "zero jumps" can tell the difference. getJumpCount keeps the old 0.
+// Failures are remembered for a while (and concurrent lookups share one request): a saved system with
+// no gate route, or an ESI outage, must not turn every True Profit request into several failing ESI
+// calls — failed requests are what count against the shared per-IP error budget.
+const jumpCountFailUntil = new Map();   // key -> ms timestamp until which a failed lookup is not retried
+const jumpCountInFlight  = new Map();   // key -> Promise
+async function getJumpCountStrict(originId, destId) {
   if (!originId || !destId || originId === destId) return 0;
+  if (!Number.isSafeInteger(Number(originId)) || !Number.isSafeInteger(Number(destId))) return null;
   const key = `${originId}:${destId}`;
   if (jumpCountCache.has(key)) return jumpCountCache.get(key);
-  try {
-    const url = `https://esi.evetech.net/latest/route/${originId}/${destId}/?datasource=tranquility`;
-    const resp = await fetch(url, { headers: { 'User-Agent': 'FORGE Manufacturing Intelligence/1.5' } });
-    if (!resp.ok) { console.warn(`Jump count API ${resp.status} for ${originId}→${destId}`); return 0; }
-    const route = await resp.json();
-    const jumps = Array.isArray(route) ? Math.max(0, route.length - 1) : 0;
-    jumpCountCache.set(key, jumps);
-    return jumps;
-  } catch (err) {
-    console.warn(`Jump count fetch failed ${originId}→${destId}:`, err.message);
-    return 0;
-  }
+  if ((jumpCountFailUntil.get(key) || 0) > Date.now()) return null;
+  if (jumpCountInFlight.has(key)) return jumpCountInFlight.get(key);
+  const p = (async () => {
+    try {
+      const url = `https://esi.evetech.net/latest/route/${Number(originId)}/${Number(destId)}/?datasource=tranquility`;
+      const resp = await esiFetch(url);
+      if (!resp.ok) {
+        console.warn(`Jump count API ${resp.status} for ${originId}→${destId}`);
+        // 404 = no such route (stays true for a long time); anything else may be transient
+        jumpCountFailUntil.set(key, Date.now() + (resp.status === 404 ? 6 * 3600_000 : 5 * 60_000));
+        return null;
+      }
+      const route = await resp.json();
+      if (!Array.isArray(route)) { jumpCountFailUntil.set(key, Date.now() + 5 * 60_000); return null; }
+      const jumps = Math.max(0, route.length - 1);
+      jumpCountCache.set(key, jumps);
+      return jumps;
+    } catch (err) {
+      console.warn(`Jump count fetch failed ${originId}→${destId}:`, err.message);
+      jumpCountFailUntil.set(key, Date.now() + 5 * 60_000);
+      return null;
+    } finally {
+      jumpCountInFlight.delete(key);
+    }
+  })();
+  jumpCountInFlight.set(key, p);
+  return p;
+}
+async function getJumpCount(originId, destId) {
+  return (await getJumpCountStrict(originId, destId)) ?? 0;
 }
 
 // ── ESI adjusted-price cache ───────────────────────────────────────────────────
@@ -3739,8 +3906,15 @@ async function buildMaterialChain(material, prices, ownedBpIds) {
 // Cheapest per-UNIT market cost for a type (the price a manufacturer pays to buy now).
 function unitMarketCost(typeId, prices) {
   const p = prices[typeId];
-  if (p) return p.sell || p.buy || p.avg30d || historyPriceMap.get(typeId) || 0;
+  // A purchase price is the cheapest SELL order: the hub's, or Jita's for what the hub doesn't stock (tagged by
+  // unitMarketScope). A bid can't be bought from. The Jita 30-day average is only the last resort.
+  if (p && p.sell) return p.sell;
   return historyPriceMap.get(typeId) || 0;
+}
+function unitMarketScope(typeId, prices) {
+  const p = prices[typeId];
+  if (p && p.sell) return p.sellScope === 'jita' ? 'jita' : 'hub';
+  return historyPriceMap.get(typeId) ? 'history' : 'none';
 }
 
 // Recursively compute the cheapest per-UNIT cost to OBTAIN one unit of `typeId`:
@@ -3769,8 +3943,14 @@ app.post('/api/material-breakdown', security.apiLimiter, async (req, res) => {
     const { typeId, regionId = 10000002, ownedBlueprints } = req.body;
     if (!typeId) return res.status(400).json({ error: 'Missing typeId' });
 
-    // Sell-sourced prices for the chosen hub (falls back to Jita cache when cold).
-    const prices = regionPriceCache.get(regionId)?.prices || jitaPricesCache || {};
+    // Sell-sourced prices for the chosen hub: its own orders, Jita's live sell for types it doesn't
+    // stock (tagged sellScope 'jita'). A cold hub cache is not filled with Jita's whole map.
+    const prices = getHubPrices(regionId);
+    if (!prices) {
+      kickRegionWarm(regionId); kickRegionWarm(10000002);
+      return res.status(503).json({ error: 'Market prices are still loading — try again in a few seconds.', pricesWarm: false });
+    }
+    if (!getRawJitaPrices()) kickRegionWarm(10000002);
 
     // Blueprint that produces this type — activity_id tells us mfg (1) vs reaction (9).
     const bp = await dbGet(
@@ -3826,6 +4006,7 @@ app.post('/api/material-breakdown', security.apiLimiter, async (req, res) => {
         quantity:        m.quantity,            // raw qty per blueprint run (ME 0)
         unitCost:        buyPerUnit,            // buy-from-market unit price
         buyPricePerUnit: buyPerUnit,
+        priceScope:      unitMarketScope(m.material_id, prices),   // 'hub' | 'jita' (hub lists none) | 'history' | 'none'
         mfgCostPerUnit:  buildPerUnit,          // cheapest build cost per unit (null if not producible)
         canManufacture:  canMfg,
         activityId:      canMfg ? subBpMap[m.material_id] : null, // 1=mfg, 9=reaction
@@ -3895,7 +4076,12 @@ app.post('/api/me-research-roi', security.apiLimiter, async (req, res) => {
     }
 
     const target = Math.min(10, Math.max(1, parseInt(targetME, 10) || 10));
-    const prices = regionPriceCache.get(regionId)?.prices || jitaPricesCache || {};
+    const prices = getHubPrices(regionId);
+    if (!prices) {
+      kickRegionWarm(regionId); kickRegionWarm(10000002);
+      return res.status(503).json({ error: 'Market prices are still loading — try again in a few seconds.', pricesWarm: false });
+    }
+    if (!getRawJitaPrices()) kickRegionWarm(10000002);
 
     // Skill/structure time reduction (multiplicative, EVE-accurate stacking).
     const timeMult = Math.max(0, 1 - 0.05 * metallurgy) * Math.max(0, 1 - 0.03 * advancedIndustry);
@@ -4218,7 +4404,13 @@ async function fetchItemPriceHistory(typeId, regionId) {
   return { avg30dFromHistory: 0, priceHistory: null, priceHistorySource: null };
 }
 
-async function buildMaterialAnalysis({ typeId, assets, ownedBlueprints, matPrices, currentPrice }) {
+async function buildMaterialAnalysis({ typeId, assets, ownedBlueprints, matRegionId, currentPrice }) {
+  // Raw (un-overlaid) hub and Jita maps: purchases are priced from the hub's own orders first and
+  // the remainder from Jita, using order depth (lib/hub-price.js). A cold hub cache is "loading",
+  // never a reason to quote Jita under the hub's name.
+  const rawHub  = getRawHubPrices(matRegionId);
+  const rawJita = getRawJitaPrices();
+  const hubIsJita = matRegionId === 10000002;
   const blueprint = await dbGet(
     'SELECT blueprint_id, product_quantity, build_time FROM blueprints WHERE product_id = ?',
     [typeId]
@@ -4282,11 +4474,17 @@ async function buildMaterialAnalysis({ typeId, assets, ownedBlueprints, matPrice
       }
     }
 
-    // Unit cost: source-hub SELL price (lowest ask). Fallback: buy → 30d avg → 0.
-    const matPrice = matPrices[mat.material_id];
-    const matAvg30d = matPrice?.avg30d || historyPriceMap.get(mat.material_id) || 0;
-    const unitCost  = matPrice ? (matPrice.sell || matPrice.buy || matAvg30d || 0) : matAvg30d;
-    const itemCost  = unitCost * needed;
+    // Supply = the hub's sell depth + Jita's, in a JSON-safe form the browser walks with the same
+    // algorithm (so any quantity — ME-adjusted needs, owned stock, shortfall — is priced
+    // consistently). unitCost/unitScope describe a single unit, for simple displays.
+    const supply = (rawHub && (hubIsJita || rawJita))
+      ? HP.describeSupply({ hubPrices: rawHub, jitaPrices: rawJita, typeId: mat.material_id, hubIsJita,
+                            history: historyPriceMap.get(mat.material_id) || 0 })
+      : null;
+    const one = supply ? HP.priceFromSupply(supply, 1) : null;
+    const unitCost  = one ? one.unit : 0;
+    const needCost  = supply ? HP.priceFromSupply(supply, needed) : null;
+    const itemCost  = needCost ? needCost.cost : 0;
     totalCost += itemCost;
 
     materialAnalysis.push({
@@ -4296,8 +4494,10 @@ async function buildMaterialAnalysis({ typeId, assets, ownedBlueprints, matPrice
       have:           userHas,
       shortage,
       unitCost,
+      unitScope:      one ? one.scope : null,       // 'hub' | 'jita' | 'history' | 'none'
       totalCost:      itemCost,
-      shortfallCost:  unitCost * shortage,
+      shortfallCost:  supply ? HP.priceFromSupply(supply, shortage).cost : 0,
+      supply,                                        // depth for client-side pricing of other quantities
       canManufacture: manufSet.has(mat.material_id),
       piTier:         piTierMap[mat.material_id] ?? null,
     });
@@ -4309,7 +4509,8 @@ async function buildMaterialAnalysis({ typeId, assets, ownedBlueprints, matPrice
   const liveSell = currentPrice?.sell || 0;
   const avg30d   = currentPrice?.avg30d || 0;
   const sellPrice = liveSell || avg30d || 0;
-  const sellPriceSource = liveSell > 0 ? 'live' : (avg30d > 0 ? 'history_30d' : 'no_data');
+  const sellPriceSource = liveSell > 0 ? (currentPrice?.sellScope === 'jita' ? 'jita_fallback' : 'live')
+                                        : (avg30d > 0 ? 'history_30d' : 'no_data');
   const productQuantity = blueprint.product_quantity || 1;
   const batchRevenue    = sellPrice * productQuantity;
   const profit          = batchRevenue - totalCost;
@@ -4322,6 +4523,7 @@ async function buildMaterialAnalysis({ typeId, assets, ownedBlueprints, matPrice
     productQuantity,
     buildTime:        blueprint.build_time,
     materials:        materialAnalysis,
+    pricesWarm:       !!(rawHub && (hubIsJita || rawJita)),
     totalCost,
     sellPrice,
     sellPriceSource,
@@ -4364,6 +4566,7 @@ async function fetchInventionData(typeId, matPrices, sellPrices) {
         quantity:        m.quantity,
         unitPrice,
         totalPerAttempt: unitPrice * m.quantity,
+        priceScope:      p?.sellScope === 'jita' ? 'jita' : 'hub',
       };
     });
 
@@ -4409,6 +4612,7 @@ async function fetchInventionData(typeId, matPrices, sellPrices) {
         quantity:        m.quantity,
         unitPrice,
         totalPerAttempt: unitPrice * m.quantity,
+        priceScope:      p?.sellScope === 'jita' ? 'jita' : 'hub',
       };
     });
 
@@ -4467,17 +4671,38 @@ app.post('/api/item-details', security.apiLimiter, async (req, res) => {
       if (priceHistorySource) itemDetails.priceHistorySource = priceHistorySource;
     }
 
-    // Sell-hub prices — used for the "Current Market" price display and profit calculation
-    const sellPrices = regionPriceCache.get(regionId)?.prices || jitaPricesCache || {};
+    // Sell-hub prices — used for the "Current Market" price display and profit calculation.
+    // The hub's own orders; Jita's live lowest sell only for what the hub has none of (tagged
+    // sellScope 'jita'). A cold cache is never filled with Jita's whole map: it is warmed in the
+    // background and the client is told (pricesWarm:false) to ask again.
+    const sellPrices = getHubPrices(regionId) || {};
+    const sellWarm   = !!getHubPrices(regionId);
     // avg30d: prefer freshly-fetched history, fall back to cached map value
     const avg30d = avg30dFromHistory || historyPriceMap.get(typeId) || 0;
-    if (sellPrices[typeId]) {
+    const jitaReady = !!getRawJitaPrices();
+    if (!sellWarm || !jitaReady || (materialRegionId !== regionId && !getHubPrices(materialRegionId))) {
+      itemDetails.pricesWarm = false;
+      for (const rid of new Set([regionId, materialRegionId, 10000002])) kickRegionWarm(rid);
+    } else {
+      itemDetails.pricesWarm = true;
+    }
+    if (sellWarm && sellPrices[typeId]) {
       itemDetails.currentPrice = {
         sell:   sellPrices[typeId].sell,
         buy:    sellPrices[typeId].buy,
         median: sellPrices[typeId].median,
         avg30d,
+        // 'jita' = the hub has none listed, so this is Jita's live lowest sell (not the hub's)
+        sellScope: sellPrices[typeId].sellScope === 'jita' ? 'jita' : 'hub',
       };
+    } else if (!sellWarm) {
+      // Cold cache: this hub's own last precompute row (never another hub's data)
+      const pre = await dbGet(
+        'SELECT sell_price, buy_price, price_source FROM precomputed_profits WHERE product_id = ? AND region_id = ? LIMIT 1',
+        [typeId, regionId]
+      );
+      if (pre) itemDetails.currentPrice = { sell: pre.sell_price || 0, buy: pre.buy_price || 0, median: pre.sell_price || 0, avg30d,
+                                            sellScope: pre.price_source === 'jita_fallback' ? 'jita' : 'hub' };
     } else if (avg30d > 0) {
       // No live orders but we have historical trade data — expose it so True Profit
       // can use a realistic price rather than showing zero revenue
@@ -4489,15 +4714,15 @@ app.post('/api/item-details', security.apiLimiter, async (req, res) => {
       };
     }
 
-    // Source-hub prices — used for material unit costs in the build analysis.
-    // Falls back to sell prices when source == sell (or source cache is cold).
+    // Source-hub prices (with Jita fallback for types the hub has no sell order for) — used for
+    // the invention datacore costs. Material purchase costs use depth-aware pricing below.
     const matPrices = (materialRegionId !== regionId)
-      ? (regionPriceCache.get(materialRegionId)?.prices || sellPrices)
+      ? (getHubPrices(materialRegionId) || {})
       : sellPrices;
 
     // BUILD ANALYSIS (if assets and blueprints provided)
     if (assets && ownedBlueprints) {
-      const buildInfo = await buildMaterialAnalysis({ typeId, assets, ownedBlueprints, matPrices, currentPrice: itemDetails.currentPrice });
+      const buildInfo = await buildMaterialAnalysis({ typeId, assets, ownedBlueprints, matRegionId: materialRegionId, currentPrice: itemDetails.currentPrice });
       if (buildInfo) itemDetails.buildInfo = buildInfo;
     }
 
@@ -4871,6 +5096,8 @@ app.post('/api/blueprint-profits', security.apiLimiter, async (req, res) => {
     // off a background warm-up when the entry is genuinely missing or actually expired —
     // the computation itself proceeds as long as ANY price data is present.
     const pricesAvailable = !!(priceEntry && priceEntry.prices);
+    // The hub's own orders, with Jita's lowest sell for types it doesn't stock.
+    const shortfallPrices = pricesAvailable ? HP.withJitaFallback(priceEntry.prices, getRawJitaPrices()) : {};
     const isExpired = !priceEntry || Date.now() >= priceEntry.expiry;
     if (checkBuildable && isExpired && !regionWarmingSet.has(region)) {
       regionWarmingSet.add(region);
@@ -4926,7 +5153,7 @@ app.post('/api/blueprint-profits', security.apiLimiter, async (req, res) => {
             const have     = assetQuantities[m.material_id] || 0;
             const shortage = Math.max(0, m.quantity - have);
             if (shortage > 0) {
-              shortfallCost += (priceEntry.prices[m.material_id]?.sell || 0) * shortage;
+              shortfallCost += (shortfallPrices[m.material_id]?.sell || 0) * shortage;
             }
           }
           out[r.blueprint_id].canBuildNow = shortfallCost <= walletISK;
@@ -4974,52 +5201,54 @@ app.post('/api/material-stock-check', security.apiLimiter, async (req, res) => {
     // Defensive cap — no blueprint in the SDE has anywhere near this many distinct materials
     const limited = materials.slice(0, 40);
 
-    const results = await Promise.all(limited.map(async (m) => {
+    // Answered from the same cached order depth the prices come from (the hub's own sell orders —
+    // station-first for the empire hubs, the structure's orders for C-J6MT), so it agrees with the
+    // price shown and needs no ESI calls. (It used to query region orders per item, which cannot
+    // work for a player structure: every C-J6MT material came back "limited stock".)
+    const rawHub  = getRawHubPrices(region);
+    const rawJita = getRawJitaPrices();
+    if (!rawJita && region !== 10000002) kickRegionWarm(10000002);
+    if (!rawHub) {
+      // cold cache — warm it in the background; the client asks again
+      kickRegionWarm(region);
+      return res.json({ pricesWarm: false });
+    }
+    const hubIsJita = region === 10000002;
+
+    const results = limited.map((m) => {
       const materialId = parseInt(m.materialId);
-      const needed = Math.max(0, m.needed || 0);
+      const needed = Math.max(0, Math.floor(m.needed) || 0);
       if (!materialId || needed <= 0) {
-        return { materialId, needed: 0, availableQty: 0, orderCount: 0, cost: 0, covered: true };
+        return { materialId, needed: 0, availableQty: 0, orderCount: 0, cost: 0, covered: true, importQty: 0, importCost: 0, scope: 'hub' };
       }
-      try {
-        const orderRes = await esiFetch(
-          `https://esi.evetech.net/latest/markets/${region}/orders/` +
-          `?datasource=tranquility&order_type=sell&type_id=${materialId}`
-        );
-        if (!orderRes.ok) {
-          return { materialId, needed, availableQty: 0, orderCount: 0, cost: 0, covered: false };
-        }
-        const orders = await orderRes.json();
-        orders.sort((a, b) => a.price - b.price);
-
-        let remaining = needed, cost = 0, availableQty = 0;
-        for (const o of orders) {
-          availableQty += o.volume_remain;
-          if (remaining <= 0) continue;
-          const take = Math.min(remaining, o.volume_remain);
-          cost += take * o.price;
-          remaining -= take;
-        }
-
-        return {
-          materialId, needed, availableQty,
-          orderCount: orders.length,
-          cost, // real cost of buying min(availableQty, needed) units, walking the book
-          covered: availableQty >= needed,
-        };
-      } catch (_) {
-        return { materialId, needed, availableQty: 0, orderCount: 0, cost: 0, covered: false };
-      }
-    }));
+      const sup = HP.describeSupply({ hubPrices: rawHub, jitaPrices: rawJita, typeId: materialId, hubIsJita,
+                                      history: historyPriceMap.get(materialId) || 0 });
+      const hubOnly = HP.priceFromSupply({ ...sup, jita: null, hubIsJita: true, history: 0 }, needed);   // the hub alone
+      const full    = HP.priceFromSupply(sup, needed);                                                   // hub + Jita for the rest
+      const availableQty = sup.hub ? (sup.hub.total === null ? needed : sup.hub.total) : 0;
+      return {
+        materialId, needed,
+        availableQty,                                   // units the hub has for sale
+        orderCount: 0,
+        cost:       hubOnly.hubCost,                    // real cost of the units the hub can supply, walking its book
+        covered:    availableQty >= needed,             // the hub alone can fill it
+        importQty:  full.jitaQty + full.unfilledQty,    // units that have to come from Jita
+        importCost: full.jitaCost + full.unfilledCost,
+        scope:      full.scope,
+        shortStock: full.shortStock,
+      };
+    });
 
     const thin      = results.filter(r => !r.covered);
-    const totalCost = results.reduce((s, r) => s + r.cost, 0);
+    // Full cost of the purchase: what the hub supplies plus what is imported from Jita.
+    const totalCost = results.reduce((s, r) => s + r.cost + r.importCost, 0);
 
     let verdict;
     if (thin.length > 0) verdict = 'mixed';
     else if (totalCost > wallet) verdict = 'blocked';
     else verdict = 'ok';
 
-    res.json({ verdict, totalCost, wallet, materials: results });
+    res.json({ verdict, totalCost, wallet, materials: results, pricesWarm: true });
   } catch (err) {
     console.error('❌ Material stock check error:', err.message);
     res.status(500).json({ error: clientErrMsg(err) });
@@ -5846,6 +6075,7 @@ async function executeAiTool(toolUse, { characterId, req, jobs, blueprints, asse
              AND p2.region_id  = ?
             LEFT JOIN items i ON i.type_id = p1.product_id
             WHERE p1.sell_price > 0
+              AND COALESCE(p1.price_source, '') != 'jita_fallback'
               AND p2.buy_price  > 0
               AND (p2.buy_price * ${TAX} - p1.sell_price) / p1.sell_price * 100 >= ?
             ORDER BY ${iaOrder}
@@ -6774,7 +7004,7 @@ app.post('/api/session-data',
   async (req, res) => {
     try {
       const characterId = req.characterId;
-      const { assets, blueprints, prices, wallet, jobs, skills, total_sp, standings, planets, implants } = req.body;
+      const { assets, blueprints, prices, wallet, jobs, skills, own_skills, total_sp, standings, planets, implants } = req.body;
 
       // Refresh structure market token pool so precompute can poll the Keepstar
       const rawToken = req.headers.authorization?.replace('Bearer ', '');
@@ -6820,9 +7050,12 @@ app.post('/api/session-data',
         prices:     prices || {},
         wallet:     wallet || 0,
         jobs:       jobs || [],
-        skills:     skills || [],
+        skills:     skills || [],     // best level of each skill across ALL the user's loaded characters (build-eligibility filters)
+        // This character's OWN skills, when the client says so. Fees and build time for a character must use
+        // its own levels, not the best across the account, so getCharacterSession prefers this.
+        own_skills: Array.isArray(own_skills) ? sanitizeSkills(own_skills) : null,
         total_sp:   total_sp || 0,
-        standings:  standings || { factions: {}, corps: {} },
+        standings:  standings ? sanitizeStandings(standings) : { factions: {}, corps: {} },
         planets:    planets || [],
         implants:   Array.isArray(implants) ? implants : [],  // active implant type_ids (v1.17.0)
         accessibleStructures: Array.from(structureIds),
@@ -6845,6 +7078,13 @@ app.post('/api/session-data',
       // visit to the Blueprints tab serves icons from disk, not CCP CDN.
       global.warmBlueprintIcons(blueprints).catch(() => {});
 
+      // Persist skills so a later restart/expiry doesn't drop this character to level-0 fees/times.
+      // own_skills present (even empty) = a current client: its own levels are what count, never the account-wide best list
+      saveSkillSnapshot(characterId, Array.isArray(own_skills) ? own_skills : skills, standings, implants)
+        .catch(e => console.error('Skill snapshot save failed:', e.message));
+      // Learn which structure this character builds in and what rigs it runs (throttled).
+      learnStructureFit(characterId, rawToken, jobs).catch(() => {});
+
     } catch (error) {
       console.error('Session data error:', error);
       res.status(500).json({ error: 'Failed to cache session data' });
@@ -6853,6 +7093,27 @@ app.post('/api/session-data',
 );
 
 // Get cached session data (for debugging)
+// Skills/standings for a character that has no server session of its own (an alt chosen as the "fee
+// character" in the item panel). The full session POST also runs structure discovery and caches assets,
+// which is far too heavy to do for every alt, so this stores only the snapshot fees and build time need.
+app.post('/api/skill-snapshot',
+  security.apiLimiter,
+  security.verifyEveToken,
+  async (req, res) => {
+    try {
+      const { skills, standings, implants } = req.body || {};
+      if (!Array.isArray(skills) || skills.length === 0) {
+        return res.status(400).json({ error: 'skills required' });
+      }
+      await saveSkillSnapshot(req.characterId, skills, standings, implants);
+      res.json({ success: true });
+    } catch (e) {
+      console.error('Skill snapshot error:', e.message);
+      res.status(500).json({ error: clientErrMsg(e) });
+    }
+  }
+);
+
 app.get('/api/session-data/:characterId',
   security.apiLimiter,
   security.verifyEveToken,
@@ -7328,21 +7589,6 @@ function calcMfgSlotAllocation({ multiCharMode, characters, skillMap, activeJobs
   };
 }
 
-function calcGlobalTeFactor({ skillMap, structureTeBonus, implants }) {
-  // Industry (3380) −4%/level; Advanced Industry (3388) −3%/level.
-  const industryLvl       = skillMap[3380]  || 0;
-  const advIndustryLvl    = skillMap[3388]  || 0;
-  const industryFactor    = 1 - 0.04 * industryLvl;
-  const advIndustryFactor = 1 - 0.03 * advIndustryLvl;
-  const structureTeFactor = 1 - structureTeBonus / 100;
-  const mfgImplant = (Array.isArray(implants) ? implants : [])
-    .map(id => INDUSTRY_IMPLANTS[id])
-    .filter(imp => imp && imp.kind === 'mfg_time')
-    .sort((a, b) => b.pct - a.pct)[0] || null;
-  const implantFactor = mfgImplant ? (1 - mfgImplant.pct / 100) : 1;
-  return industryFactor * advIndustryFactor * structureTeFactor * implantFactor;
-}
-
 async function buildOwnedBpMap({ ownedBlueprints, includeCorpBps, characterId, eveToken }) {
   const bpByType = new Map(); // blueprint_type_id → { me, te, runs }
   for (const bp of ownedBlueprints) {
@@ -7391,7 +7637,8 @@ async function fetchQueueCandidates({ bpTypeIds, safeRegionId, allowedActivities
             pp.sell_price               AS sell_per_unit,
             pp.avg_daily_volume,
             pp.liquidity_risk,
-            i.name                      AS product_name
+            i.name                      AS product_name,
+            i.group_id                  AS product_group_id
      FROM   blueprints b
      JOIN   precomputed_profits pp
               ON  pp.blueprint_id = b.blueprint_id
@@ -7425,10 +7672,10 @@ async function fetchQueueCandidates({ bpTypeIds, safeRegionId, allowedActivities
 }
 
 function runQueuePlannerAllocation({
-  candidates, reqsByBp, skillMap, bpByType, structureMeBonus, rigMeBonus,
-  globalTeFactor, safeHorizon, horizonDays, totalSalesFeeRate,
+  candidates, reqsByBp, skillMap, bpByType, setup, implantPct,
+  safeHorizon, horizonDays, totalSalesFeeRate,
   effectiveBudget, mfgFreeSlots, reactionFreeSlots, multiCharMode, characters,
-  adjustedPrices, sci, facilityTaxDecimal, prices,
+  adjustedPrices, sci, facilityTaxDecimal, hubPrices, jitaPrices, hubIsJita, coldMatCost = null,
 }) {
   const meetsSkills = bpId => {
     const reqs = reqsByBp.get(bpId) || [];
@@ -7476,13 +7723,22 @@ function runQueuePlannerAllocation({
     const ownedBp = bpByType.get(c.blueprint_id);
     if (!ownedBp) continue;
 
-    // Effective ME: owned-blueprint ME + structure bonus + rig bonus.
-    const effectiveME = ownedBp.me + structureMeBonus + rigMeBonus;
-    const meFactor     = Math.max(0, 1 - effectiveME / 100);
+    // Material multiplier = owned blueprint ME × structure × the saved rigs that cover THIS product
+    // (each at its real, security-scaled value). Reactions run in refineries, not engineering
+    // complexes, so the structure/rig set doesn't apply to them.
+    const mods     = IM.modifiersForProduct(setup, c.product_group_id);
+    const meFactor = isReaction ? IM.blueprintMeMult(ownedBp.me) : IM.blueprintMeMult(ownedBp.me) * mods.matMult;
+    const effectiveME = (1 - meFactor) * 100;
 
-    // Owned blueprint TE stacks with global factor (skills + structure + implant).
-    const blueprintTeFactor = Math.max(0, 1 - (ownedBp.te || 0) / 100);
-    const effectiveBuildSec = Math.max(1, (c.build_time || 3600) * blueprintTeFactor * globalTeFactor);
+    // Build time: skills (incl. science skills the blueprint requires), blueprint TE, structure,
+    // the rigs' TE bonus and implant — or the Reactions-skill model for reaction jobs.
+    const timeMult = isReaction
+      ? IM.reactionTimeMultiplier({ skillMap })
+      : IM.timeMultiplier({
+          skillMap, requiredSkills: reqsByBp.get(c.blueprint_id) || [], blueprintTe: ownedBp.te || 0,
+          modsTimeMult: mods.timeMult, implantPct,
+        });
+    const effectiveBuildSec = Math.max(1, (c.build_time || 3600) * timeMult);
     const buildHoursPerRun  = effectiveBuildSec / 3600;
 
     // How many sequential runs fit within the planning horizon for a single slot?
@@ -7506,19 +7762,38 @@ function runQueuePlannerAllocation({
     // which both let the profitability filter below admit jobs that are
     // actually unprofitable once job cost is included, and made the
     // frontend's "True Profit" label for this number inaccurate.
-    let matCostPerRun = 0;
-    let eivPerRun      = 0;
     const candidateMats = blueprintMaterialsCache.get(c.blueprint_id) || [];
-    for (const m of candidateMats) {
-      const adjQty = Math.max(1, Math.ceil(m.quantity * meFactor));
-      matCostPerRun += (prices?.[m.material_id]?.sell || 0) * adjQty;
-      eivPerRun     += (adjustedPrices?.[m.material_id] || 0) * adjQty;
-    }
+    // Buy hub still loading and no stored figure for this blueprint: it can't be priced honestly, so don't rank it on a cost of 0.
+    if (!hubPrices && coldMatCost && !coldMatCost.has(c.blueprint_id)) continue;
+    // Material + job cost for a job of `n` runs: single rounding per job and EIV on BASE
+    // quantities (lib/industry-math.js). Candidate selection uses n = 1; once the run count is
+    // chosen the totals are recomputed for that exact job size.
+    const costFor = (n) => {
+      let mat = 0;
+      if (hubPrices) {
+        // Bought like a real purchase: the buy hub's own orders (depth-aware), the remainder
+        // imported from Jita. Same function /api/true-cost uses, so the two agree.
+        for (const m of IM.jobMaterials(candidateMats, n, meFactor)) {
+          mat += HP.priceBuy({ hubPrices, jitaPrices, typeId: m.material_id, qty: m.qty, hubIsJita,
+                               history: historyPriceMap.get(m.material_id) || 0 }).cost;
+        }
+      } else {
+        // Buy hub's cache is cold: THAT hub's own last precompute figure (never another hub's prices)
+        mat = ((coldMatCost && coldMatCost.get(c.blueprint_id)) ?? 0) * meFactor * n;
+      }
+      const eiv = IM.estimatedItemValue(candidateMats, n, adjustedPrices);
+      const job = IM.jobCost({
+        eiv, sci: sci || 0, costMult: isReaction ? 1 : mods.costMult, facilityTaxDecimal: facilityTaxDecimal || 0,
+      }).total;
+      return { mat, job };
+    };
+    const perRun = costFor(1);
+    let matCostPerRun = perRun.mat;
+    const jobCostPerRun = perRun.job;
     // Fallback to the precompute aggregate (linear ME scaling) only if this
     // blueprint's materials aren't in the cache for some reason — better than
     // silently pricing it at 0.
     if (candidateMats.length === 0) matCostPerRun = (c.mat_cost_per_run || 0) * meFactor;
-    const jobCostPerRun = eivPerRun * (sci || 0) + eivPerRun * 0.04 + eivPerRun * (facilityTaxDecimal || 0);
 
     // Re-derive profit per run using the character's actual sales fees.
     const totalSellValue = (c.sell_per_unit || 0) * productQty;
@@ -7540,9 +7815,11 @@ function runQueuePlannerAllocation({
     // BPOs have runs = -1 (unlimited); BPCs have a finite positive run count.
     const bpcRunCap       = (ownedBp.runs != null && ownedBp.runs > 0) ? ownedBp.runs : maxRunsByTime;
     const recommendedRuns = Math.max(1, Math.min(maxRunsByTime, liquidityRunCap, maxRunsByBudget, bpcRunCap));
-    const totalMatCost    = matCostPerRun * recommendedRuns;
-    const totalJobCost    = jobCostPerRun * recommendedRuns;
-    const totalProfit     = profitPerRun  * recommendedRuns;
+    // Exact totals for the chosen job size (per-job rounding makes cost non-linear in runs).
+    const exact           = costFor(recommendedRuns);
+    const totalMatCost    = candidateMats.length ? exact.mat : matCostPerRun * recommendedRuns;
+    const totalJobCost    = exact.job;
+    const totalProfit     = (totalSellValue - salesFees) * recommendedRuns - totalMatCost - totalJobCost;
     const totalBuildSec   = effectiveBuildSec * recommendedRuns;
 
     // In multi-char mode: find the first character who has a free slot in this
@@ -7577,6 +7854,10 @@ function runQueuePlannerAllocation({
       avgDailyVolume:         dailyVol,
       ownedBpME:              ownedBp.me,
       effectiveME,
+      materialMultiplier:     meFactor,
+      rigsApplied:            isReaction ? 0 : mods.appliedRigs.length,
+      // false when the product's item group isn't in the game-data table, so no rig bonus could be applied
+      rigCoverageKnown:       isReaction ? true : mods.familyKnown,
       assignedCharacterId:    assignedChar?.characterId ?? null,
       assignedCharacterName:  assignedChar?.name       ?? null,
     });
@@ -7591,7 +7872,9 @@ function runQueuePlannerAllocation({
   return { recommendations, remainingBudget };
 }
 
-async function calcAggregateShortfall({ recommendations, assets, bpByType, structureMeBonus, rigMeBonus, prices }) {
+// Shortfall is priced like a real purchase: what the buy hub's own sell orders can supply, then
+// the remainder imported from Jita (tagged), using order depth (lib/hub-price.js).
+async function calcAggregateShortfall({ recommendations, assets, hubPrices, jitaPrices, hubIsJita }) {
   const assetMap = new Map(); // typeId → total held quantity
   for (const a of assets) {
     assetMap.set(a.type_id, (assetMap.get(a.type_id) || 0) + (a.quantity || 0));
@@ -7614,9 +7897,9 @@ async function calcAggregateShortfall({ recommendations, assets, bpByType, struc
   for (const mat of allMaterials) {
     const rec = recommendations.find(r => r.blueprintId === mat.blueprint_id);
     if (!rec) continue;
-    const ownedBp = bpByType.get(mat.blueprint_id);
-    const me      = ownedBp ? (ownedBp.me + structureMeBonus + rigMeBonus) : 0;
-    const adjQty  = Math.max(1, Math.ceil(mat.base_qty * Math.max(0, 1 - me / 100))) * rec.runs;
+    // Same per-job quantity the planner priced (rec.materialMultiplier already folds in the
+    // owned blueprint ME, the structure and the rigs covering this product).
+    const adjQty  = IM.jobQuantity(mat.base_qty, rec.runs, rec.materialMultiplier);
 
     if (!matTotals.has(mat.material_id)) {
       matTotals.set(mat.material_id, {
@@ -7624,18 +7907,29 @@ async function calcAggregateShortfall({ recommendations, assets, bpByType, struc
         name:     mat.material_name,
         needed:   0,
         have:     assetMap.get(mat.material_id) || 0,
-        jitaSell: prices[mat.material_id]?.sell || 0,
       });
     }
     matTotals.get(mat.material_id).needed += adjQty;
   }
 
   return [...matTotals.values()]
-    .map(m => ({
-      ...m,
-      shortage:    Math.max(0, m.needed - m.have),
-      shortageISK: Math.max(0, m.needed - m.have) * m.jitaSell,
-    }))
+    .map(m => {
+      const shortage = Math.max(0, m.needed - m.have);
+      const pb = hubPrices
+        ? HP.priceBuy({ hubPrices, jitaPrices, typeId: m.typeId, qty: shortage, hubIsJita,
+                        history: historyPriceMap.get(m.typeId) || 0 })
+        : null;
+      return {
+        ...m,
+        shortage,
+        jitaSell:    pb && shortage > 0 ? pb.unit : 0,        // average unit price of the purchase (legacy field name)
+        shortageISK: pb ? pb.cost : 0,
+        priceScope:  pb ? pb.scope : null,                    // 'hub' | 'mixed' | 'jita' | 'history' | 'none'
+        hubQty:      pb ? pb.hubQty : 0,
+        importQty:   pb ? pb.jitaQty + pb.unfilledQty : 0,
+        shortStock:  pb ? pb.shortStock : false,
+      };
+    })
     .filter(m => m.shortage > 0)
     .sort((a, b) => b.shortageISK - a.shortageISK);
 }
@@ -7683,12 +7977,17 @@ app.post('/api/queue-planner', security.apiLimiter, security.verifyEveToken, asy
       [characterId]
     );
     const rigIds             = JSON.parse(settings?.rig_ids || '[]');
-    // Structure gives +1% ME to all material quantities.
-    const structureMeBonus   = settings?.structure_type_id ? 1 : 0;
-    const rigMeBonus         = rigIds.reduce((sum, id) => sum + (RIG_ME_BONUSES[id] || 0), 0);
-    // Structure TE bonus reduces build time (Raitaru 15%, Azbel 20%, Sotiyo 30%).
-    const structureTeBonus   = settings?.structure_type_id
-      ? (STRUCTURE_TE_BONUS[settings.structure_type_id] || 0) : 0;
+    // Structure + rig bonuses come from the shared mechanics module: per-rig attributes scaled by
+    // the system's security class, applied per product at allocation time (a rig only affects the
+    // product families it covers), all multiplicative.
+    const planSysRow = settings?.system_id
+      ? await dbGet('SELECT security_status FROM sde_systems WHERE system_id = ?', [settings.system_id])
+      : null;
+    const setup = IM.describeSetup({
+      structureTypeId: settings?.structure_type_id || null,
+      rigIds,
+      systemSecurity:  planSysRow ? planSysRow.security_status : null,
+    });
     const facilityTaxDecimal = (settings?.facility_tax || 0) / 100;
     const targetSystemId     = settings?.system_id || 30000142; // default: Jita IV
 
@@ -7700,8 +7999,12 @@ app.post('/api/queue-planner', security.apiLimiter, security.verifyEveToken, asy
     const multiCharMode = Array.isArray(characters) && characters.length > 0;
     const { mfgFreeSlots, reactionFreeSlots, charSlotPool } = calcMfgSlotAllocation({ multiCharMode, characters, skillMap, activeJobs });
 
-    // ── Global time-efficiency factor (applied to every blueprint) ───────────
-    const globalTeFactor = calcGlobalTeFactor({ skillMap, structureTeBonus, implants });
+    // Best manufacturing-time implant (BX series), applied to every blueprint's build time.
+    const planImplant = (Array.isArray(implants) ? implants : [])
+      .map(id => INDUSTRY_IMPLANTS[id])
+      .filter(imp => imp && imp.kind === 'mfg_time')
+      .sort((a, b) => b.pct - a.pct)[0] || null;
+    const implantPct = planImplant ? planImplant.pct : 0;
 
     // ── Prices for material cost re-scoring and shortfall valuation ──────────
     // Follows safeMaterialRegionId (the "Buy In" hub) — materials are what get
@@ -7711,7 +8014,19 @@ app.post('/api/queue-planner', security.apiLimiter, security.verifyEveToken, asy
     // goods revenue). This used to reuse safeRegionId for both, so the
     // shortfall panel silently priced materials at wherever "Sell At" was set.
     // Falls back to Jita if the selected region's cache isn't warm yet.
-    const prices = regionPriceCache.get(safeMaterialRegionId)?.prices || jitaPricesCache || {};
+    // Materials are priced from the buy hub's own orders (+ Jita for what it can't supply). A cold
+    // cache is never filled with Jita's map: the hub's last precompute figures are used and the
+    // response says pricesWarm:false.
+    const matJitaPrices = getRawJitaPrices();
+    // Jita not being loaded makes the import side unknowable, so it is "cold" too (never priced as if Jita had nothing)
+    const matHubPrices  = (safeMaterialRegionId === 10000002 || matJitaPrices) ? getRawHubPrices(safeMaterialRegionId) : null;
+    if (!matHubPrices) { kickRegionWarm(safeMaterialRegionId); kickRegionWarm(10000002); }
+    // The buy hub's own last precompute material cost per blueprint (used only while its cache is cold)
+    const coldMatCost = new Map();
+    if (!matHubPrices) {
+      const rowsCold = await dbAll('SELECT blueprint_id, material_cost FROM precomputed_profits WHERE region_id = ?', [safeMaterialRegionId]);
+      for (const r of rowsCold) coldMatCost.set(r.blueprint_id, r.material_cost || 0);
+    }
 
     // ── Job cost inputs (EIV × SCI + SCC + facility tax) ──────────────────────
     // Both calls are cheap, pre-warmed in-memory reads (same functions
@@ -7753,15 +8068,18 @@ app.post('/api/queue-planner', security.apiLimiter, security.verifyEveToken, asy
 
     // ── Greedy slot allocation ────────────────────────────────────────────────
     const { recommendations, remainingBudget: _unusedBudget } = runQueuePlannerAllocation({
-      candidates, reqsByBp, skillMap, bpByType, structureMeBonus, rigMeBonus,
-      globalTeFactor, safeHorizon, horizonDays, totalSalesFeeRate,
+      candidates, reqsByBp, skillMap, bpByType, setup, implantPct,
+      safeHorizon, horizonDays, totalSalesFeeRate,
       effectiveBudget, mfgFreeSlots, reactionFreeSlots, multiCharMode, characters,
-      adjustedPrices, sci, facilityTaxDecimal, prices,
+      adjustedPrices, sci, facilityTaxDecimal,
+      hubPrices: matHubPrices, jitaPrices: matJitaPrices, hubIsJita: safeMaterialRegionId === 10000002, coldMatCost,
     });
 
     // ── Aggregate material shortfall for one combined shopping trip ───────────
     const aggregateMaterials = await calcAggregateShortfall({
-      recommendations, assets, bpByType, structureMeBonus, rigMeBonus, prices,
+      recommendations, assets,
+      hubPrices: matHubPrices, jitaPrices: matJitaPrices,
+      hubIsJita: safeMaterialRegionId === 10000002,
     });
 
     // ── Summary ───────────────────────────────────────────────────────────────
@@ -7783,6 +8101,10 @@ app.post('/api/queue-planner', security.apiLimiter, security.verifyEveToken, asy
       effectiveBudget,
       horizonHours: safeHorizon,
       regionId:     safeRegionId,
+      materialRegionId: safeMaterialRegionId,
+      pricesWarm:   !!matHubPrices,
+      // Materials the buy hub can't fully supply (the rest is priced at Jita and has to be imported).
+      importMaterials: aggregateMaterials.filter(m => m.importQty > 0).length,
     });
   } catch (err) {
     console.error('Queue planner error:', err);
@@ -8505,6 +8827,10 @@ async function runPreCompute() {
         setRegionPriceCache(regionId, prices);
         if (regionId === 10000002) {
           jitaPricesCacheExpiry = Date.now() + CACHE_TTL_MS; // keep compat accessor in sync
+        } else {
+          // Each hub is priced from its OWN sell orders; for types it has none of, Jita's live
+          // lowest sell (tagged sellScope 'jita', stored as price_source 'jita_fallback').
+          prices = HP.withJitaFallback(prices, getRawJitaPrices());
         }
       } catch (err) {
         console.error(`⚠ Region ${regionId}: price fetch failed, skipping — ${err.message}`);
@@ -8534,7 +8860,8 @@ async function runPreCompute() {
         const hist30d    = prices[bp.product_id]?.avg30d || 0;
         const sellPrice  = liveSell || hist30d || 0;
         const priceSource = liveSell > 0
-          ? (regionId === 10000002 ? 'jita' : `region_${regionId}`)
+          ? (prices[bp.product_id]?.sellScope === 'jita' ? 'jita_fallback'
+              : (regionId === 10000002 ? 'jita' : `region_${regionId}`))
           : (hist30d > 0 ? 'history_30d' : 'no_data');
         const buyPrice  = prices[bp.product_id]?.buy  || 0;
         const productQuantity = bp.product_quantity || 1;
@@ -8639,6 +8966,7 @@ async function runPreCompute() {
           AND j.region_id    = 10000002
           AND j.run_id       = ?
         WHERE s.run_id = ?
+          AND COALESCE(s.price_source, '') != 'jita_fallback'
       )
       SELECT
         blueprint_id,
@@ -8677,6 +9005,11 @@ async function runPreCompute() {
     }
     console.log('✓ Cross-hub strategy table built');
     } // end Jita-guard block
+
+    // Volume / liquidity labels follow each row's current price source, so refresh them whenever the rows were rewritten
+    // (the scheduled run also chains the Jita volume enrichment afterwards, which does the same).
+    try { await applyRegionVolumeAndLiquidity(); }
+    catch (e) { console.error('⚠ Hub volume/liquidity pass failed:', e.message); }
 
     const durationSec = (Date.now() - startTime) / 1000;
 
@@ -8772,6 +9105,98 @@ function calculateMaterialCostSync(materialId, quantity, prices, materialsByBp, 
 
 let volumeEnrichmentRunning = false;
 
+/**
+ * 4-tier liquidity classification for one row, from THAT row's own prices and volume.
+ * (Previously computed from the Jita row and copied to every hub, so a hub's label described
+ * Jita's spread and Jita's volume.)
+ */
+function classifyLiquidity({ marketGroupId, sellPrice, materialCost, buyPrice, avgVolume }) {
+  // TIER 1: Contract-only items (cannot be sold on market)
+  if (marketGroupId === null) return 'contract_only';
+  // TIER 2: Margin cap (500% maximum - anything beyond is likely scam/phantom)
+  if (materialCost > 0 && (sellPrice / materialCost) > 5.0) return 'extreme_margin';
+  // TIER 3: Volume requirements (tiered by price)
+  if (sellPrice < 100000000 && avgVolume < 10) return 'low_volume';                              // <100M ISK needs 10+ units/day
+  if (sellPrice >= 100000000 && sellPrice < 1000000000 && avgVolume < 5) return 'low_volume';   // 100M-1B ISK needs 5+ units/day
+  if (sellPrice >= 1000000000 && avgVolume < 2) return 'low_volume';                            // >1B ISK needs 2+ units/day
+  // TIER 4: Spread sanity check
+  if (buyPrice === 0 && sellPrice > 10000000) return 'no_buy_orders';                            // >10M ISK with no buy orders = suspicious
+  if (materialCost > 0 && ((sellPrice - materialCost) / sellPrice) > 0.9) return 'suspicious_spread';  // >90% spread is unusual
+  return null;
+}
+
+/**
+ * Every non-Jita hub row gets ITS OWN daily volume (hub_history_prices: ESI history for the
+ * empire hubs, FORGE's quantity-drop estimate for C-J6MT) and a liquidity label computed from its
+ * own prices. Only where the hub has no volume data does Jita's volume appear, tagged
+ * volume_source = 'jita' so the UI says so. Rows priced at Jita (the hub lists none) use Jita's
+ * volume and Jita's bids, because that is where the sale would happen.
+ */
+async function applyRegionVolumeAndLiquidity() {
+  const jitaRows = await dbAll(
+    `SELECT product_id, avg_daily_volume, market_group_id, buy_price
+       FROM precomputed_profits WHERE region_id = 10000002`
+  );
+  const jitaBy = new Map(jitaRows.map(r => [r.product_id, r]));
+  let updated = 0;
+
+  for (const regionId of VALID_REGIONS) {
+    if (regionId === 10000002) continue;
+    const volRows = await dbAll(
+      'SELECT type_id, avg_30d_volume FROM hub_history_prices WHERE region_id = ? AND avg_30d_volume > 0', [regionId]
+    );
+    const hubVol = new Map(volRows.map(r => [r.type_id, r.avg_30d_volume]));
+    const rows = await dbAll(
+      `SELECT blueprint_id, product_id, sell_price, buy_price, material_cost, price_source
+         FROM precomputed_profits WHERE region_id = ?`, [regionId]
+    );
+
+    await dbTxMutex.lock();
+    try {
+      await dbRun('BEGIN TRANSACTION');
+      for (const r of rows) {
+        const j = jitaBy.get(r.product_id);
+        const soldAtJita = r.price_source === 'jita_fallback';
+        const hv  = soldAtJita ? null : hubVol.get(r.product_id);
+        // Jita not enriched yet for this product: its market group (marketable or not) is unknown, so no
+        // liquidity label — but this hub's OWN volume is still worth recording.
+        if (!j || j.avg_daily_volume == null) {
+          if (hv != null) {
+            await dbRun(
+              `UPDATE precomputed_profits SET avg_daily_volume = ?, volume_source = 'hub' WHERE blueprint_id = ? AND region_id = ?`,
+              [hv, r.blueprint_id, regionId]
+            );
+            updated++;
+          }
+          continue;
+        }
+        const vol = hv != null ? hv : j.avg_daily_volume;
+        const src = hv != null ? 'hub' : 'jita';
+        const liq = classifyLiquidity({
+          marketGroupId: j.market_group_id ?? null,
+          sellPrice: r.sell_price, materialCost: r.material_cost,
+          buyPrice: soldAtJita ? (j.buy_price || 0) : (r.buy_price || 0),
+          avgVolume: vol || 0,
+        });
+        await dbRun(
+          `UPDATE precomputed_profits
+              SET avg_daily_volume = ?, market_group_id = ?, liquidity_risk = ?, volume_source = ?
+            WHERE blueprint_id = ? AND region_id = ?`,
+          [vol, j.market_group_id ?? null, liq, src, r.blueprint_id, regionId]
+        );
+        updated++;
+      }
+      await dbRun('COMMIT');
+    } catch (err) {
+      await dbRun('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      dbTxMutex.unlock();
+    }
+  }
+  return updated;
+}
+
 async function runVolumeEnrichment() {
   if (volumeEnrichmentRunning) {
     console.log('⚠ Volume enrichment already running, skipping');
@@ -8802,6 +9227,8 @@ async function runVolumeEnrichment() {
 
     if (itemsToEnrich.length === 0) {
       console.log('✓ No items need enrichment');
+      // Prices moved since the last run, so every hub's own volume/liquidity labels are refreshed anyway.
+      try { await applyRegionVolumeAndLiquidity(); } catch (e) { console.error('⚠ Hub volume/liquidity pass failed:', e.message); }
       volumeEnrichmentRunning = false;
       return { status: 'completed', enriched: 0, message: 'All items already enriched' };
     }
@@ -8873,30 +9300,10 @@ async function runVolumeEnrichment() {
         }
 
         // Determine liquidity risk using 4-tier system
-        let liquidityRisk = null;
-        
-        // TIER 1: Contract-only items (cannot be sold on market)
-        if (marketGroupId === null) {
-          liquidityRisk = 'contract_only';
-        }
-        // TIER 2: Margin cap (500% maximum - anything beyond is likely scam/phantom)
-        else if (item.material_cost > 0 && (item.sell_price / item.material_cost) > 5.0) {
-          liquidityRisk = 'extreme_margin';
-        }
-        // TIER 3: Volume requirements (tiered by price)
-        else if (item.sell_price < 100000000 && avgVolume < 10) {
-          liquidityRisk = 'low_volume'; // <100M ISK needs 10+ units/day
-        } else if (item.sell_price >= 100000000 && item.sell_price < 1000000000 && avgVolume < 5) {
-          liquidityRisk = 'low_volume'; // 100M-1B ISK needs 5+ units/day
-        } else if (item.sell_price >= 1000000000 && avgVolume < 2) {
-          liquidityRisk = 'low_volume'; // >1B ISK needs 2+ units/day
-        }
-        // TIER 4: Spread sanity check
-        else if (item.buy_price === 0 && item.sell_price > 10000000) {
-          liquidityRisk = 'no_buy_orders'; // >10M ISK with no buy orders = suspicious
-        } else if (item.material_cost > 0 && ((item.sell_price - item.material_cost) / item.sell_price) > 0.9) {
-          liquidityRisk = 'suspicious_spread'; // >90% spread is unusual
-        }
+        const liquidityRisk = classifyLiquidity({
+          marketGroupId, sellPrice: item.sell_price, materialCost: item.material_cost,
+          buyPrice: item.buy_price, avgVolume,
+        });
 
         // Update Jita row only — copy to other regions after the loop
         await dbRun(`
@@ -9003,29 +9410,12 @@ async function runVolumeEnrichment() {
     // Reload the in-memory map so the next precompute run benefits immediately
     await loadHistoryPriceMap();
 
-    // Copy volume/market data from Jita rows to all other region rows.
-    // avg_daily_volume and market_group_id are item properties, not region-specific.
-    if (enriched > 0) {
-      console.log('⟳ Copying volume data from Jita to other regions...');
-      // UPDATE ... FROM syntax (SQLite ≥3.33): computes Jita values once as a
-      // derived table, then does a single-pass join — O(n) instead of the old
-      // correlated-subquery approach which was O(n²) and held the write lock for
-      // many seconds, freezing the site during precompute.
-      await dbRun(`
-        UPDATE precomputed_profits
-        SET avg_daily_volume = jita.avg_daily_volume,
-            market_group_id  = jita.market_group_id,
-            liquidity_risk   = jita.liquidity_risk
-        FROM (
-          SELECT product_id, avg_daily_volume, market_group_id, liquidity_risk
-          FROM   precomputed_profits
-          WHERE  region_id = 10000002
-            AND  avg_daily_volume IS NOT NULL
-        ) AS jita
-        WHERE precomputed_profits.product_id = jita.product_id
-          AND precomputed_profits.region_id  != 10000002
-      `);
-      console.log('✓ Volume data copied to all regions');
+    // Per-hub volume + liquidity (own data first, Jita's only where a hub has none — tagged).
+    try {
+      const n = await applyRegionVolumeAndLiquidity();
+      console.log(`✓ Hub volume/liquidity applied to ${n} rows`);
+    } catch (e) {
+      console.error('⚠ Hub volume/liquidity pass failed:', e.message);
     }
 
     const durationSec = (Date.now() - startTime) / 1000;
@@ -9078,7 +9468,8 @@ async function fetchTopProfitableResults({ isCrossHub, regionId, sourceRegionId,
       SELECT blueprint_id, product_id, product_name, material_cost,
              sell_price, buy_price, profit, profit_margin, isk_per_hour,
              build_time, material_count, computed_at,
-             avg_daily_volume, market_group_id, liquidity_risk
+             avg_daily_volume, market_group_id, liquidity_risk,
+             price_source, avg_30d_price, volume_source
       FROM precomputed_profits
       WHERE ${whereConditions.join(' AND ')}
       ORDER BY ${orderClause}
@@ -9126,7 +9517,10 @@ async function fetchTopProfitableResults({ isCrossHub, regionId, sourceRegionId,
       sell.avg_daily_volume,
       sell.market_group_id,
       sell.liquidity_risk,
-      COALESCE(sell.activity_id, 1) AS activity_id
+      COALESCE(sell.activity_id, 1) AS activity_id,
+      sell.price_source,
+      sell.avg_30d_price,
+      sell.volume_source
     FROM precomputed_profits sell
     JOIN precomputed_profits src
       ON  src.blueprint_id = sell.blueprint_id
@@ -9242,14 +9636,16 @@ async function fetchUnfilteredTopProfitable({ isCrossHub, regionId, sourceRegion
                   THEN (sell.sell_price - src.material_cost) / (sell.build_time / 3600.0)
                   ELSE 0 END AS isk_per_hour,
                 sell.build_time, sell.material_count, sell.computed_at,
-                sell.avg_daily_volume, sell.liquidity_risk, COALESCE(sell.activity_id,1) AS activity_id
+                sell.avg_daily_volume, sell.liquidity_risk, COALESCE(sell.activity_id,1) AS activity_id,
+                sell.price_source, sell.avg_30d_price, sell.volume_source
          FROM precomputed_profits sell
          JOIN precomputed_profits src ON src.blueprint_id = sell.blueprint_id AND src.region_id = ?
          WHERE ${fbWhere.join(' AND ')}
          ORDER BY profit DESC LIMIT ?`
       : `SELECT blueprint_id, product_id, product_name, material_cost, sell_price, buy_price,
                 profit, profit_margin, isk_per_hour, build_time, material_count, computed_at,
-                avg_daily_volume, liquidity_risk, COALESCE(activity_id,1) AS activity_id
+                avg_daily_volume, liquidity_risk, COALESCE(activity_id,1) AS activity_id,
+                price_source, avg_30d_price, volume_source
          FROM precomputed_profits
          WHERE ${fbWhere.join(' AND ')}
          ORDER BY profit DESC LIMIT ?`,
@@ -9292,7 +9688,7 @@ async function fetchTopProfitableCandidates({ isCrossHub, regionId, sourceRegion
              build_time, material_count, computed_at,
              avg_daily_volume, market_group_id, liquidity_risk,
              COALESCE(activity_id, 1) AS activity_id,
-             price_source, avg_30d_price
+             price_source, avg_30d_price, volume_source
       FROM precomputed_profits
       WHERE ${whereConditions.join(' AND ')}
       ORDER BY ${orderClause}
@@ -9339,7 +9735,8 @@ async function fetchTopProfitableCandidates({ isCrossHub, regionId, sourceRegion
       sell.liquidity_risk,
       COALESCE(sell.activity_id, 1) AS activity_id,
       sell.price_source,
-      sell.avg_30d_price
+      sell.avg_30d_price,
+      sell.volume_source
     FROM precomputed_profits sell
     JOIN precomputed_profits src
       ON  src.blueprint_id = sell.blueprint_id
@@ -9431,10 +9828,15 @@ async function applyHaulCostPerUnit({ results, characterId, regionId }) {
   };
   const leg2Col = haulSettings?.leg2_collateral || 0;
 
+  // A row priced at Jita (its hub lists none) is sold at Jita, so its outbound freight runs there.
+  const toJita = regionId !== 10000002 && results.some(r => r.price_source === 'jita_fallback');
+  const leg2JumpsJita = toJita ? await getJumpCount(mfgSysId, HUB_SYSTEM_IDS[10000002]) : 0;
+
   for (const item of results) {
     const unitVol = volMap.get(item.product_id) || 0;
-    if (unitVol > 0 && leg2Jumps > 0) {
-      const r = calcLegHaulCost(leg2Cfg, unitVol, leg2Jumps, leg2Col);
+    const rowJumps = item.price_source === 'jita_fallback' && regionId !== 10000002 ? leg2JumpsJita : leg2Jumps;
+    if (unitVol > 0 && rowJumps > 0) {
+      const r = calcLegHaulCost(leg2Cfg, unitVol, rowJumps, leg2Col);
       item.haul_cost_per_unit = r.cost;
       item.haul_isk_per_m3    = r.effectiveIskPerM3;
       item.haul_volume_m3     = unitVol;
@@ -9651,6 +10053,7 @@ app.get('/api/inter-hub-arb', security.apiLimiter, async (req, res) => {
        AND p2.region_id  = ?
       LEFT JOIN items i ON i.type_id = p1.product_id
       WHERE p1.sell_price > 0
+        AND COALESCE(p1.price_source, '') != 'jita_fallback'   -- a Jita price standing in for a hub with no stock isn't an arbitrage source
         AND p2.buy_price  > 0
         AND (p2.buy_price * ${TAX} - p1.sell_price) / p1.sell_price * 100 >= ?
       GROUP BY p1.product_id
@@ -10310,32 +10713,31 @@ Use "Derived" line (job slots, research slots) directly; use skill levels to fla
 
 ══ MANUFACTURING MECHANICS & FORMULAS ══
 
-── Effective ME (Material Efficiency) ──
-The material quantities needed for a job are reduced by the combined effective ME:
-  effectiveME = blueprintME + structureMEbonus + Σ(rigMEbonus)
-  adjQty[mat] = max(1, ceil(baseQty × max(0, 1 − effectiveME/100))) × runs
+── Material multiplier (the factors MULTIPLY — they are never added together) ──
+  materialMult = (1 − blueprintME/100) × structureMult × Π over the rigs that cover the item (1 − rigBonus × securityMult / 100)
+  qty[mat]     = max(runs, ceil(round(baseQty × runs × materialMult, 2)))   ← rounded ONCE per job, minimum 1 per run
 
-Structure ME bonuses (Upwell engineering complexes):
-  NPC Station: 0%   Raitaru: +1%   Azbel: +1%   Sotiyo: +1%
+Structure (Upwell engineering complexes): NPC station ×1.0   Raitaru / Azbel / Sotiyo ×0.99 (1% less material)
 
-Standup {M,L,XL}-Set manufacturing rig ME bonuses:
-  T1 rigs (e.g. Standup XL-Set Ship Manufacturing Efficiency I):  +2.0% per rig installed
-  T2 rigs (e.g. Standup XL-Set Ship Manufacturing Efficiency II): +2.4% per rig installed
-  Max 3 rigs; no stacking penalty on ME reduction.
-  Each rig applies to its designated category and structure size — a Raitaru (M)
-  only takes M-Set rigs, Azbel (L) only L-Set, Sotiyo (XL) only XL-Set; within a
-  size, a rig applies only to its category (Ship rigs → ships only, etc.)
+Standup {M,L,XL}-Set manufacturing rigs:
+  T1 rigs (e.g. Standup XL-Set Ship Manufacturing Efficiency I):  2.0% material
+  T2 rigs (e.g. Standup XL-Set Ship Manufacturing Efficiency II): 2.4% material
+  Max 3 rigs. Each rig's bonus (material AND time) is scaled by the system's security:
+  highsec ×1.0, lowsec ×1.9, nullsec and wormhole ×2.1 (Thukker rigs: ×0.1 highsec/null, ×1.9 lowsec).
+  A Raitaru (M) takes only M-Set rigs, Azbel (L) only L-Set, Sotiyo (XL) only XL-Set, and a rig only
+  affects the item types it is built for (Ship rig → ships only, Equipment → modules, Ammunition →
+  charges, Drone and Fighter → drones, component rigs → components). Rigs for other item types do nothing.
 
-Example — Sotiyo, ME10 blueprint, 3× Standup XL-Set Ship Manufacturing Efficiency II rigs:
-  effectiveME = 10 + 1 + 7.2 = 18.2%
-  meFactor = 0.818 (vs 0.9 at bare ME10 in NPC)
-  On a 10B ISK carrier build: ~820M ISK additional saving vs NPC station
+Example — Sotiyo in nullsec, ME10 BPO, one XL-Set Ship Manufacturing Efficiency II rig, building a ship:
+  materialMult = 0.90 × 0.99 × (1 − 0.024 × 2.1) = 0.846 → 15.4% less material than the ME 0 base quantity
+  The user's own rigs come from their Mfg Setup; the True Profit panel lists which rigs applied.
 
 ── True Profit Formula ──
-  Revenue       = lowestSell[hub] × productQty × runs
-  Material Cost = Σ(adjQty[mat] × sellPrice[mat, sourceHub])
-  EIV           = Σ(adjQty[mat] × adjustedPrice[mat])   ← EVE adjusted prices, NOT market price
-  Job Cost      = EIV × SCI + EIV × 0.04(SCC) + EIV × facilityTax%
+  Revenue       = lowestSell[hub station] × productQty × runs   (region-wide best only if the hub has none)
+  Material Cost = Σ(qty[mat] × sellPrice[mat, sourceHub station])
+  EIV           = Σ(baseQty[mat] × adjustedPrice[mat]) × runs   ← BASE (ME 0) quantities × CCP adjusted prices, NOT market
+  Job Cost      = EIV × (SCI × structureCostMult + facilityTax% + 0.04 SCC)
+                  structureCostMult: NPC 1.0 | Raitaru 0.97 | Azbel 0.96 | Sotiyo 0.95 (applies to the SCI part only)
   Broker Fee    = revenue × max(1%, 3% − 0.3%×BrokerRelations − 0.03%×factionStanding − 0.02%×corpStanding)
   Trans. Tax    = revenue × max(0%, 7.5% × (1 − 0.11×Accounting))
   True Profit   = Revenue − MaterialCost − JobCost − BrokerFee − TransactionTax − HaulCost
@@ -10661,7 +11063,7 @@ app.get('/api/industry-settings', security.apiLimiter, security.verifyEveToken, 
       'SELECT * FROM character_industry_settings WHERE character_id = ?',
       [characterId]
     );
-    res.json(settings || {
+    res.json(await withSettingsExtras(settings) || {
       system_id:            null,
       system_name:          null,
       structure_type_id:    null,
@@ -10700,6 +11102,349 @@ app.get('/api/industry-settings', security.apiLimiter, security.verifyEveToken, 
   }
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Mfg Setup helpers + structure-fit registry
+// ═══════════════════════════════════════════════════════════════════════════
+
+const INT32_MAX_ID = 2147483647;
+const STRUCTURE_LEARN_INTERVAL_MS   = 6 * 60 * 60 * 1000;   // between automatic attempts that did ESI work
+const STRUCTURE_LEARN_FORCED_GAP_MS = 10 * 60 * 1000;       // minimum gap for the settings-save path
+const STRUCTURE_FAIL_TTL_MS         = 24 * 60 * 60 * 1000;  // remember a 403/404 per (character, structure)
+const STRUCTURE_FAIL_BUDGET_PER_HOUR = 20;                  // server-wide cap on FAILED lookups (ESI error budget is per IP)
+const structureLearnAt      = new Map();                    // characterId -> last learn attempt that did ESI work (ms)
+const structureLookupFailAt = new Map();                    // `${characterId}:${structureId}` -> ms of last 403/404
+let   structureFailWindow   = { start: 0, count: 0 };
+
+// Player-structure ids are int64 above the NPC-station range; must be a safe integer to be used in a URL.
+const isPlayerStructureId = n => Number.isSafeInteger(n) && n > INT32_MAX_ID;
+
+// Clamp client-posted skills/standings/implants before they are persisted or trusted: bounded sizes,
+// numeric ids, levels 0-5, standings -10..10. Malformed entries are dropped, never thrown on.
+function sanitizeSkills(skills) {
+  if (!Array.isArray(skills)) return [];
+  const out = [];
+  for (const s of skills.slice(0, 700)) {
+    const id = Number(s?.skill_id), lvl = Number(s?.active_skill_level);
+    if (Number.isSafeInteger(id) && id > 0 && Number.isFinite(lvl)) {
+      out.push({ skill_id: id, active_skill_level: Math.max(0, Math.min(5, Math.trunc(lvl))) });
+    }
+  }
+  return out;
+}
+function sanitizeStandings(st) {
+  const clean = { factions: {}, corps: {} };
+  if (!st || typeof st !== 'object') return clean;
+  for (const group of ['factions', 'corps']) {
+    const src = st[group];
+    if (!src || typeof src !== 'object') continue;
+    for (const [k, v] of Object.entries(src).slice(0, 2000)) {
+      const id = Number(k), val = Number(v);
+      if (Number.isSafeInteger(id) && Number.isFinite(val)) clean[group][id] = Math.max(-10, Math.min(10, val));
+    }
+  }
+  return clean;
+}
+function sanitizeImplants(imp) {
+  return Array.isArray(imp) ? imp.slice(0, 20).map(Number).filter(Number.isSafeInteger) : [];
+}
+
+// Saved settings plus what the UI needs to show the setup honestly: the system's security
+// (rig bonuses scale by it) and any saved rig ids that no longer exist in the game data.
+async function withSettingsExtras(settings) {
+  if (!settings) return null;
+  let rigIds = [];
+  try { rigIds = JSON.parse(settings.rig_ids || '[]'); } catch (_) { /* treat as empty */ }
+  const sysRow = settings.system_id
+    ? await dbGet('SELECT security_status FROM sde_systems WHERE system_id = ?', [settings.system_id])
+    : null;
+  const setup = IM.describeSetup({
+    structureTypeId: settings.structure_type_id,
+    rigIds,
+    systemSecurity: sysRow ? sysRow.security_status : null,
+  });
+  return {
+    ...settings,
+    system_security: sysRow ? sysRow.security_status : null,
+    security_class:  setup.secClass,
+    invalid_rig_ids: setup.invalidRigIds,
+    ignored_rig_ids: setup.ignoredRigIds,
+  };
+}
+
+// A structure's system/type never change, but WHO may know about it does: a cached row is only used
+// for a character whose own token has already resolved it (structure_access), otherwise the lookup
+// is repeated with that character's token. Only 403/404 are remembered (per character, 24 h) —
+// never 429/5xx — and failed lookups are capped server-wide per hour so a malformed or hostile
+// client can't burn the shared IP's ESI error budget.
+async function lookupStructure(structureId, token, characterId) {
+  if (!token || !isPlayerStructureId(structureId)) return null;
+  const cid = Number(characterId);
+
+  const known = await dbGet(
+    `SELECT k.* FROM known_structures k
+       JOIN structure_access a ON a.structure_id = k.structure_id
+      WHERE k.structure_id = ? AND a.character_id = ?`,
+    [structureId, cid]
+  );
+  if (known && known.solar_system_id) return known;
+
+  const failKey  = `${cid}:${structureId}`;
+  const failedAt = structureLookupFailAt.get(failKey);
+  if (failedAt && Date.now() - failedAt < STRUCTURE_FAIL_TTL_MS) return null;
+
+  const now = Date.now();
+  if (now - structureFailWindow.start > 3600 * 1000) structureFailWindow = { start: now, count: 0 };
+  if (structureFailWindow.count >= STRUCTURE_FAIL_BUDGET_PER_HOUR) return null;
+
+  try {
+    const r = await esiFetch(
+      `https://esi.evetech.net/latest/universe/structures/${structureId}/?datasource=tranquility`,
+      { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10000) }
+    );
+    // If ESI reports the error budget is getting low, stop making these optional lookups for the hour.
+    const remain = parseInt(r.headers.get('x-esi-error-limit-remain') || '', 10);
+    if (Number.isFinite(remain) && remain < 30) structureFailWindow.count = STRUCTURE_FAIL_BUDGET_PER_HOUR;
+
+    if (!r.ok) {
+      structureFailWindow.count++;
+      if (r.status === 403 || r.status === 404) {
+        if (structureLookupFailAt.size > 5000) structureLookupFailAt.clear();
+        structureLookupFailAt.set(failKey, now);
+      }
+      return null;
+    }
+    const d = await r.json();
+    if (!Number.isSafeInteger(d.solar_system_id) || !Number.isSafeInteger(d.type_id)) return null;
+    const iso = new Date().toISOString();
+    await dbRun(
+      `INSERT INTO known_structures (structure_id, name, solar_system_id, type_id, owner_id, first_seen, last_seen)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(structure_id) DO UPDATE SET
+         name = excluded.name, solar_system_id = excluded.solar_system_id,
+         type_id = excluded.type_id, owner_id = excluded.owner_id, last_seen = excluded.last_seen`,
+      [structureId, String(d.name || '').slice(0, 200), d.solar_system_id, d.type_id,
+       Number.isSafeInteger(d.owner_id) ? d.owner_id : null, iso, iso]
+    );
+    await dbRun(
+      `INSERT INTO structure_access (structure_id, character_id, verified_at) VALUES (?, ?, ?)
+       ON CONFLICT(structure_id, character_id) DO UPDATE SET verified_at = excluded.verified_at`,
+      [structureId, cid, iso]
+    );
+    return { structure_id: structureId, name: d.name, solar_system_id: d.solar_system_id, type_id: d.type_id, owner_id: d.owner_id };
+  } catch (_) {
+    return null;   // timeout/network error: not cached, retried on the next (throttled) attempt
+  }
+}
+
+async function recordFitReport(characterId, structureId, s) {
+  await dbRun(
+    `INSERT INTO structure_fit_reports (structure_id, character_id, structure_type_id, system_id, rig_ids, facility_tax, reported_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(structure_id, character_id) DO UPDATE SET
+       structure_type_id = excluded.structure_type_id, system_id = excluded.system_id,
+       rig_ids = excluded.rig_ids, facility_tax = excluded.facility_tax, reported_at = excluded.reported_at`,
+    [structureId, characterId, s.structure_type_id, s.system_id, s.rig_ids || '[]', s.facility_tax || 0, new Date().toISOString()]
+  );
+  // Once the real structure is known, the "unidentified" placeholder row is obsolete.
+  if (structureId) {
+    await dbRun('DELETE FROM structure_fit_reports WHERE character_id = ? AND structure_id = 0', [characterId]);
+  }
+}
+
+// Record this character's saved setup against the structure it builds in. The structure is
+// identified from the character's own manufacturing jobs: a job's facility_id resolves (via ESI,
+// with the character's token) to a system + structure type, and it counts only when exactly one
+// facility matches the setup's system and structure type. Ambiguous → stored unidentified (id 0).
+async function learnStructureFit(characterId, token, jobs, { force = false } = {}) {
+  const cid = Number(characterId);
+  // Automatic attempts at most every 6 h after real ESI work; the settings-save path (force) at most
+  // every 10 min — so alternating session posts and settings saves can't multiply ESI lookups.
+  const minGap = force ? STRUCTURE_LEARN_FORCED_GAP_MS : STRUCTURE_LEARN_INTERVAL_MS;
+  if (Date.now() - (structureLearnAt.get(cid) || 0) < minGap) return;
+
+  const s = await dbGet(
+    'SELECT system_id, structure_type_id, rig_ids, facility_tax FROM character_industry_settings WHERE character_id = ?',
+    [cid]
+  );
+  if (!s || !s.system_id || !s.structure_type_id) return;
+
+  const counts = new Map();
+  for (const j of (Array.isArray(jobs) ? jobs : []).slice(0, 500)) {
+    const fid = Number(j?.facilityId ?? j?.facility_id);
+    const act = j?.activityId ?? j?.activity_id;
+    if (isPlayerStructureId(fid) && act === 1) counts.set(fid, (counts.get(fid) || 0) + 1);
+  }
+  const candidates = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(e => e[0]);
+  // Throttle only after real work (ESI lookups). With no jobs yet there is nothing to identify,
+  // and the next session post must be free to try again once jobs have loaded.
+  if (candidates.length > 0) structureLearnAt.set(cid, Date.now());
+
+  const matches = [];
+  for (const fid of candidates) {
+    const st = await lookupStructure(fid, token, cid);
+    if (st && st.solar_system_id === s.system_id && st.type_id === s.structure_type_id) matches.push(st);
+  }
+  const matched = matches.length === 1 ? matches[0] : null;
+
+  // No new match: keep the structure we already linked while it still agrees with the saved
+  // setup; drop the link if the setup moved to a different system/structure type.
+  let structureId = matched ? matched.structure_id : 0;
+  if (!matched) {
+    const cur = await dbGet('SELECT structure_id FROM character_industry_settings WHERE character_id = ?', [cid]);
+    if (cur && cur.structure_id) {
+      const st = await dbGet('SELECT solar_system_id, type_id FROM known_structures WHERE structure_id = ?', [cur.structure_id]);
+      if (st && st.solar_system_id === s.system_id && st.type_id === s.structure_type_id) {
+        structureId = cur.structure_id;
+      } else {
+        await dbRun('UPDATE character_industry_settings SET structure_id = NULL, structure_name = NULL WHERE character_id = ?', [cid]);
+      }
+    }
+  }
+
+  await recordFitReport(cid, structureId, s);
+  if (matched) {
+    await dbRun(
+      'UPDATE character_industry_settings SET structure_id = ?, structure_name = ? WHERE character_id = ?',
+      [matched.structure_id, matched.name || null, cid]
+    );
+  }
+}
+
+// GET /api/industry-rigs — the real rig + structure stats the calculations use (static game data).
+app.get('/api/industry-rigs', security.apiLimiter, security.verifyEveToken, (req, res) => {
+  res.set('Cache-Control', 'private, max-age=3600');   // static data, but the route is token-gated: never let a shared cache serve it
+  res.json({ rigs: IM.RIGS, structures: IM.STRUCTURES });
+});
+
+// GET /api/structure-fit-suggestions?system_id=&structure_type_id=
+// What other FORGE users report running in this system on this structure type, grouped by
+// structure and identical rig set. Anonymous: only counts are returned, never character ids.
+app.get('/api/structure-fit-suggestions', security.apiLimiter, security.verifyEveToken, async (req, res) => {
+  try {
+    const systemId = parseInt(req.query.system_id, 10);
+    const typeId   = parseInt(req.query.structure_type_id, 10);
+    if (!systemId || !typeId) return res.status(400).json({ error: 'system_id and structure_type_id required' });
+
+    const rows = await dbAll(
+      `SELECT structure_id, character_id, rig_ids, facility_tax, reported_at
+         FROM structure_fit_reports
+        WHERE system_id = ? AND structure_type_id = ? AND character_id != ?`,
+      [systemId, typeId, req.characterId]
+    );
+    // The requester's own linked structure (if any) lets us show only reports for THAT structure.
+    const own = await dbGet('SELECT structure_id FROM character_industry_settings WHERE character_id = ?', [req.characterId]);
+    const ownStructureId = own && own.structure_id ? Number(own.structure_id) : null;
+
+    const groups = new Map();
+    for (const r of rows) {
+      let ids = [];
+      try { ids = JSON.parse(r.rig_ids || '[]'); } catch (_) { continue; }
+      const valid = [...new Set(ids.map(Number).filter(id => IM.RIGS[id]))].sort((a, b) => a - b);
+      if (valid.length === 0) continue;
+      // Reports for the requester's own structure stay separate; everything else is merged by rig
+      // set so the number of structures in a system can't be read from the number of rows.
+      const same = !!ownStructureId && Number(r.structure_id) === ownStructureId;
+      const key = `${same ? 'own' : 'other'}|${valid.join(',')}`;
+      let g = groups.get(key);
+      if (!g) {
+        g = { same_structure: same, rig_ids: valid, taxes: [], chars: new Set(), last: '' };
+        groups.set(key, g);
+      }
+      g.chars.add(r.character_id);
+      g.taxes.push(Number(r.facility_tax) || 0);
+      if (r.reported_at > g.last) g.last = r.reported_at;
+    }
+
+    const mode = arr => {
+      const tally = new Map();
+      arr.forEach(v => tally.set(v, (tally.get(v) || 0) + 1));
+      return [...tally.entries()].sort((a, b) => b[1] - a[1])[0][0];
+    };
+    // Deliberately no structure id or name in the response: any logged-in user can query any
+    // system, and a private structure's identity/location must not leak through this endpoint.
+    let suggestions = [...groups.values()]
+      .map(g => ({
+        same_structure:   g.same_structure,
+        rig_ids:          g.rig_ids,
+        rig_names:        g.rig_ids.map(id => IM.RIGS[id].name),
+        facility_tax:     mode(g.taxes),
+        reports:          g.chars.size,
+        _last:            g.last,          // used only for ordering; never sent (an exact timestamp would identify a reporter)
+      }))
+      .sort((a, b) => Number(b.same_structure) - Number(a.same_structure)
+                    || b.reports - a.reports
+                    || (b._last > a._last ? 1 : -1));
+    // If the requester's own structure is known and others report on it, show only those.
+    if (suggestions.some(s => s.same_structure)) suggestions = suggestions.filter(s => s.same_structure);
+    // Anything else needs at least 2 independent reporters before it is shown: a single report would
+    // let any user probe "does a FORGE pilot have a structure of this type in system X?" or read one
+    // pilot's fit. (A same_structure report was verified against the requester's own access, so it is exempt.)
+    suggestions = suggestions.filter(s => s.same_structure || s.reports >= 2);
+
+    res.json({ suggestions: suggestions.slice(0, 5).map(({ _last, ...pub }) => pub) });
+  } catch (err) {
+    console.error('structure-fit-suggestions error:', err.message);
+    res.status(500).json({ error: clientErrMsg(err) });
+  }
+});
+
+// GET /api/job-cost-check — FORGE's install-cost estimate vs what CCP actually charged for the
+// character's running manufacturing jobs. Only jobs in the facility the Mfg Setup describes are
+// compared (other facilities would use a different tax/structure). The estimate uses today's
+// system cost index, while a job paid the index in force when it was installed, so small
+// differences are expected; a consistent large gap points at a wrong setting.
+app.get('/api/job-cost-check', security.apiLimiter, security.verifyEveToken, async (req, res) => {
+  try {
+    const characterId = req.characterId;
+    const session = getCached(`session:${characterId}`);
+    if (!session) return res.status(400).json({ error: 'No session — refresh the page first', code: 'SESSION_MISSING' });
+    const settings = await dbGet('SELECT * FROM character_industry_settings WHERE character_id = ?', [characterId]);
+    if (!settings || !settings.system_id) return res.json({ configured: false, jobs: [], summary: null });
+
+    const [adjustedPrices, costIndices] = await Promise.all([fetchAdjustedPrices(), fetchCostIndices()]);
+    const sci      = costIndices[settings.system_id] || 0;
+    const costMult = IM.STRUCTURES[settings.structure_type_id]?.costMult ?? 1;
+    const taxDec   = (settings.facility_tax || 0) / 100;
+
+    const skipped = { other_facility: 0, not_manufacturing: 0, no_cost: 0, no_recipe: 0 };
+    const jobs = [];
+    for (const j of (Array.isArray(session.jobs) ? session.jobs : []).slice(0, 200)) {
+      if (!j || j.activityId !== 1) { skipped.not_manufacturing++; continue; }
+      const sameFacility = settings.structure_id
+        ? Number(j.facilityId) === Number(settings.structure_id)
+        : (!settings.structure_type_id && Number(j.facilityId) > 0 && Number(j.facilityId) <= INT32_MAX_ID);
+      if (!sameFacility) { skipped.other_facility++; continue; }
+      if (!(j.cost > 0)) { skipped.no_cost++; continue; }
+      const mats = blueprintMaterialsCache.get(
+        (await dbGet('SELECT blueprint_id FROM blueprints WHERE product_id = ?', [j.typeId]))?.blueprint_id
+      );
+      if (!mats || mats.length === 0) { skipped.no_recipe++; continue; }
+      const runs      = Math.max(1, Number(j.quantity) || 1);
+      const eiv       = IM.estimatedItemValue(mats, runs, adjustedPrices);
+      const predicted = IM.jobCost({ eiv, sci, costMult, facilityTaxDecimal: taxDec }).total;
+      jobs.push({
+        name: j.name, runs, actual: j.cost, predicted,
+        diff_pct: predicted > 0 ? ((j.cost - predicted) / predicted) * 100 : null,
+      });
+    }
+
+    const sumActual = jobs.reduce((s, x) => s + x.actual, 0);
+    const sumPred   = jobs.reduce((s, x) => s + x.predicted, 0);
+    res.json({
+      configured: true,
+      jobs: jobs.slice(0, 25),
+      skipped,
+      summary: jobs.length ? {
+        compared: jobs.length, actual_total: sumActual, predicted_total: sumPred,
+        diff_pct: sumPred > 0 ? ((sumActual - sumPred) / sumPred) * 100 : null,
+      } : null,
+    });
+  } catch (err) {
+    console.error('job-cost-check error:', err.message);
+    res.status(500).json({ error: clientErrMsg(err) });
+  }
+});
+
 // ── Sales-fee helpers (shared by /api/character-fee-rates and /api/true-cost) ──────────
 
 /**
@@ -10709,14 +11454,81 @@ app.get('/api/industry-settings', security.apiLimiter, security.verifyEveToken, 
  * @param {number|string} characterId
  * @returns {{ skillMap: Object, standings: { factions: Object, corps: Object } }}
  */
+// DB-backed copy of each character's last known skills/standings/implants. The 2h in-memory
+// session is lost on expiry and on every restart; falling back to this snapshot means fees and
+// build times use the character's real skills instead of silently assuming level 0.
+const skillSnapshots = new Map(); // characterId -> { skills, standings, implants, updatedAt }
+
+async function loadSkillSnapshots() {
+  const rows = await dbAll('SELECT character_id, skills, standings, implants, updated_at FROM character_skill_snapshot');
+  for (const r of rows) {
+    try {
+      skillSnapshots.set(Number(r.character_id), {
+        skills:    JSON.parse(r.skills    || '[]'),
+        standings: JSON.parse(r.standings || '{}'),
+        implants:  JSON.parse(r.implants  || '[]'),
+        updatedAt: r.updated_at,
+      });
+    } catch (_) { /* corrupt row — ignore, next session post rewrites it */ }
+  }
+  console.log(`✓ Skill snapshots loaded: ${skillSnapshots.size} characters`);
+}
+
+async function saveSkillSnapshot(characterId, skills, standings, implants) {
+  const cleanSkills = sanitizeSkills(skills);
+  if (cleanSkills.length === 0) return; // never overwrite good data with empty/garbage
+  const prev = skillSnapshots.get(Number(characterId));
+  const cleanStandings = sanitizeStandings(standings);
+  const hasStandings   = Object.keys(cleanStandings.factions).length > 0 || Object.keys(cleanStandings.corps).length > 0;
+  const snap = {
+    skills:    cleanSkills,
+    // a snapshot that carries no standings / implants (an alt without the standings scope) keeps the earlier ones
+    standings: hasStandings || !prev ? cleanStandings : prev.standings,
+    implants:  Array.isArray(implants) || !prev ? sanitizeImplants(implants) : prev.implants,
+    updatedAt: new Date().toISOString(),
+  };
+  skillSnapshots.set(Number(characterId), snap);
+  await dbRun(
+    `INSERT INTO character_skill_snapshot (character_id, skills, standings, implants, updated_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(character_id) DO UPDATE SET
+       skills = excluded.skills, standings = excluded.standings,
+       implants = excluded.implants, updated_at = excluded.updated_at`,
+    [Number(characterId), JSON.stringify(snap.skills), JSON.stringify(snap.standings),
+     JSON.stringify(snap.implants), snap.updatedAt]
+  );
+}
+
+// skillsSource: 'session' (live), 'snapshot' (last saved copy), 'none' (nothing known → level 0).
 function getCharacterSession(characterId) {
-  const session   = getCached(`session:${characterId}`);
-  const skillsArr = session?.skills   || [];
-  const standings = session?.standings || { factions: {}, corps: {} };
-  const implants  = Array.isArray(session?.implants) ? session.implants : [];
+  const session = getCached(`session:${characterId}`);
+  const snap    = skillSnapshots.get(Number(characterId));
+  const ownLive = Array.isArray(session?.own_skills) && session.own_skills.length > 0;
+  // A current client always sends its own levels (own_skills); an empty list means they failed to load, in which
+  // case the saved snapshot (or "none") is used — never the best-of-all-characters list, which would price fees
+  // at another character's Accounting/Broker Relations.
+  const ownSent = Array.isArray(session?.own_skills);
+  const live    = ownLive || (!ownSent && Array.isArray(session?.skills) && session.skills.length > 0);
+  const useSnap = !live && snap && snap.skills.length > 0;
+
+  const skillsArr = ownLive ? session.own_skills : (live ? session.skills : (useSnap ? snap.skills : []));
+  const hasAnyStanding = st => !!st && (Object.keys(st.factions || {}).length > 0 || Object.keys(st.corps || {}).length > 0);
+  const standings = (hasAnyStanding(session?.standings) ? session.standings : null)
+    || (hasAnyStanding(snap?.standings) ? snap.standings : null)
+    || session?.standings
+    || { factions: {}, corps: {} };
+  const implantsSrc = Array.isArray(session?.implants) && session.implants.length ? session.implants : snap?.implants;
+  const implants  = Array.isArray(implantsSrc) ? implantsSrc : [];
   const skillMap  = {};
-  skillsArr.forEach(s => { skillMap[Number(s.skill_id)] = s.active_skill_level || 0; });
-  return { skillMap, standings, implants };
+  skillsArr.forEach(s => {
+    if (!s || !Number.isFinite(Number(s.skill_id))) return;   // tolerate malformed client-posted entries
+    skillMap[Number(s.skill_id)] = Number(s.active_skill_level) || 0;
+  });
+  return {
+    skillMap, standings, implants,
+    skillsSource:    live ? 'session' : (useSnap ? 'snapshot' : 'none'),
+    skillsUpdatedAt: live ? (session.cachedAt || null) : (useSnap ? snap.updatedAt : null),
+  };
 }
 
 // ── Industry implants (v1.17.0) ───────────────────────────────────────────────
@@ -10729,11 +11541,7 @@ const INDUSTRY_IMPLANTS = {
   27171: { kind: 'mfg_time',     pct: 4, name: "Zainou 'Beancounter' Industry BX-804" },
   27174: { kind: 'reprocessing', pct: 4, name: "Zainou 'Beancounter' Reprocessing RX-804" },
 };
-// Structure manufacturing-TIME bonus (separate from the 1% ME bonus).
-// Verified 17 Sept 2026 against ESI dogma attribute 2602 (strEngTimeBonus):
-// Raitaru 0.85→15%, Azbel 0.8→20%, Sotiyo 0.7→30% (was wrongly 25% — the only
-// one of the three that was wrong). Matching frontend copy: IndustrySettings.tsx.
-const STRUCTURE_TE_BONUS = { 35825: 15, 35826: 20, 35827: 30 }; // Raitaru / Azbel / Sotiyo
+// Structure ME/TE/cost multipliers (Raitaru/Azbel/Sotiyo) are in lib/industry-data/structures.json.
 
 /**
  * Calculate EVE broker fee and transaction tax rates for a character at a trade hub.
@@ -11004,20 +11812,40 @@ app.post('/api/industry-settings', security.apiLimiter, security.verifyEveToken,
     const l2method  = VALID_METHODS.includes(leg2_method) ? leg2_method : 'user_defined';
     const ihmethod  = VALID_METHODS.includes(interhub_method) ? interhub_method : 'user_defined';
 
+    // System ids are used to build ESI route URLs: only real EVE solar-system ids are accepted.
+    const validSystemId = v => v == null || v === '' || (Number.isSafeInteger(Number(v)) && Number(v) >= 30000000 && Number(v) < 33000000);
+    if (!validSystemId(system_id) || !validSystemId(invention_system_id)) {
+      return res.status(400).json({ error: 'Invalid system id' });
+    }
+
+    // Only real manufacturing rigs from the game data, at most the 3 a structure can carry.
+    // Unknown ids (old picker bug, stale entries) are dropped instead of silently counting as 0.
+    // Same rules the read path enforces: real rigs only, no duplicates, max 3, matching the structure's
+    // size, and none at an NPC station.
+    const cleanRigIds = IM.describeSetup({
+      structureTypeId: Number(structure_type_id) || null, rigIds: rig_ids, systemSecurity: null,
+    }).rigs.map(r => r.id);
+
     await saveIndustrySettings({
-      characterId, system_id, system_name, structure_type_id, rig_ids, tax, validMatRegion,
+      characterId, system_id: system_id ? Number(system_id) : null, system_name, structure_type_id, rig_ids: cleanRigIds, tax, validMatRegion,
       material_region_name, haul_enabled, leg1Rate, leg2Rate, l1method, l2method,
       leg1_collateral, leg2_collateral, leg1_isk_per_jump, leg2_isk_per_jump,
       leg1_flat_total, leg2_flat_total, leg1_service_label, leg2_service_label,
       leg1_self_char_id, leg1_self_ship, leg1_self_fuel,
       leg2_self_char_id, leg2_self_ship, leg2_self_fuel,
-      invention_rig_ids, invention_system_id, invention_system_name,
+      invention_rig_ids, invention_system_id: invention_system_id ? Number(invention_system_id) : null, invention_system_name,
       interhub_haul_enabled, ihmethod, interhub_haul_rate, interhub_isk_per_jump,
       interhub_flat_total, interhub_self_fuel, interhub_collateral,
       interhub_service_label, interhub_self_char_id, interhub_self_ship,
     });
 
     res.json({ ok: true });
+
+    // Register this setup in the structure-fit registry (identifies the structure from the
+    // character's own jobs when possible). Best effort — never affects the save.
+    const liveToken = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    learnStructureFit(characterId, liveToken, getCached(`session:${characterId}`)?.jobs, { force: true })
+      .catch(e => console.error('structure-fit learn failed:', e.message));
   } catch (err) {
     console.error('Industry settings POST error:', err.message);
     res.status(500).json({ error: clientErrMsg(err) });
@@ -11057,6 +11885,16 @@ app.get('/api/system-search', security.apiLimiter, security.verifyEveToken, asyn
     substring.sort((a, b) => a.system_name.localeCompare(b.system_name));
 
     const results = [...prefix, ...substring].slice(0, 10);
+    // Attach each system's security status — rig bonuses scale by it, so the Mfg Setup screen
+    // shows the user their real (security-scaled) rig values for the system they pick.
+    if (results.length) {
+      const secRows = await dbAll(
+        `SELECT system_id, security_status FROM sde_systems WHERE system_id IN (${results.map(() => '?').join(',')})`,
+        results.map(r => r.system_id)
+      );
+      const secById = new Map(secRows.map(r => [r.system_id, r.security_status]));
+      return res.json(results.map(r => ({ ...r, security: secById.has(r.system_id) ? secById.get(r.system_id) : null })));
+    }
     res.json(results);
   } catch (err) {
     console.error('System search error:', err.message);
@@ -11074,125 +11912,10 @@ app.get('/api/system-search', security.apiLimiter, security.verifyEveToken, asyn
 //   • Sell price           → regionPriceCache (populated by precompute job)
 //   • Sales fees           → character skills + standings (session cache)
 //
-// ── Standup {M,L,XL}-Set manufacturing efficiency rig ME bonuses ───────────
-// Source: verified 17 Sept 2026 against live ESI (/universe/types/{id}/ dogma
-// attribute 2594 "Material Reduction Bonus") + the Fuzzwork SDE export (market
-// groups 2347/2348/2349 = "{Medium,Large,X-Large} Structure Engineering Rigs").
-// T1 = 2.0% per rig; T2 = 2.4% per rig; Thukker faction variant = 2.0% (no I/II
-// tiers) — unchanged from the prior map's assumed magnitude, which the raw
-// dogma value corroborates. Rigs also carry a separate, much larger *time*
-// bonus (attribute 2593, ~10x the material one) that is NOT modelled here —
-// it doesn't affect ISK cost, only job duration — and structure rig bonuses
-// are known to scale by security space (per CCP's Engineering Complex dev
-// blog), though whether that scaling touches the material bonus specifically,
-// as opposed to only time/cost, was not re-verified here; flag for review if
-// True Profit numbers look off for a non-null/WH structure. Rigs do NOT
-// stack-penalise each other.
-//
-// IMPORTANT — this replaces a prior map (removed 17 Sept 2026) whose type_ids
-// were wrong: about a third pointed at unpublished legacy blueprint-research
-// modules with zero relation to manufacturing (e.g. old 37184–37199 range —
-// "Medium/Large Tech I Ship/Drone/Module Research", not manufacturing rigs at
-// all), and the real rigs among them were mapped to the wrong ship-size tier
-// (e.g. 37180/37181 are the XL-Set "Ship Manufacturing Efficiency" rigs, not
-// "Large Ship" — this was the reported bug: users couldn't find/select the
-// real XL-Set rig because FORGE had already claimed that type_id under a
-// different, incorrect name). See IndustrySettings.tsx's MANUFACTURING_RIGS
-// for the matching frontend catalog (must stay in sync with this map — same
-// type_ids, same source verification date).
-//
-// M-Set (Raitaru) splits each category into separate ME-only/TE-only rigs, so
-// its TE-only entries are listed here at 0 (no material bonus, but a real,
-// selectable rig — kept in the map for the "not simply missing" documentation
-// value). L-Set (Azbel) and XL-Set (Sotiyo) combine ME+TE into one rig per
-// category/tier, so every entry for those sizes carries a nonzero ME value.
-const RIG_ME_BONUSES = {
-  37146: 2, // Basic Medium Ship Manufacturing Material Efficiency I
-  37147: 2.4, // Basic Medium Ship Manufacturing Material Efficiency II
-  37148: 0, // Drone and Fighter Manufacturing Time Efficiency I
-  37149: 0, // Drone and Fighter Manufacturing Time Efficiency II
-  37150: 0, // Ammunition Manufacturing Time Efficiency I
-  37151: 0, // Ammunition Manufacturing Time Efficiency II
-  37152: 2.4, // Basic Large Ship Manufacturing Material Efficiency II
-  37153: 0, // Basic Medium Ship Manufacturing Time Efficiency II
-  37154: 2, // Basic Small Ship Manufacturing Material Efficiency I
-  37155: 2.4, // Basic Small Ship Manufacturing Material Efficiency II
-  37156: 2, // Drone and Fighter Manufacturing Material Efficiency I
-  37157: 2.4, // Drone and Fighter Manufacturing Material Efficiency II
-  37158: 2, // Ammunition Manufacturing Material Efficiency I
-  37159: 2.4, // Ammunition Manufacturing Material Efficiency II
-  37160: 0, // Equipment Manufacturing Time Efficiency I
-  37161: 0, // Equipment Manufacturing Time Efficiency II
-  37162: 0, // Basic Small Ship Manufacturing Time Efficiency I
-  37163: 0, // Basic Small Ship Manufacturing Time Efficiency II
-  37164: 2, // Ammunition Manufacturing Efficiency I
-  37165: 2.4, // Ammunition Manufacturing Efficiency II
-  37166: 2, // Basic Large Ship Manufacturing Efficiency I
-  37167: 2.4, // Basic Large Ship Manufacturing Efficiency II
-  37168: 2, // Advanced Large Ship Manufacturing Efficiency I
-  37169: 2.4, // Advanced Large Ship Manufacturing Efficiency II
-  37170: 2, // Equipment Manufacturing Efficiency I
-  37171: 2.4, // Equipment Manufacturing Efficiency II
-  37172: 2.4, // Capital Ship Manufacturing Efficiency II
-  37173: 2, // Capital Ship Manufacturing Efficiency I
-  37174: 2, // Advanced Component Manufacturing Efficiency I
-  37175: 2.4, // Advanced Component Manufacturing Efficiency II
-  37178: 2, // Equipment and Consumable Manufacturing Efficiency I
-  37179: 2.4, // Equipment and Consumable Manufacturing Efficiency II
-  37180: 2, // Ship Manufacturing Efficiency I
-  37181: 2.4, // Ship Manufacturing Efficiency II
-  43704: 2, // Structure and Component Manufacturing Efficiency I
-  43705: 2.4, // Structure and Component Manufacturing Efficiency II
-  43707: 2, // Advanced Small Ship Manufacturing Efficiency I
-  43708: 2.4, // Advanced Small Ship Manufacturing Efficiency II
-  43709: 2, // Advanced Medium Ship Manufacturing Efficiency I
-  43711: 2.4, // Advanced Medium Ship Manufacturing Efficiency II
-  43712: 2, // Drone and Fighter Manufacturing Efficiency I
-  43713: 2.4, // Drone and Fighter Manufacturing Efficiency II
-  43714: 2, // Basic Small Ship Manufacturing Efficiency I
-  43715: 2.4, // Basic Small Ship Manufacturing Efficiency II
-  43716: 2, // Basic Medium Ship Manufacturing Efficiency I
-  43717: 2.4, // Basic Medium Ship Manufacturing Efficiency II
-  43718: 2, // Basic Capital Component Manufacturing Efficiency I
-  43719: 2.4, // Basic Capital Component Manufacturing Efficiency II
-  43720: 2, // Structure Manufacturing Efficiency I
-  43721: 2.4, // Structure Manufacturing Efficiency II
-  43732: 2, // Basic Large Ship Manufacturing Material Efficiency I
-  43733: 0, // Basic Large Ship Manufacturing Time Efficiency I
-  43734: 0, // Basic Large Ship Manufacturing Time Efficiency II
-  43854: 2.4, // Advanced Small Ship Manufacturing Material Efficiency II
-  43855: 2, // Advanced Small Ship Manufacturing Material Efficiency I
-  43856: 0, // Advanced Small Ship Manufacturing Time Efficiency I
-  43857: 0, // Advanced Small Ship Manufacturing Time Efficiency II
-  43858: 2, // Advanced Medium Ship Manufacturing Material Efficiency I
-  43859: 2.4, // Advanced Medium Ship Manufacturing Material Efficiency II
-  43860: 0, // Advanced Medium Ship Manufacturing Time Efficiency I
-  43861: 0, // Advanced Medium Ship Manufacturing Time Efficiency II
-  43862: 2, // Advanced Large Ship Manufacturing Material Efficiency I
-  43863: 2.4, // Advanced Large Ship Manufacturing Material Efficiency II
-  43864: 0, // Advanced Large Ship Manufacturing Time Efficiency II
-  43865: 0, // Advanced Large Ship Manufacturing Time Efficiency I
-  43866: 2.4, // Advanced Component Manufacturing Material Efficiency II
-  43867: 2, // Advanced Component Manufacturing Material Efficiency I
-  43868: 0, // Advanced Component Manufacturing Time Efficiency II
-  43869: 0, // Advanced Component Manufacturing Time Efficiency I
-  43870: 2, // Basic Capital Component Manufacturing Material Efficiency I
-  43871: 2.4, // Basic Capital Component Manufacturing Material Efficiency II
-  43872: 0, // Basic Capital Component Manufacturing Time Efficiency I
-  43873: 0, // Basic Capital Component Manufacturing Time Efficiency II
-  43874: 2.4, // Structure Manufacturing Material Efficiency II
-  43875: 2, // Structure Manufacturing Material Efficiency I
-  43876: 0, // Structure Manufacturing Time Efficiency I
-  43877: 0, // Structure Manufacturing Time Efficiency II
-  43919: 0, // Basic Medium Ship Manufacturing Time Efficiency I
-  43920: 2, // Equipment Manufacturing Material Efficiency I
-  43921: 2.4, // Equipment Manufacturing Material Efficiency II
-  45544: 2, // Thukker Basic Capital Component Manufacturing Material Efficiency
-  45546: 2, // Thukker Basic Capital Component Manufacturing Efficiency
-  45548: 2, // Thukker Structure and Component Manufacturing Efficiency
-  45640: 2, // Thukker Advanced Component Manufacturing Material Efficiency
-  45641: 2, // Thukker Advanced Component Manufacturing Efficiency
-};
+// Rig and structure bonuses live in lib/industry-math.js, driven by lib/industry-data/*.json
+// (generated from the SDE + ESI dogma by gen-industry-data.js). The old hand-maintained
+// RIG_ME_BONUSES table was additive, ignored system security and applied every rig to every
+// product; test-industry-math.js now checks the Mfg Setup rig catalog against the game data.
 
 // Invention probability rigs for Upwell structures.
 // In EVE, invention probability is primarily skill-based. Structure rigs affect
@@ -11242,12 +11965,11 @@ const DECRYPTORS = {
 // type_id for each decryptor — populated at startup from the items table
 const decryptorTypeIds = {};
 
-// Job cost formula (EVE manufacturing):
-//   effectiveME     = blueprintME + structureMEbonus(1% for Upwell) + Σ(rigMEbonus)
-//   meFactor        = max(0, 1 − effectiveME/100)
-//   adjQty[mat]     = max(1, ceil(baseQty × meFactor)) × runs
-//   EIV             = Σ(adjusted_price[mat] × adjQty[mat])
-//   System Job Cost = EIV × SCI
+// Job cost formula (EVE manufacturing) — implemented in lib/industry-math.js:
+//   materialMult    = (1 − blueprintME/100) × structureMult × Π(covering rigs: 1 − bonus × secMult/100)
+//   qty[mat]        = max(runs, ceil(round(baseQty × runs × materialMult, 2)))   (once per job)
+//   EIV             = Σ(BASE ME-0 qty[mat] × adjusted_price[mat]) × runs        (ME does NOT lower EIV)
+//   System Job Cost = EIV × SCI × structureCostMult
 //   SCC Surcharge   = EIV × 4%     (verified 17 Sept 2026 against CCP's own
 //                     "Exploration & Industry Balance Rework" dev blog, 18 Jul
 //                     2025: the 4%→2% cut applies ONLY to ME/TE blueprint
@@ -11259,20 +11981,28 @@ const decryptorTypeIds = {};
 //   Facility Tax    = EIV × facility_tax_rate
 //   Total Job Cost  = System Job Cost + SCC Surcharge + Facility Tax
 
-async function calcHaulLegs({ haulEnabled, settings, matRegionId, sellRegionId, materials, meFactor, blueprint, product_id, runs }) {
+// materialSourcing (from /api/true-cost) says how many units of each material come from the buy
+// hub and how many are imported from Jita; imports travel a separate Jita → build-system leg
+// ("legJ"), costed with the user's Leg 1 haulage settings (there is no separate Jita setting).
+async function calcHaulLegs({ haulEnabled, settings, matRegionId, sellRegionId, materials, meFactor, blueprint, product_id, runs, materialSourcing = null }) {
   const zero = { leg1Cost: 0, leg2Cost: 0, leg1VolM3: 0, leg2VolM3: 0,
                  leg1EffM3: 0, leg2EffM3: 0, leg1Contracts: 1, leg2Contracts: 1,
-                 leg1Jumps: 0, leg2Jumps: 0 };
+                 leg1Jumps: 0, leg2Jumps: 0,
+                 legJCost: 0, legJVolM3: 0, legJJumps: 0, legJRouteKnown: true,
+                 leg1RouteKnown: true, leg2RouteKnown: true };
   if (!haulEnabled) return zero;
 
   const sourceHubSysId = HUB_SYSTEM_IDS[matRegionId]  || HUB_SYSTEM_IDS[10000002];
   const sellHubSysId   = HUB_SYSTEM_IDS[sellRegionId] || HUB_SYSTEM_IDS[10000002];
   const mfgSysId       = settings?.system_id || 30000142;
 
-  const [leg1Jumps, leg2Jumps] = await Promise.all([
-    getJumpCount(sourceHubSysId, mfgSysId),
-    getJumpCount(mfgSysId, sellHubSysId),
+  // null = the route couldn't be looked up (ESI error / no gate route): reported, never silently "0 jumps"
+  const [leg1JumpsRaw, leg2JumpsRaw] = await Promise.all([
+    getJumpCountStrict(sourceHubSysId, mfgSysId),
+    getJumpCountStrict(mfgSysId, sellHubSysId),
   ]);
+  const leg1RouteKnown = leg1JumpsRaw !== null, leg2RouteKnown = leg2JumpsRaw !== null;
+  const leg1Jumps = leg1JumpsRaw ?? 0, leg2Jumps = leg2JumpsRaw ?? 0;
 
   const leg1Cfg = {
     method:       settings?.leg1_method       || 'user_defined',
@@ -11301,20 +12031,53 @@ async function calcHaulLegs({ haulEnabled, settings, matRegionId, sellRegionId, 
   const isLeg1Active = leg1Cfg.method !== 'user_defined'
     || leg1Cfg.rate > 0 || leg1Cfg.isk_per_jump > 0 || leg1Cfg.flat_total > 0;
 
-  if (isLeg1Active && leg1Jumps > 0 && materials.length > 0) {
+  // Import leg (Jita → build system): units the buy hub can't supply, costed with the Leg 1 settings.
+  let legJCost = 0, legJVolM3 = 0, legJJumps = 0, legJRouteKnown = true;
+  let importVolM3 = 0;
+
+  if (isLeg1Active && materials.length > 0 && (leg1Jumps > 0 || (materialSourcing && matRegionId !== 10000002))) {
     const matIds = materials.map(m => m.material_id);
     const ph     = matIds.map(() => '?').join(',');
     const volRows = await dbAll(
       `SELECT type_id, packaged_volume FROM items WHERE type_id IN (${ph})`, matIds
     );
     const volMap = new Map(volRows.map(r => [r.type_id, r.packaged_volume || 0]));
-    for (const mat of materials) {
-      const adjQty = Math.max(1, Math.ceil(mat.quantity * meFactor)) * runs;
-      leg1VolM3 += (volMap.get(mat.material_id) || 0) * adjQty;
+    const srcById = materialSourcing ? new Map(materialSourcing.map(s => [s.material_id, s])) : null;
+    for (const m of IM.jobMaterials(materials, runs, meFactor)) {
+      const vol = volMap.get(m.material_id) || 0;
+      const src = srcById && srcById.get(m.material_id);
+      if (src) {
+        // Units imported from Jita (and any shortfall neither market lists) travel from Jita; EVERYTHING
+        // else travels from the buy hub — including items nobody lists (priced at the 30-day average) and,
+        // when the buy hub IS Jita, a shortfall at the last visible price. Nothing travels for free.
+        const external = matRegionId === 10000002 ? 0 : (src.jita_qty + src.unfilled_qty);
+        importVolM3 += vol * external;
+        leg1VolM3   += vol * Math.max(0, src.qty - external);
+      } else {
+        leg1VolM3 += vol * m.qty;
+      }
     }
-    const l1 = calcLegHaulCost(leg1Cfg, leg1VolM3, leg1Jumps, leg1Col);
-    leg1Cost = l1.cost; leg1EffM3 = l1.effectiveIskPerM3; leg1Contracts = l1.contracts;
-  } else if (isLeg1Active && leg1Jumps === 0 && leg1Cfg.method === 'self_haul') {
+    // The declared collateral is one amount for the whole shopping list: share it by volume between the buy-hub
+    // leg and the Jita import leg instead of charging it in full on both.
+    const legTotalVol = leg1VolM3 + importVolM3;
+    const hubColl = legTotalVol > 0 ? leg1Col * (leg1VolM3 / legTotalVol) : leg1Col;
+    const impColl = legTotalVol > 0 ? leg1Col * (importVolM3 / legTotalVol) : 0;
+    if (leg1Jumps > 0) {
+      const l1 = calcLegHaulCost(leg1Cfg, leg1VolM3, leg1Jumps, hubColl);
+      leg1Cost = l1.cost; leg1EffM3 = l1.effectiveIskPerM3; leg1Contracts = l1.contracts;
+    }
+
+    if (importVolM3 > 0 && matRegionId !== 10000002) {
+      const jJumps = await getJumpCountStrict(HUB_SYSTEM_IDS[10000002], mfgSysId);
+      if (jJumps === null) {
+        legJRouteKnown = false;       // route lookup failed — freight left out, and the UI says so
+      } else if (jJumps > 0) {
+        const lJ = calcLegHaulCost(leg1Cfg, importVolM3, jJumps, impColl);
+        legJCost = lJ.cost; legJVolM3 = importVolM3; legJJumps = jJumps;
+      }
+    }
+  }
+  if (isLeg1Active && leg1Jumps === 0 && leg1Cfg.method === 'self_haul' && (!materialSourcing || leg1VolM3 > 0)) {
     leg1Cost = calcLegHaulCost(leg1Cfg, 1, 0, leg1Col).cost;
   }
 
@@ -11333,7 +12096,8 @@ async function calcHaulLegs({ haulEnabled, settings, matRegionId, sellRegionId, 
     leg2Cost = calcLegHaulCost(leg2Cfg, 1, 0, leg2Col).cost;
   }
 
-  return { leg1Cost, leg2Cost, leg1VolM3, leg2VolM3, leg1EffM3, leg2EffM3, leg1Contracts, leg2Contracts, leg1Jumps, leg2Jumps };
+  return { leg1Cost, leg2Cost, leg1VolM3, leg2VolM3, leg1EffM3, leg2EffM3, leg1Contracts, leg2Contracts, leg1Jumps, leg2Jumps,
+           legJCost, legJVolM3, legJJumps, legJRouteKnown, leg1RouteKnown, leg2RouteKnown };
 }
 
 async function calcInventionCost({
@@ -11382,20 +12146,23 @@ async function calcInventionCost({
      WHERE im.t1_blueprint_id = ?
   `, [invParent.t1_blueprint_id]);
 
+  // Datacores and decryptors are bought at the source hub; anything it doesn't stock is priced at
+  // Jita's live lowest sell (tagged), never at a buy order, which can't be bought from.
+  const invPrices = matWarm ? HP.withJitaFallback(matEntry.prices, getRawJitaPrices()) : null;
   let dcCostPerAttempt = 0;
   const datacores = [];
   for (const m of invMats) {
-    const p         = matWarm ? matEntry.prices[m.material_id] : null;
-    const unitPrice = p?.sell || p?.buy || 0;
+    const p         = invPrices ? invPrices[m.material_id] : null;
+    const unitPrice = p?.sell || p?.buy || 0;     // a bid is only a last resort when nobody sells it
     const total     = unitPrice * m.quantity;
     dcCostPerAttempt += total;
-    datacores.push({ materialId: m.material_id, name: m.name || `Mat ${m.material_id}`, quantity: m.quantity, unitPrice, totalPerAttempt: total });
+    datacores.push({ materialId: m.material_id, name: m.name || `Mat ${m.material_id}`, quantity: m.quantity, unitPrice, totalPerAttempt: total, priceScope: p?.sellScope === 'jita' ? 'jita' : (p?.sell ? 'hub' : (p?.buy ? 'buy_order' : 'none')) });
   }
 
   let decryptorCostPerAttempt = 0;
   const decryptorTypeId = decryptorTypeIds[decryptor_type] || null;
   if (decryptorTypeId) {
-    const dp = matWarm ? matEntry.prices[decryptorTypeId] : null;
+    const dp = invPrices ? invPrices[decryptorTypeId] : null;
     decryptorCostPerAttempt = dp?.sell || dp?.buy || 0;
   }
 
@@ -11439,9 +12206,9 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
   try {
     const {
       product_id,
-      me             = 0,
-      te             = 0,
-      runs           = 1,
+      me: meRaw      = 0,
+      te: teRaw      = 0,
+      runs: runsRaw  = 1,
       regionId       = 10000002,  // sell hub (backward-compat param name)
       materialRegionId = regionId, // source hub — where materials are purchased
       // v1.17.1 — implant set to apply to the ISK/hr calc. DEFAULT = none.
@@ -11453,6 +12220,12 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
       invention_prob_bonus  = 0,   // flat percentage-point bonus (e.g. 5 = +5 pp)
     } = req.body;
 
+    // Numeric inputs are clamped once, here, so materials, EIV, job cost, revenue and build time all
+    // use the SAME job size (a fractional/zero/negative `runs` used to scale only some of them).
+    const runs = Math.min(1_000_000, Math.max(1, Math.floor(Number(runsRaw)) || 1));
+    const me   = Math.max(-100, Math.min(100, Number(meRaw) || 0));
+    const te   = Math.max(-100, Math.min(100, Number(teRaw) || 0));
+
     // Validate both hub IDs against the known whitelist
     const sellRegionId = VALID_REGIONS.includes(parseInt(regionId))
       ? parseInt(regionId) : 10000002;
@@ -11463,7 +12236,7 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
     if (!product_id) return res.status(400).json({ error: 'product_id required' });
 
     // ── Session: skills + standings ────────────────────────────────────────
-    const { skillMap, standings } = getCharacterSession(characterId);
+    const { skillMap, standings, skillsSource, skillsUpdatedAt } = getCharacterSession(characterId);
     // Implant set is whatever the client explicitly selected (default none).
     const implants = Array.isArray(selectedImplants) ? selectedImplants : [];
 
@@ -11478,12 +12251,15 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
 
     // ── Blueprint materials from DB ────────────────────────────────────────
     const blueprint = await dbGet(
-      'SELECT blueprint_id, product_quantity, build_time FROM blueprints WHERE product_id = ?',
+      'SELECT blueprint_id, product_quantity, build_time, COALESCE(activity_id, 1) AS activity_id FROM blueprints WHERE product_id = ?',
       [product_id]
     );
     if (!blueprint) {
       return res.status(404).json({ error: `No blueprint found for product ${product_id}` });
     }
+    // Reaction formulas (activity 9) run in refineries, not engineering complexes: the structure's
+    // material/cost/time bonuses and the Industry skill don't apply (same rule as the Queue Planner).
+    const isReaction = blueprint.activity_id === 9;
     const materials = blueprintMaterialsCache.get(blueprint.blueprint_id) || [];
 
     // ── T2 check (early — needed to select correct ME/TE base before EIV calc) ──
@@ -11499,12 +12275,27 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
     const baseME = invParent ? T2_BPC_BASE_ME + decr.me : me;
     const baseTE = invParent ? T2_BPC_BASE_TE + decr.te : te;
 
-    // ── Effective ME: blueprint (or T2 BPC) + structure bonus + rig bonuses ──
-    // All Upwell engineering complexes (Raitaru/Azbel/Sotiyo) give 1% ME.
-    // Rig bonuses are summed from the installed rig type_ids (no stacking penalty).
-    const structureMeBonus = settings?.structure_type_id ? 1 : 0;
-    const rigMeBonus       = rigIds.reduce((sum, id) => sum + (RIG_ME_BONUSES[id] || 0), 0);
-    const effectiveME      = baseME + structureMeBonus + rigMeBonus;
+    // ── Build modifiers: blueprint ME × structure × the rigs that cover THIS product ──
+    // Shared mechanics in lib/industry-math.js (values from CCP's dogma data). Each rig's bonus is
+    // its own attribute × the system-security multiplier, applies only to the product families
+    // its description lists, and every factor multiplies (no additive summing).
+    const productRow = await dbGet('SELECT group_id FROM items WHERE type_id = ?', [product_id]);
+    const sysRow     = settings?.system_id
+      ? await dbGet('SELECT security_status FROM sde_systems WHERE system_id = ?', [settings.system_id])
+      : null;
+    const setup      = IM.describeSetup({
+      structureTypeId: settings?.structure_type_id || null,
+      rigIds,
+      systemSecurity:  sysRow ? sysRow.security_status : null,
+    });
+    const mods       = isReaction
+      ? { family: null, familyKnown: true, appliedRigs: [], matMult: 1, timeMult: 1, costMult: 1 }
+      : IM.modifiersForProduct(setup, productRow?.group_id);
+    const bpMeMult   = IM.blueprintMeMult(baseME);
+    const meFactor   = bpMeMult * mods.matMult;          // total material multiplier for this job
+    const effectiveME = (1 - meFactor) * 100;            // combined % reduction (display)
+    const structureMeBonus = (setup.structure && !isReaction) ? (1 - setup.structure.matMult) * 100 : 0;
+    const rigMeBonus = mods.appliedRigs.reduce((sum, r) => sum + r.usedMatPct, 0);
 
     // ── Adjusted prices + cost indices (ESI, cached) ──────────────────────
     // These calls return instantly when cache is warm; first call ~2–5 s each.
@@ -11513,23 +12304,17 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
       new Promise((_, reject) => setTimeout(() => reject(new Error('ESI price fetch timeout')), 60000)),
     ]);
 
-    // ── EIV (Estimated Item Value for job-fee calculation) ─────────────────
-    // effectiveME (blueprint + structure + rigs) reduces required quantity per material.
-    // Each material quantity is rounded UP (ceil), min 1.
-    const meFactor = Math.max(0, 1 - effectiveME / 100);
-    let eiv = 0;
-    for (const mat of materials) {
-      const adjPrice = adjustedPrices[mat.material_id] || 0;
-      const adjQty   = Math.max(1, Math.ceil(mat.quantity * meFactor)) * runs;
-      eiv += adjPrice * adjQty;
-    }
+    // ── EIV: CCP's job-fee base is the BASE (ME 0) quantity × adjusted price, not the
+    // ME-reduced quantity (EVE University "Manufacturing" → Total job cost).
+    const eiv = IM.estimatedItemValue(materials, runs, adjustedPrices);
 
-    // ── Manufacturing job cost ─────────────────────────────────────────────
+    // ── Manufacturing job cost = EIV × (SCI × structure cost bonus + facility tax + SCC) ──
     const sci            = costIndices[targetSystemId] || 0;
-    const systemJobCost  = eiv * sci;
-    const sccSurcharge   = eiv * 0.04;         // 4% SCC surcharge (see "Job cost formula" comment above calcHaulLegs — the 2% rate applies only to ME/TE research jobs, not manufacturing)
-    const facilityTaxCost = eiv * facilityTaxDecimal;
-    const totalJobCost   = systemJobCost + sccSurcharge + facilityTaxCost;
+    const jc             = IM.jobCost({ eiv, sci, costMult: mods.costMult, facilityTaxDecimal });
+    const systemJobCost  = jc.system;
+    const sccSurcharge   = jc.scc;
+    const facilityTaxCost = jc.facility;
+    const totalJobCost   = jc.total;
 
     // ── Prices: LIVE, and the SAME live source the materials/shortfall list uses ──
     // v1.19.2 — the per-item panel is the decision moment, so it uses CURRENT market
@@ -11549,12 +12334,29 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
     const sellWarm  = !!(sellEntry && Date.now() < sellEntry.expiry);
     const pricesWarm = matWarm && sellWarm;
 
-    // Material cost — live source-hub sell prices, ME-adjusted per material (ceil).
+    // Material cost — live source-hub (station-first) sell prices × the job's real material
+    // quantities (single rounding per job, ≥ 1 per run).
     let totalMaterialCost = 0;
+    // How each material was priced: from the hub's own sell orders, imported from Jita for
+    // whatever the hub can't supply, or short on both. Drives the notices and the Jita haul leg.
+    const materialSourcing = [];
+    const rawHubPrices  = matWarm ? getRawHubPrices(matRegionId) : null;
+    const rawJitaPrices = getRawJitaPrices();
+    if (!rawJitaPrices && matRegionId !== 10000002) kickRegionWarm(10000002);   // imports can't be priced until Jita is loaded
     if (matWarm) {
-      for (const mat of materials) {
-        const matPrice = matEntry.prices[mat.material_id]?.sell || 0;
-        totalMaterialCost += matPrice * (Math.max(1, Math.ceil(mat.quantity * meFactor)) * runs);
+      for (const m of IM.jobMaterials(materials, runs, meFactor)) {
+        const pb = HP.priceBuy({
+          hubPrices: rawHubPrices, jitaPrices: rawJitaPrices,
+          typeId: m.material_id, qty: m.qty, hubIsJita: matRegionId === 10000002,
+          history: historyPriceMap.get(m.material_id) || 0,   // last resort only; tagged scope 'history'
+        });
+        totalMaterialCost += pb.cost;
+        materialSourcing.push({
+          material_id: m.material_id, qty: m.qty, scope: pb.scope,
+          hub_qty: pb.hubQty, jita_qty: pb.jitaQty, unfilled_qty: pb.unfilledQty,
+          unit_cost: pb.unit, cost: pb.cost, hub_cost: pb.hubCost, import_cost: pb.jitaCost + pb.unfilledCost,
+          approx: pb.approx, short_stock: pb.shortStock,
+        });
       }
     } else {
       // Cold — temporary precompute fallback (ME-scaled) + background warm.
@@ -11574,8 +12376,18 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
 
     // Sell price — live sell-hub price, precompute fallback when cold.
     let unitSell = 0;
+    // 'hub'/'region' = the sell hub's own lowest sell; 'jita' = the hub has none listed, so the
+    // estimate is Jita's lowest sell (and the sale is assumed to happen at Jita); null = unknown.
+    let sellScope = null;
+    let sellOrdersSeen = null;      // units listed at the sell hub (thin-book notice)
+    let sellHubBuy = 0;             // that hub's highest buy order
     if (sellWarm) {
-      unitSell = sellEntry.prices[product_id]?.sell || 0;
+      const sp = getHubPrices(sellRegionId)?.[product_id];
+      unitSell  = sp?.sell || 0;
+      sellScope = sp ? (sp.sellScope || null) : null;
+      sellHubBuy = getRawHubPrices(sellRegionId)?.[product_id]?.buy || 0;
+      const sd = HP.depthFor(getRawHubPrices(sellRegionId), product_id);
+      sellOrdersSeen = sd && Number.isFinite(sd.total) ? sd.total : null;
     } else {
       const precompSell = await dbGet(
         'SELECT sell_price FROM precomputed_profits WHERE product_id = ? AND region_id = ?',
@@ -11595,11 +12407,14 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
     const sellPrice    = unitSell * productUnits;
 
     // ── Sales fees (broker fee + transaction tax) ─────────────────────────
-    // Standings are looked up by sell hub — that is where the order is placed.
+    // Standings are looked up by sell hub — that is where the order is placed. If the sell hub
+    // has none listed and the price is Jita's, the sale (and its fees and freight) is at Jita.
+    const sellFromJita = sellScope === 'jita';
+    const feeRegionId  = sellFromJita ? 10000002 : sellRegionId;
     const {
       brokerFeeRate, transactionTaxRate,
       brokerRelations, accounting, factionStanding, corpStanding,
-    } = calcSalesFeeRates(skillMap, standings, HUB_STANDINGS[sellRegionId], HUB_STRUCTURE_FEES[sellRegionId] ?? null);
+    } = calcSalesFeeRates(skillMap, standings, HUB_STANDINGS[feeRegionId], HUB_STRUCTURE_FEES[feeRegionId] ?? null);
 
     const brokerFee      = sellPrice * brokerFeeRate;
     const transactionTax = sellPrice * transactionTaxRate;
@@ -11612,9 +12427,11 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
     // Silently returns 0 when volumes or rates are absent — no breaking change.
     const haulEnabled = !!(settings?.haul_enabled);
     const { leg1Cost, leg2Cost, leg1VolM3, leg2VolM3, leg1EffM3, leg2EffM3,
-            leg1Contracts, leg2Contracts, leg1Jumps, leg2Jumps } =
-      await calcHaulLegs({ haulEnabled, settings, matRegionId, sellRegionId, materials, meFactor, blueprint, product_id, runs });
-    const totalHaulCost = leg1Cost + leg2Cost;
+            leg1Contracts, leg2Contracts, leg1Jumps, leg2Jumps,
+            legJCost, legJVolM3, legJJumps, legJRouteKnown, leg1RouteKnown, leg2RouteKnown } =
+      await calcHaulLegs({ haulEnabled, settings, matRegionId, sellRegionId: feeRegionId, materials, meFactor, blueprint, product_id, runs,
+                           materialSourcing: matWarm ? materialSourcing : null });
+    const totalHaulCost = leg1Cost + leg2Cost + legJCost;
     const leg1Method = settings?.leg1_method || 'user_defined';
     const leg2Method = settings?.leg2_method || 'user_defined';
 
@@ -11634,22 +12451,29 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
     // Industry × structure TE bonus × Beancounter (BX) implant. This is where
     // industry implants actually affect profitability (throughput), not material cost.
     const baseBuildSeconds   = (blueprint.build_time || 0) * runs;
-    const teFactor           = Math.max(0, 1 - (baseTE || 0) / 100);
-    const industryLvl        = skillMap[3380] || 0;          // Industry: −4%/lvl mfg time
-    const advIndustryLvl     = skillMap[3388] || 0;          // Advanced Industry: −3%/lvl all jobs
-    const industryFactor     = 1 - 0.04 * industryLvl;
-    const advIndustryFactor  = 1 - 0.03 * advIndustryLvl;
-    const structureTeBonus   = settings?.structure_type_id ? (STRUCTURE_TE_BONUS[settings.structure_type_id] || 0) : 0;
-    const structureTeFactor  = 1 - structureTeBonus / 100;
+    const industryLvl        = skillMap[3380] || 0;          // Industry: -4%/lvl mfg time
+    const advIndustryLvl     = skillMap[3388] || 0;          // Advanced Industry: -3%/lvl all jobs
+    const structureTeBonus   = (setup.structure && !isReaction) ? (1 - setup.structure.timeMult) * 100 : 0;
     // Best manufacturing-time implant the character has plugged in (if any).
-    const mfgImplant = (implants || [])
+    const mfgImplant = isReaction ? null : ((implants || [])
       .map(id => INDUSTRY_IMPLANTS[id])
       .filter(imp => imp && imp.kind === 'mfg_time')
-      .sort((a, b) => b.pct - a.pct)[0] || null;
-    const implantFactor = mfgImplant ? (1 - mfgImplant.pct / 100) : 1;
+      .sort((a, b) => b.pct - a.pct)[0] || null);
+    // Skills + blueprint TE + structure and the rigs covering this product (their TE bonus
+    // was previously ignored) + implant, via the shared module. Science skills the blueprint
+    // requires each cut manufacturing time 1%/level. Reactions: Reactions skill + Advanced Industry only.
+    const requiredSkills = isReaction ? [] : await dbAll(
+      'SELECT skill_id FROM blueprint_skills WHERE blueprint_id = ? AND activity_id = 1',
+      [blueprint.blueprint_id]
+    );
+    const timeMult = isReaction
+      ? IM.reactionTimeMultiplier({ skillMap })
+      : IM.timeMultiplier({
+          skillMap, requiredSkills, blueprintTe: baseTE || 0,
+          modsTimeMult: mods.timeMult, implantPct: mfgImplant ? mfgImplant.pct : 0,
+        });
 
-    const effectiveBuildSeconds = baseBuildSeconds
-      * teFactor * industryFactor * advIndustryFactor * structureTeFactor * implantFactor;
+    const effectiveBuildSeconds = baseBuildSeconds * timeMult;
     const buildHours  = effectiveBuildSeconds / 3600;
     const iskPerHour  = buildHours > 0 ? trueProfit / buildHours : 0;
 
@@ -11702,6 +12526,20 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
         total:                     totalHaulCost,
         leg1_cost:                 leg1Cost,
         leg2_cost:                 leg2Cost,
+        // Import leg: Jita → build system for what the buy hub can't supply (Leg 1 settings).
+        import_leg_cost:           legJCost,
+        import_leg_volume_m3:      legJVolM3,
+        import_leg_jumps:          legJJumps,
+        import_leg_route_known:    legJRouteKnown,
+        leg1_route_known:          leg1RouteKnown,
+        leg2_route_known:          leg2RouteKnown,
+        leg2_configured:           haulEnabled && (leg2Method !== 'user_defined'
+                                     || (settings?.leg2_haul_rate || 0) > 0 || (settings?.leg2_isk_per_jump || 0) > 0
+                                     || (settings?.leg2_flat_total || 0) > 0),
+        haul_enabled:              haulEnabled,
+        leg1_configured:           haulEnabled && (leg1Method !== 'user_defined'
+                                     || (settings?.leg1_haul_rate || 0) > 0 || (settings?.leg1_isk_per_jump || 0) > 0
+                                     || (settings?.leg1_flat_total || 0) > 0),
         leg1_volume_m3:            leg1VolM3,
         leg2_volume_m3:            leg2VolM3,
         // Phase 1 compat: leg1_rate / leg2_rate = raw ISK/m³ from user_defined
@@ -11744,6 +12582,7 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
         industry_level:          industryLvl,
         advanced_industry_level: advIndustryLvl,
         structure_te_bonus_pct:  structureTeBonus,
+        time_multiplier:         timeMult,   // blueprint TE × skills (incl. science) × structure × applicable rigs × implant
         mfg_implant:    mfgImplant   ? { name: mfgImplant.name,   pct: mfgImplant.pct }   : null,
         reproc_implant: reprocImplant ? { name: reprocImplant.name, pct: reprocImplant.pct } : null,
       },
@@ -11768,7 +12607,58 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
         structure_me_bonus: structureMeBonus,
         rig_me_bonus:       rigMeBonus,
         effective_me:       effectiveME,
+        // Real mechanics (lib/industry-math.js): the one multiplier every material quantity uses,
+        // and exactly which saved rigs applied to this product with their true (security-scaled) stats.
+        material_multiplier: meFactor,
+        structure_cost_mult: mods.costMult,
+        system_security:     sysRow ? sysRow.security_status : null,
+        security_class:      setup.secClass,
+        security_known:      setup.securityKnown,
+        product_family:      mods.family,
+        product_family_known: mods.familyKnown,
+        invalid_rig_ids:     setup.invalidRigIds,
+        ignored_rig_ids:     setup.ignoredRigIds,   // real rigs that can't apply (wrong size / NPC station / over 3)
+        rigs: setup.rigs.map(r => {
+          const ap = mods.appliedRigs.find(a => a.id === r.id);
+          return {
+            id: r.id, name: r.name, size: r.size,
+            applies: !!ap,
+            // what THIS item gets from the rig, at the system's security (0 when it doesn't cover the item)
+            base_me_pct: ap ? ap.baseMatPct : (r.matPct || r.thukkerMatPct), eff_me_pct: ap ? ap.usedMatPct : 0,
+            base_te_pct: r.timePct, eff_te_pct: ap ? ap.usedTimePct : 0,
+            security_mult: r.secMult,
+          };
+        }),
       },
+
+      // Data provenance — so the UI can say when a figure leans on an assumption.
+      skills_source:     skillsSource,       // 'session' | 'snapshot' | 'none' (none ⇒ level-0 fees/times)
+      skills_updated_at: skillsUpdatedAt,
+      // Where the finished item's price came from: 'hub'/'region' = the sell hub's own lowest sell;
+      // 'jita' = nothing listed at the sell hub, so Jita's lowest sell (and the sale is assumed at Jita).
+      sell_price_scope:  sellWarm ? sellScope : null,
+      sell_hub_id:       feeRegionId,
+      sell_listing: sellWarm ? {
+        units_listed:     sellOrdersSeen,           // units for sale at the sell hub (null = unknown)
+        hub_highest_buy:  sellHubBuy,
+        spread_ratio:     sellHubBuy > 0 ? (unitSell / sellHubBuy) : null,
+      } : null,
+      // Of the hub's OWN prices: how many were the hub station vs the region-wide fallback.
+      material_price_scope: matWarm
+        ? (() => {
+            const ms = materials.map(m => rawHubPrices?.[m.material_id]?.sellScope);
+            return { hub: ms.filter(x => x === 'hub').length, region: ms.filter(x => x === 'region').length };
+          })()
+        : null,
+      // How each material was priced (hub own orders / imported from Jita / short on both).
+      material_sourcing: matWarm ? {
+        lines:        materialSourcing,
+        jita_lines:   materialSourcing.filter(l => l.scope === 'jita').length,
+        mixed_lines:  materialSourcing.filter(l => l.scope === 'mixed').length,
+        short_lines:  materialSourcing.filter(l => l.short_stock).length,
+        import_cost:  materialSourcing.reduce((a, l) => a + l.import_cost, 0),
+        jita_unavailable: !rawJitaPrices && matRegionId !== 10000002,
+      } : null,
     });
 
   } catch (err) {
@@ -12727,6 +13617,7 @@ initDatabase().then(async () => {
   // Load static SDE caches — must run before loadHubSnapshots (refreshHubNameMap uses globalItemNameMap)
   await loadGlobalItemNameMap();
   await loadBlueprintMaterialsCache();
+  await loadSkillSnapshots();
 
   // Resolve decryptor type_ids from items table for market price lookups
   const decryptorNames = Object.values(DECRYPTORS).map(d => d.name).filter(Boolean);

@@ -1,0 +1,20 @@
+{
+ "35825": {
+  "name": "Raitaru",
+  "matMult": 0.99,
+  "costMult": 0.97,
+  "timeMult": 0.85
+ },
+ "35826": {
+  "name": "Azbel",
+  "matMult": 0.99,
+  "costMult": 0.96,
+  "timeMult": 0.8
+ },
+ "35827": {
+  "name": "Sotiyo",
+  "matMult": 0.99,
+  "costMult": 0.95,
+  "timeMult": 0.7
+ }
+}
