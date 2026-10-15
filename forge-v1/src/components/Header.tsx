@@ -30,6 +30,7 @@ interface HeaderProps {
   chatOpen:              boolean;
   theme:                 string;
   font:                  string;
+  fontSize:              string;
   /** Sell hub — drives Market Opportunities table and sell-price calculations */
   selectedMarket:        Market;
   regionLoading:         boolean;
@@ -45,6 +46,7 @@ interface HeaderProps {
   onMenuToggle:          () => void;
   onThemeChange:         (theme: string) => void;
   onFontChange:          (font: string) => void;
+  onFontSizeChange:      (size: string) => void;
   onLogout:              () => void;
   onMarketChange:        (market: Market) => void;
   onSourceMarketChange:  (market: Market) => void;
@@ -63,6 +65,7 @@ const Header: FC<HeaderProps> = ({
   chatOpen,
   theme,
   font,
+  fontSize,
   selectedMarket,
   regionLoading,
   selectedSourceMarket,
@@ -71,6 +74,7 @@ const Header: FC<HeaderProps> = ({
   onMenuToggle,
   onThemeChange,
   onFontChange,
+  onFontSizeChange,
   onLogout,
   onMarketChange,
   onSourceMarketChange,
@@ -205,6 +209,20 @@ const Header: FC<HeaderProps> = ({
             <option value="rajdhani">Rajdhani (sci-fi)</option>
             <option value="orbitron">Orbitron (sci-fi display)</option>
             <option value="sharetechmono">Share Tech Mono</option>
+          </select>
+
+          <select
+            className="market-dropdown"
+            value={fontSize}
+            onChange={e => onFontSizeChange(e.target.value)}
+            aria-label="Text size"
+            title="Text size"
+          >
+            <option value="85">Text 85%</option>
+            <option value="100">Text 100%</option>
+            <option value="115">Text 115%</option>
+            <option value="130">Text 130%</option>
+            <option value="150">Text 150%</option>
           </select>
         </div>
 

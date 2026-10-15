@@ -40,7 +40,9 @@ body {
 .app {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  /* Text-size dropdown: --ui-zoom scales every px size at once; height is divided back so the app still fills the window */
+  zoom: var(--ui-zoom, 1);
+  height: calc(100vh / var(--ui-zoom, 1));
 }
 
 .app-body {

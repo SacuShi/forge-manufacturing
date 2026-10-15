@@ -179,6 +179,10 @@ const AppShell: FC = () => {
   const [theme, setTheme] = useState<string>(
     () => localStorage.getItem('forge-theme') ?? 'dark'
   );
+  // Text size as a percentage; scales the whole UI (see .app { zoom } in global.css)
+  const [fontSize, setFontSize] = useState<string>(() => {
+    try { const v = localStorage.getItem('forge-font-size'); return v && ['85', '100', '115', '130', '150'].includes(v) ? v : '100'; } catch { return '100'; }
+  });
   const [font, setFont] = useState<string>(
     () => localStorage.getItem('forge-font') ?? 'forge'
   );
@@ -512,6 +516,11 @@ const AppShell: FC = () => {
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('forge-theme', theme);
   }, [theme]);
+
+  useEffect(() => {
+    document.documentElement.style.setProperty('--ui-zoom', String(Number(fontSize) / 100));
+    try { localStorage.setItem('forge-font-size', fontSize); } catch { /* storage unavailable */ }
+  }, [fontSize]);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-font', font);
@@ -948,6 +957,8 @@ const AppShell: FC = () => {
         onMenuToggle={() => setDrawerOpen((o) => !o)}
         onThemeChange={setTheme}
         onFontChange={setFont}
+        fontSize={fontSize}
+        onFontSizeChange={setFontSize}
         onLogout={auth.logout}
         onMarketChange={market => loadMarket(market, selectedSourceMarket)}
         onSourceMarketChange={market => loadMarket(selectedMarket, market)}

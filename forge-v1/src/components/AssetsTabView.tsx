@@ -130,7 +130,7 @@ const AssetsTabView: FC<AssetsTabViewProps> = ({ activeTab, assetExportSet, asse
                   : 'Asset Safety items are shown — click to hide them'}
                 onClick={() => { setHideAssetSafety(h => !h); setAssetExportSet(new Set()); setLastExportIdx(null); }}
               >
-                Hide Asset Safety ({safetyHoldings.length})
+                {hideAssetSafety ? 'Display' : 'Hide'} Asset Safety items ({safetyHoldings.length})
               </button>
             )}
           </div>
