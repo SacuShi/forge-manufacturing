@@ -196,6 +196,28 @@ function formatTimeRemaining(endDate: string): { label: string; done: boolean } 
   return { label: `${hours}h ${String(minutes).padStart(2, '0')}m`, done: false };
 }
 
+/** ESI industry jobs → the active ones, with product names resolved (shared by the primary and alt loaders). */
+async function toActiveJobs(esiJobs: EsiJob[]): Promise<ActiveJob[]> {
+  // Skip jobs missing product_type_id (edge case for some activity types); names resolve in one deduplicated batch.
+  const active  = esiJobs.filter((j) => j.status === 'active' && j.product_type_id != null);
+  const nameMap = await resolveTypeNames(active.map((j) => j.product_type_id));
+  return active.map((job) => {
+    const { label, done } = formatTimeRemaining(job.end_date);
+    return {
+      name:            nameMap.get(job.product_type_id) ?? `Item #${job.product_type_id}`,
+      typeId:          job.product_type_id,
+      quantity:        job.runs,
+      remaining:       label,
+      done,
+      activityId:      job.activity_id,
+      endDate:         job.end_date,
+      facilityId:      job.facility_id,
+      blueprintTypeId: job.blueprint_type_id,
+      cost:            job.cost,
+    };
+  });
+}
+
 /** Read saved alt tokens from sessionStorage */
 function getSavedAltTokens(): string[] {
   try {
@@ -391,27 +413,7 @@ export function useAuth(): AuthState & {
         const allJobs       = await esiGet<EsiJob[]>(
           `/characters/${cid}/industry/jobs/?include_completed=true`, acc
         );
-        const activeEsiJobs = allJobs.filter((j) => j.status === 'active');
-        // Filter out jobs with missing product_type_id (edge case for non-standard activities)
-        // then resolve names in parallel, deduplicated by typeId (fixes N+1 requests)
-        const nameMap       = await resolveTypeNames(
-          activeEsiJobs.filter((j) => j.product_type_id != null).map((j) => j.product_type_id)
-        );
-        activeJobs = activeEsiJobs.map((job) => {
-          const { label, done } = formatTimeRemaining(job.end_date);
-          return {
-            name:       nameMap.get(job.product_type_id) ?? `Item #${job.product_type_id}`,
-            typeId:     job.product_type_id,
-            quantity:   job.runs,
-            remaining:  label,
-            done,
-            activityId: job.activity_id,
-            endDate:    job.end_date,
-            facilityId: job.facility_id,
-            blueprintTypeId: job.blueprint_type_id,
-            cost:       job.cost,
-          };
-        });
+        activeJobs = await toActiveJobs(allJobs);
         addLog('Industry Jobs', 'ok', `${activeJobs.length} active`);
       } catch (e) {
         addLog('Industry Jobs', 'err', (e as Error).message);
@@ -715,28 +717,7 @@ export function useAuth(): AuthState & {
       }
 
       // ── Phase 2: Resolve job names (parallel, deduplicated) ───────────────
-      // Filter out jobs missing product_type_id (edge case for some activity types)
-      const activeEsiJobs = rawJobs.filter(
-        (j) => j.status === 'active' && j.product_type_id != null
-      );
-      const nameMap       = await resolveTypeNames(
-        activeEsiJobs.map((j) => j.product_type_id)
-      );
-      const activeJobs: ActiveJob[] = activeEsiJobs.map((job) => {
-        const { label, done } = formatTimeRemaining(job.end_date);
-        return {
-          name:       nameMap.get(job.product_type_id) ?? `Item #${job.product_type_id}`,
-          typeId:     job.product_type_id,
-          quantity:   job.runs,
-          remaining:  label,
-          done,
-          activityId: job.activity_id,
-          endDate:    job.end_date,
-          facilityId: job.facility_id,
-          blueprintTypeId: job.blueprint_type_id,
-          cost:       job.cost,
-        };
-      });
+      const activeJobs = await toActiveJobs(rawJobs);
 
       // ── Build standings ───────────────────────────────────────────────────
       let standingsData: StandingsData = { factions: {}, corps: {} };

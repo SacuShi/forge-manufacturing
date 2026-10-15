@@ -14,6 +14,7 @@ import type {
   CorpBlueprint,
   CorpAsset,
   CorpJob,
+  BlueprintProfit,
 } from '../types';
 import ForgeWait from './ForgeWait';
 import { apiGet, apiPost } from '../api/client';
@@ -24,16 +25,6 @@ import { itemIconUrl } from '../utils/icons';
 
 type CorpSubTab = 'blueprints' | 'assets' | 'jobs';
 type BpSortField = 'iskPerHour' | 'margin' | 'profit' | 'name';
-
-interface BlueprintProfit {
-  profit:        number;
-  margin:        number;
-  iskPerHour:    number;
-  sellPrice?:    number;
-  materialCost?: number;
-  buildTime?:    number;
-  liquidityRisk?: string;
-}
 
 interface CorpTabProps {
   token:            string | null;

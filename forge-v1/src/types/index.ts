@@ -1216,3 +1216,16 @@ export interface LPStoreResponse {
   session_cached?:       boolean;
 }
 
+
+/** Per-blueprint profitability from /api/blueprint-profits (the same data as Market Opportunities). */
+export interface BlueprintProfit {
+  profit:         number;
+  margin:         number;
+  iskPerHour:     number;
+  sellPrice?:     number;
+  materialCost?:  number;
+  buildTime?:     number;
+  liquidityRisk?: string;
+  /** true when owned assets + wallet ISK cover this blueprint's ME0 material list */
+  canBuildNow?:   boolean;
+}

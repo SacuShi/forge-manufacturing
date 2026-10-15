@@ -49,17 +49,11 @@ import type {
   ItemDetail,
   TopProfitableResponse,
   AiChatResponse,
-  Market,
   IndustrySettings,
   EsiBlueprint,
-  EsiAsset,
-  QueueCharacter,
-  ActiveJob,
-  PiCharacter,
   InterHubArbRow,
   InterHubHaulResult,
 } from './types';
-import { MARKETS } from './components/MarketSelector';
 import { useAuth, REMEMBER_PROMPT_SHOWN_KEY } from './hooks/useAuth';
 import { useItemDetail } from './hooks/useItemDetail';
 import { useItemNames }  from './hooks/useItemNames';
@@ -76,7 +70,6 @@ import ChatPanel             from './components/ChatPanel';
 import LoginScreen           from './components/LoginScreen';
 import LoadingScreen         from './components/LoadingScreen';
 import IndustrySettingsModal      from './components/IndustrySettings';
-import { findAssetSafetyItemIds, isInAssetSafety } from './utils/assetSafety';
 import CharacterManagementModal  from './components/CharacterManagementModal';
 import HelpTab                   from './components/HelpTab';
 import TradingStandalone     from './components/TradingStandalone';
@@ -85,6 +78,10 @@ import TickerIntro, { shouldShowTickerIntro } from './components/TickerIntro';
 import { useTickerPins, TickerContext } from './hooks/useTickerPins';
 import { useCorpData }            from './hooks/useCorpData';
 import { usePushNotifications }  from './hooks/usePushNotifications';
+import { useCharacterTabData } from './hooks/useCharacterTabData';
+import { useCharacterAggregates } from './hooks/useCharacterAggregates';
+import { useMarketData } from './hooks/useMarketData';
+import { usePanelLayout } from './hooks/usePanelLayout';
 
 /**
  * Maps raw precomputed results to MarketItem display rows.
@@ -200,51 +197,12 @@ const AppShell: FC = () => {
   const [sessionExpired,    setSessionExpired]    = useState(false);
   const [showTickerIntro,   setShowTickerIntro]   = useState(shouldShowTickerIntro);
   const [chatMessages,      setChatMessages]      = useState<ChatMessage[]>([]);
-  const [rawResults,        setRawResults]        = useState<TopProfitableResponse['results']>([]);
-  const [marketLoading,     setMarketLoading]     = useState(false);
-  const [marketLoadingMore, setMarketLoadingMore] = useState(false);
-  const [marketSearchQuery, setMarketSearchQuery] = useState('');
-  const [marketSearchResults, setMarketSearchResults] = useState<TopProfitableResponse['results'] | null>(null);
-  const [marketSearching,   setMarketSearching]   = useState(false);
-  const marketSearchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { handleLoadMoreMarket, handleMarketSearch, loadMarket, marketError, marketHasMore, marketLoading, marketLoadingMore, marketSearchQuery, marketSearchResults, marketSearching, rawResults, selectedMarket, selectedSourceMarket, setMarketError, setMarketHasMore, setMarketLoading, setRawResults } = useMarketData({ auth });
   // Ref: debounce timer for the combined session re-POST (prevents burst during initial load)
   const sessionRePostTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Ref-based guard prevents duplicate concurrent "load more" fetches.
-  // React state updates are async so the closed-over state value can be stale
-  // when two click events fire before the first re-render; a ref is set synchronously.
-  const loadingMoreRef = useRef(false);
 
-  // v1.16.0 — user-resizable panels (left + right). Persisted across sessions.
-  // The right panel stays collapsed (width 0) until an item is selected (detailOpen).
-  const PANEL_WIDTHS_KEY = 'forge_panel_widths';
-  const [leftWidth, setLeftWidth] = useState<number>(() => {
-    try { return JSON.parse(localStorage.getItem(PANEL_WIDTHS_KEY) || '{}').left ?? 240; } catch { return 240; }
-  });
-  const [rightWidth, setRightWidth] = useState<number>(() => {
-    try { return JSON.parse(localStorage.getItem(PANEL_WIDTHS_KEY) || '{}').right ?? 460; } catch { return 460; }
-  });
-  const appBodyRef = useRef<HTMLDivElement>(null);
-  const panelDragRef = useRef<null | { which: 'left' | 'right'; startX: number; startW: number }>(null);
+  const { appBodyRef, leftWidth, rightWidth, startPanelDrag } = usePanelLayout();
 
-  const [marketHasMore,     setMarketHasMore]     = useState(true);
-  const [marketError,       setMarketError]       = useState<string | null>(null);
-  const [selectedMarket, setSelectedMarket] = useState<Market>(() => {
-    const saved = localStorage.getItem('forge-sell-market');
-    if (saved) {
-      const found = MARKETS.find((m) => m.id === parseInt(saved, 10));
-      if (found) return found;
-    }
-    return MARKETS[0]; // default: Jita
-  });
-  // v1.3.0 — Source hub: where materials are purchased. Persisted across sessions.
-  const [selectedSourceMarket, setSelectedSourceMarket] = useState<Market>(() => {
-    const saved = localStorage.getItem('forge-source-market');
-    if (saved) {
-      const found = MARKETS.find((m) => m.id === parseInt(saved, 10));
-      if (found) return found;
-    }
-    return MARKETS[0]; // default: Jita
-  });
 
   // v1.2.0 — Industry settings + settings modal
   const [industrySettings, setIndustrySettings] = useState<IndustrySettings | null>(null);
@@ -317,91 +275,16 @@ const AppShell: FC = () => {
   const [interHubHaulConfigOpen,   setInterHubHaulConfigOpen]   = useState(false);
   const [interHubHaulRefreshKey,   setInterHubHaulRefreshKey]   = useState(0);
 
-  // ── v1.5 Aggregation ──────────────────────────────────────────────────────
-  // Derive combined/isolated datasets from primary + alts based on viewCharacterId.
+  const { activeAltCharacters, allActiveJobs, allBlueprints, allBlueprintsRaw, allRawAssets, bestSkillsArray, bpMetadataApp, combinedAssets, haulCharacters, primaryInScope, safetyBlueprintCount } = useCharacterAggregates({ auth, viewCharacterId });
 
-  const activeAltCharacters = useMemo(() =>
-    viewCharacterId === null
-      ? auth.altCharacters
-      : auth.altCharacters.filter((a) => a.characterId === viewCharacterId),
-    [viewCharacterId, auth.altCharacters]
-  );
 
-  const primaryInScope = viewCharacterId === null || viewCharacterId === auth.character?.characterId;
 
-  // Raw assets from all in-scope characters, preserving per-item location_id.
-  // Used by the Assets tab to show per-location grouping.
-  const allRawAssets = useMemo<EsiAsset[]>(() => {
-    const result: EsiAsset[] = [];
-    if (primaryInScope) result.push(...auth.assets);
-    activeAltCharacters.forEach((a) => result.push(...a.assets));
-    return result;
-  }, [primaryInScope, auth.assets, activeAltCharacters]);
 
-  // Items locked in Asset Safety wraps can't be used for manufacturing: they are kept out of EVERY calculation
-  // (have/needed, shortfalls, buildable-now, the Queue Planner, the server session) — see utils/assetSafety.ts.
-  const safetyIds = useMemo(() => findAssetSafetyItemIds(allRawAssets), [allRawAssets]);
 
-  // All USABLE blueprints across in-scope characters (used for ownership badges + market filtering).
-  // Blueprints stuck in Asset Safety are left out; safetyBlueprintCount lets the Blueprints tab say so.
-  const allBlueprintsRaw = useMemo<EsiBlueprint[]>(() => [
-    ...(primaryInScope ? auth.blueprints : []),
-    ...activeAltCharacters.flatMap((a) => a.blueprints),
-  ], [primaryInScope, auth.blueprints, activeAltCharacters]);
-  const allBlueprints = useMemo<EsiBlueprint[]>(
-    () => safetyIds.size === 0 ? allBlueprintsRaw : allBlueprintsRaw.filter((b) => !isInAssetSafety(b, safetyIds)),
-    [allBlueprintsRaw, safetyIds],
-  );
-  const safetyBlueprintCount = allBlueprintsRaw.length - allBlueprints.length;
 
-  // Fetch blueprint metadata (metaLevel + productTypeId) eagerly at login so icons
-  // are ready before the user opens the My Blueprints tab.
-  const [bpMetadataApp, setBpMetadataApp] = useState<Record<number, { metaLevel: number; productTypeId: number | null }>>({});
-  useEffect(() => {
-    if (allBlueprints.length === 0) return;
-    const typeIds = [...new Set(allBlueprints.map(b => b.type_id))];
-    fetch('/api/blueprint-metadata', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ blueprintTypeIds: typeIds }),
-    })
-      .then(res => res.json())
-      .then(data => setBpMetadataApp(data))
-      .catch(() => {});
-  }, [allBlueprints]);
 
-  // Combined USABLE assets summed by type_id (Asset Safety contents excluded) — used by useItemDetail for have/needed
-  const combinedAssets = useMemo<EsiAsset[]>(() => {
-    const map = new Map<number, number>();
-    const add = (assets: EsiAsset[]) =>
-      assets.forEach((a) => {
-        if (safetyIds.has(a.item_id)) return;       // locked in Asset Safety: not usable, not counted
-        map.set(a.type_id, (map.get(a.type_id) ?? 0) + a.quantity);
-      });
-    if (primaryInScope) add(auth.assets);
-    activeAltCharacters.forEach((a) => add(a.assets));
-    // Convert back to EsiAsset[] (server/hooks expect an array)
-    return Array.from(map.entries()).map(([type_id, quantity]) => ({
-      type_id, quantity,
-      item_id: type_id, location_id: 0, location_flag: 'Hangar', is_singleton: false,
-    }));
-  }, [primaryInScope, auth.assets, activeAltCharacters, safetyIds]);
 
-  // Best skill level per skill_id across in-scope characters (for market filtering)
-  const bestSkillsArray = useMemo(() => {
-    const map = new Map<number, number>();
-    const add = (skills: Array<{ skill_id: number; active_skill_level: number }>) =>
-      skills.forEach((s) => map.set(s.skill_id, Math.max(map.get(s.skill_id) ?? 0, s.active_skill_level)));
-    if (primaryInScope) add(auth.skills);
-    activeAltCharacters.forEach((a) => add(a.skills));
-    return Array.from(map.entries()).map(([skill_id, active_skill_level]) => ({ skill_id, active_skill_level }));
-  }, [primaryInScope, auth.skills, activeAltCharacters]);
 
-  // All active jobs across in-scope characters
-  const allActiveJobs = useMemo(() => [
-    ...(primaryInScope ? (auth.character?.activeJobs ?? []) : []),
-    ...activeAltCharacters.flatMap((a) => a.activeJobs),
-  ], [primaryInScope, auth.character, activeAltCharacters]);
 
   // Total wallet across in-scope characters
   const totalWalletISK = useMemo(() =>
@@ -484,87 +367,9 @@ const AppShell: FC = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth.status, itemNamesLoading, allRawAssets, allBlueprintsRaw]);
 
-  // ── PI: all characters with their tokens (always all, not filtered by isolation) ──
-  // PI is best viewed combined — each colony card shows who owns it.
-  const piCharacters = useMemo<PiCharacter[]>(() => {
-    const all: PiCharacter[] = [];
-    if (auth.character && auth.token) {
-      all.push({ characterId: auth.character.characterId, name: auth.character.name, token: auth.token });
-    }
-    auth.altCharacters.filter(a => !a.loading && !a.error).forEach(alt => {
-      all.push({ characterId: alt.characterId, name: alt.name, token: alt.token });
-    });
-    // When "All" is selected (null), show every character's colonies combined.
-    // When a specific character is selected, show only that character's colonies.
-    if (viewCharacterId !== null) return all.filter(c => c.characterId === viewCharacterId);
-    return all;
-  }, [auth.character, auth.token, auth.altCharacters, viewCharacterId]);
+  const { blueprintOwnerMap, piCharacters, queueCharacters } = useCharacterTabData({ auth, viewCharacterId });
 
-  // ── Queue Planner: per-character slot summary ────────────────────────────
-  // Manufacturing and Reaction jobs use two INDEPENDENT slot pools in EVE —
-  // Mass Production/Advanced Mass Production (skills 3387/24625) govern
-  // manufacturing slots; Mass Reactions/Advanced Mass Reactions (skills
-  // 45748/45749) govern reaction slots. A reaction job can never occupy a
-  // manufacturing slot or vice versa. (Verified 17 Sept 2026 — this used to
-  // be a single combined pool sized only by the manufacturing skills, with
-  // both job types counted against it, which under- or over-stated free
-  // slots for anyone running reactions.)
-  const queueCharacters = useMemo<QueueCharacter[]>(() => {
-    const getSlots = (skills: Array<{ skill_id: number; active_skill_level: number }>, l1: number, l2: number) => {
-      const sm: Record<number, number> = {};
-      skills.forEach(s => { sm[s.skill_id] = s.active_skill_level; });
-      return 1 + (sm[l1] || 0) + (sm[l2] || 0);
-    };
-    const chars: QueueCharacter[] = [];
-    const toSkillMap = (skills: Array<{ skill_id: number; active_skill_level: number }>) => {
-      const m: Record<number, number> = {};
-      skills.forEach(s => { m[s.skill_id] = s.active_skill_level; });
-      return m;
-    };
-    const buildChar = (
-      characterId: number, name: string, token: string,
-      skills: Array<{ skill_id: number; active_skill_level: number }>,
-      activeJobs: ActiveJob[],
-    ): QueueCharacter => {
-      const mfgTotalSlots      = getSlots(skills, 3387, 24625);   // 1 + Mass Prod + Adv Mass Prod
-      const reactionTotalSlots = getSlots(skills, 45748, 45749);  // 1 + Mass Reactions + Adv Mass Reactions
-      const mfgBusy      = activeJobs.filter(j => j.activityId === 1).length;
-      const reactionBusy = activeJobs.filter(j => j.activityId === 9).length;
-      const mfgFreeSlots      = Math.max(0, mfgTotalSlots - mfgBusy);
-      const reactionFreeSlots = Math.max(0, reactionTotalSlots - reactionBusy);
-      return {
-        characterId, name, token,
-        totalSlots: mfgTotalSlots + reactionTotalSlots,
-        freeSlots:  mfgFreeSlots + reactionFreeSlots,
-        mfgTotalSlots, mfgFreeSlots, reactionTotalSlots, reactionFreeSlots,
-        activeJobs,
-        skills: toSkillMap(skills),
-      };
-    };
-    if (auth.character) {
-      chars.push(buildChar(
-        auth.character.characterId, auth.character.name, auth.token ?? '',
-        auth.skills, auth.character.activeJobs ?? [],
-      ));
-    }
-    auth.altCharacters.filter(a => !a.loading && !a.error).forEach(alt => {
-      chars.push(buildChar(alt.characterId, alt.name, alt.token, alt.skills, alt.activeJobs ?? []));
-    });
-    // When "All" is selected (null), plan across every character's slots combined.
-    // When a specific character is selected, plan only for that character's slots
-    // (still uses the primary's session for blueprint/asset data).
-    if (viewCharacterId !== null) return chars.filter(c => c.characterId === viewCharacterId);
-    return chars;
-  }, [auth.character, auth.token, auth.skills, auth.altCharacters, viewCharacterId]);
 
-  // Blueprint → owner name map (item_id → character name) — for attribution badges
-  const blueprintOwnerMap = useMemo(() => {
-    const map = new Map<number, string>();
-    if (auth.altCharacters.length === 0) return map; // no alts → no badges needed
-    auth.blueprints.forEach((bp) => map.set(bp.item_id, auth.character?.name ?? 'Primary'));
-    auth.altCharacters.forEach((a) => a.blueprints.forEach((bp) => map.set(bp.item_id, a.name)));
-    return map;
-  }, [auth.blueprints, auth.character, auth.altCharacters]);
 
   // Token to use for fee-rate and true-cost calls (primary or selected alt)
   const feeToken = useMemo(() => {
@@ -644,34 +449,6 @@ const AppShell: FC = () => {
     return () => { cancelled = true; };
   }, [interHubContext, auth.token, interHubHaulRefreshKey]);
 
-  // Server-side name search — called when user types in the market search box.
-  const handleMarketSearch = useCallback((query: string) => {
-    setMarketSearchQuery(query);
-    if (marketSearchTimerRef.current) clearTimeout(marketSearchTimerRef.current);
-
-    if (query.trim().length < 2) {
-      setMarketSearchResults(null); // revert to paginated list
-      setMarketSearching(false);
-      return;
-    }
-
-    setMarketSearching(true);
-    marketSearchTimerRef.current = setTimeout(async () => {
-      if (!auth.token) return;
-      try {
-        const encoded = encodeURIComponent(query.trim());
-        const data = await apiGet<{ results: TopProfitableResponse['results'] }>(
-          `/api/search-profitable?q=${encoded}&regionId=${selectedMarket.id}`,
-          auth.token
-        );
-        setMarketSearchResults(data.results);
-      } catch {
-        setMarketSearchResults([]); // show "no results" on error
-      } finally {
-        setMarketSearching(false);
-      }
-    }, 300);
-  }, [auth.token, selectedMarket.id]);
 
   const {
     detail: apiDetail,
@@ -906,27 +683,6 @@ const AppShell: FC = () => {
   const selectedLiquidityRisk = selectedItem?.liquidityRisk ?? null;
   const selectedVolumeSource  = selectedItem?.volumeSource ?? null;
 
-  const handleLoadMoreMarket = useCallback(async () => {
-    // Use a ref guard (not state) so the check is synchronous — prevents two rapid
-    // clicks from both passing the guard before the first setState re-render fires.
-    if (loadingMoreRef.current || !marketHasMore || !auth.token) return;
-    loadingMoreRef.current = true;
-    setMarketLoadingMore(true);
-    try {
-      const nextOffset = rawResults.length;
-      const data = await apiGet<TopProfitableResponse>(
-        `/api/top-profitable-by-skills?limit=50&offset=${nextOffset}&regionId=${selectedMarket.id}&sourceRegionId=${selectedSourceMarket.id}`,
-        auth.token
-      );
-      setRawResults((prev) => [...prev, ...data.results]);
-      setMarketHasMore(data.meta.hasMore ?? data.results.length >= 50);
-    } catch (e) {
-      console.error('Load more market items failed:', e);
-    } finally {
-      loadingMoreRef.current = false;
-      setMarketLoadingMore(false);
-    }
-  }, [marketHasMore, auth.token, rawResults.length, selectedMarket.id, selectedSourceMarket.id]);
 
   const handleToggleChat = () => {
     setChatOpen((p) => !p);
@@ -983,104 +739,9 @@ const AppShell: FC = () => {
     setPanelHistory([]);   // clear back-stack on explicit close
   }, []);
 
-  // ── Panel resize (v1.16.0) ────────────────────────────────────────────────
-  // Delta-from-drag-start (robust — independent of element offsets/overflow) +
-  // pointer capture so the drag survives the cursor leaving the thin handle.
-  const startPanelDrag = useCallback((which: 'left' | 'right') => (e: React.PointerEvent) => {
-    e.preventDefault();
-    panelDragRef.current = {
-      which,
-      startX: e.clientX,
-      startW: which === 'left' ? leftWidth : rightWidth,
-    };
-    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* ignore */ }
-    document.body.style.userSelect = 'none';
-    document.body.style.cursor = 'col-resize';
-  }, [leftWidth, rightWidth]);
 
-  useEffect(() => {
-    const onMove = (e: PointerEvent) => {
-      const d = panelDragRef.current;
-      if (!d) return;
-      const delta = e.clientX - d.startX;
-      if (d.which === 'left') {
-        // Drag right → wider.
-        setLeftWidth(Math.min(Math.max(d.startW + delta, 180), 460));
-      } else {
-        // Right panel is right-docked: drag left → wider, drag right → narrower.
-        setRightWidth(Math.min(Math.max(d.startW - delta, 300), 760));
-      }
-    };
-    const onUp = () => {
-      if (!panelDragRef.current) return;
-      panelDragRef.current = null;
-      document.body.style.userSelect = '';
-      document.body.style.cursor = '';
-    };
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-    return () => {
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-    };
-  }, []);
 
-  // Persist panel widths
-  useEffect(() => {
-    try {
-      localStorage.setItem(PANEL_WIDTHS_KEY, JSON.stringify({ left: leftWidth, right: rightWidth }));
-    } catch { /* ignore */ }
-  }, [leftWidth, rightWidth]);
 
-  /**
-   * Loads market data for the given sell/source hub pair and updates all
-   * related state. Handles both sell-hub changes and source-hub changes in
-   * one place, reverting only the market that changed on fetch failure.
-   *
-   * When the sell hub changes, stale name-search results are also cleared
-   * (they were scoped to the old hub's region). Source-hub changes leave
-   * search state intact — search is by item name, not region-specific.
-   */
-  const loadMarket = useCallback(async (sellMarket: Market, sourceMarket: Market) => {
-    const sellChanged = sellMarket.id !== selectedMarket.id;
-
-    setSelectedMarket(sellMarket);
-    localStorage.setItem('forge-sell-market', String(sellMarket.id));
-    setSelectedSourceMarket(sourceMarket);
-    localStorage.setItem('forge-source-market', String(sourceMarket.id));
-
-    setRawResults([]);
-    setMarketHasMore(true);
-    setMarketError(null);
-    // Clear search only when the sell hub changes: search results are hub-scoped.
-    if (sellChanged) {
-      setMarketSearchResults(null);
-      setMarketSearchQuery('');
-    }
-    setMarketLoading(true);
-
-    try {
-      const data = await apiGet<TopProfitableResponse>(
-        `/api/top-profitable-by-skills?limit=50&regionId=${sellMarket.id}&sourceRegionId=${sourceMarket.id}`,
-        auth.token ?? ''
-      );
-      setRawResults(data.results);
-      setMarketHasMore(data.meta.hasMore ?? data.results.length >= 50);
-    } catch (e) {
-      console.error('Failed to load market:', e);
-      setMarketError((e as Error).message);
-      // Revert whichever hub changed so the selector doesn't show a hub whose prices failed.
-      if (sellChanged) {
-        setSelectedMarket(MARKETS[0]);
-        localStorage.setItem('forge-sell-market', String(MARKETS[0].id));
-      } else {
-        setSelectedSourceMarket(MARKETS[0]);
-        localStorage.setItem('forge-source-market', String(MARKETS[0].id));
-      }
-    } finally {
-      setMarketLoading(false);
-    }
-  }, [auth.token, selectedMarket.id]);
 
   const handleSendMessage = useCallback(async (text: string) => {
     const now    = Date.now();
@@ -1427,18 +1088,7 @@ const AppShell: FC = () => {
           onHaulConfigOpen={() => setInterHubHaulConfigOpen(true)}
           onHaulConfigClose={() => setInterHubHaulConfigOpen(false)}
           interHubToken={auth.token ?? undefined}
-          interHubCharacters={[
-            ...(auth.character ? [{
-              characterId: auth.character.characterId,
-              name:        auth.character.name,
-              skills:      auth.skills,
-            }] : []),
-            ...auth.altCharacters.filter(a => !a.loading && !a.error).map(a => ({
-              characterId: a.characterId,
-              name:        a.name,
-              skills:      a.skills,
-            })),
-          ]}
+          interHubCharacters={haulCharacters}
           onInterHubHaulSaved={() => setInterHubHaulRefreshKey(k => k + 1)}
           canDockKeestar={auth.canDockKeestar}
           bpMetadataProp={bpMetadataApp}
@@ -1547,18 +1197,7 @@ const AppShell: FC = () => {
           setSettingsOpen(false);
           setSettingsFocus(null);
         }}
-        characters={[
-          ...(auth.character ? [{
-            characterId: auth.character.characterId,
-            name:        auth.character.name,
-            skills:      auth.skills,
-          }] : []),
-          ...auth.altCharacters.filter(a => !a.loading && !a.error).map(a => ({
-            characterId: a.characterId,
-            name:        a.name,
-            skills:      a.skills,
-          })),
-        ]}
+        characters={haulCharacters}
       />
 
     </div>

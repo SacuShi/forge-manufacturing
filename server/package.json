@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "sde": "node sde-import.js"
+    "sde": "node sde-import.js",
+    "test": "node test-hub-price.js && node test-profit-query.js && node test-ai-tools.js && node test-industry-math.js && node test-asset-safety.js && node test-corp-asset-safety.js && node test-client-supply-parity.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
