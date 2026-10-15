@@ -379,10 +379,10 @@ const HelpTab: FC = () => (
       </ul>
       <p style={S.p}><strong>Hub selector and quick buttons:</strong></p>
       <ul style={S.ul}>
-        <li style={S.li}><strong>Jita Buy</strong> — shows the value of your items at Jita buy-order prices.
+        <li style={S.li}><strong>[Hub] Buy</strong> — the button names whichever hub is selected (Jita Buy, C-J6MT Buy…). It shows the value of your items at that hub's buy-order prices.
           This is what you'd receive selling to buy orders right now — instant, guaranteed ISK,
           but lower than the sell-order price. The number to use when a buyer offers to take your loot in bulk.</li>
-        <li style={S.li}><strong>Jita Sell</strong> — shows the value at Jita's cheapest current sell-order price.
+        <li style={S.li}><strong>[Hub] Sell</strong> — shows the value at the selected hub's cheapest current sell-order price.
           This is what you could receive if you listed everything at market and were the cheapest seller.
           Higher than buy-order value, but not guaranteed — you have to wait for buyers to come to you.</li>
         <li style={S.li}>The <strong>Hub</strong> pills (Amarr, Dodixie, Hek, Rens, C-J6MT) let you price against any

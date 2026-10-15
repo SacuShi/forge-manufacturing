@@ -146,10 +146,10 @@ const AppraisalTab: FC<AppraisalTabProps> = ({ seedItems, canDockKeestar = true 
     }).catch(() => {});
   };
 
-  const jitaBuyActive  = colFocus === 'buy'  && regionId === 10000002;
-  const jitaSellActive = colFocus === 'sell' && regionId === 10000002;
-
+  // The quick Buy/Sell buttons follow whichever hub is selected (label + value), not just Jita
   const hubLabel = HUBS.find(h => h.regionId === regionId)?.label ?? 'Hub';
+  const buyActive  = colFocus === 'buy';
+  const sellActive = colFocus === 'sell';
 
   const heroTotal = results
     ? colFocus === 'buy'
@@ -193,32 +193,32 @@ const AppraisalTab: FC<AppraisalTabProps> = ({ seedItems, canDockKeestar = true 
 
         <button
           type="button"
-          onClick={() => handleHubChange(10000002, 'buy')}
-          title="Jita buy-order value — what buyers will pay you instantly for your items"
+          onClick={() => handleHubChange(regionId, 'buy')}
+          title={`${hubLabel} buy-order value — what buyers will pay you instantly for your items`}
           style={{
             ...s.pill,
             padding: '5px 14px', fontSize: 12, fontWeight: 600,
-            background: jitaBuyActive ? 'rgba(79,195,247,0.18)' : 'rgba(79,195,247,0.06)',
-            borderColor: jitaBuyActive ? 'var(--color-accent-primary)' : 'rgba(79,195,247,0.35)',
-            color: jitaBuyActive ? 'var(--color-accent-primary)' : 'var(--color-text-secondary)',
+            background: buyActive ? 'rgba(79,195,247,0.18)' : 'rgba(79,195,247,0.06)',
+            borderColor: buyActive ? 'var(--color-accent-primary)' : 'rgba(79,195,247,0.35)',
+            color: buyActive ? 'var(--color-accent-primary)' : 'var(--color-text-secondary)',
           }}
         >
-          Jita Buy
+          {hubLabel} Buy
         </button>
 
         <button
           type="button"
-          onClick={() => handleHubChange(10000002, 'sell')}
-          title="Jita sell-order value — what you'd receive listing at the current lowest sell price"
+          onClick={() => handleHubChange(regionId, 'sell')}
+          title={`${hubLabel} sell-order value — what you'd receive listing at the current lowest sell price`}
           style={{
             ...s.pill,
             padding: '5px 14px', fontSize: 12, fontWeight: 600,
-            background: jitaSellActive ? 'rgba(76,175,80,0.18)' : 'rgba(76,175,80,0.06)',
-            borderColor: jitaSellActive ? 'var(--color-success)' : 'rgba(76,175,80,0.35)',
-            color: jitaSellActive ? 'var(--color-success)' : 'var(--color-text-secondary)',
+            background: sellActive ? 'rgba(76,175,80,0.18)' : 'rgba(76,175,80,0.06)',
+            borderColor: sellActive ? 'var(--color-success)' : 'rgba(76,175,80,0.35)',
+            color: sellActive ? 'var(--color-success)' : 'var(--color-text-secondary)',
           }}
         >
-          Jita Sell
+          {hubLabel} Sell
         </button>
 
         <div style={{ width: 1, height: 20, background: 'var(--color-border-light)', margin: '0 2px' }} />
@@ -226,9 +226,7 @@ const AppraisalTab: FC<AppraisalTabProps> = ({ seedItems, canDockKeestar = true 
         {/* Hub selector */}
         <span style={{ fontSize: 10, color: 'var(--color-text-tertiary)' }}>Hub:</span>
         {visibleHubs.map(hub => {
-          const active = regionId === hub.regionId && colFocus === null;
-          const isJita = hub.regionId === 10000002;
-          const jitaMode = isJita && (jitaBuyActive || jitaSellActive);
+          const active = regionId === hub.regionId;
           return (
             <button
               key={hub.regionId}
@@ -236,9 +234,9 @@ const AppraisalTab: FC<AppraisalTabProps> = ({ seedItems, canDockKeestar = true 
               onClick={() => { setColFocus(null); handleHubChange(hub.regionId, null); }}
               style={{
                 ...s.pill,
-                background: (active || (isJita && jitaMode)) ? 'rgba(79,195,247,0.10)' : 'transparent',
-                borderColor: (active || (isJita && jitaMode)) ? 'var(--color-accent-primary)' : 'var(--color-border-light)',
-                color: (active || (isJita && jitaMode)) ? 'var(--color-accent-primary)' : 'var(--color-text-secondary)',
+                background: active ? 'rgba(79,195,247,0.10)' : 'transparent',
+                borderColor: active ? 'var(--color-accent-primary)' : 'var(--color-border-light)',
+                color: active ? 'var(--color-accent-primary)' : 'var(--color-text-secondary)',
               }}
             >
               {hub.label}
@@ -329,7 +327,7 @@ const AppraisalTab: FC<AppraisalTabProps> = ({ seedItems, canDockKeestar = true 
 
       {!loading && results && (
         <>
-          {/* Hero total — only shown when Jita Buy or Jita Sell is active */}
+          {/* Hero total — only shown when a hub Buy or Sell button is active */}
           {heroTotal !== null && (
             <div style={{
               marginBottom: 14, padding: '12px 16px', borderRadius: 4,
