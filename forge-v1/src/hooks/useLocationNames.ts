@@ -34,7 +34,7 @@ const isPublicEntityId = (id: number): boolean =>
 const ESI = 'https://esi.evetech.net/latest';
 
 export function useLocationNames(locationIds: number[], token?: string | null): Map<number, string> {
-  const names = useSyncExternalStore(subscribe, getSnapshot);
+  const names = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const inFlight = useRef(new Set<number>());
 
   const idsKey = [...locationIds].sort((a, b) => a - b).join(',');

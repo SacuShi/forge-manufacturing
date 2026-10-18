@@ -263,8 +263,13 @@ const RightSidebar: FC<RightSidebarProps> = ({
       return next;
     });
   }, []);
-  // Collapse all when the selected item changes (new build = fresh tree)
-  useEffect(() => { setExpandedChains(new Set()); }, [selectedTypeId]);
+  // Collapse all when the selected item changes (new build = fresh tree). Done while rendering rather than in
+  // an effect, so there is never a frame showing the previous item's open rows.
+  const [chainsForItem, setChainsForItem] = useState(selectedTypeId);
+  if (chainsForItem !== selectedTypeId) {
+    setChainsForItem(selectedTypeId);
+    setExpandedChains(new Set());
+  }
 
   // ── Multibuy copy ────────────────────────────────────────────────────────
   const [copiedShortfall, setCopiedShortfall] = useState(false);
@@ -328,13 +333,25 @@ const RightSidebar: FC<RightSidebarProps> = ({
   // Fires whenever there's a shortage, scoped only to the missing materials.
   // Proactive (not hover-triggered) — this is a single open item, not a table
   // of rows, so there's no hover-storm risk to guard against.
-  const [stockCheck,        setStockCheck]        = useState<MaterialStockCheckResponse | null>(null);
+  const [fetchedStockCheck, setStockCheck]       = useState<MaterialStockCheckResponse | null>(null);
   const [stockCheckOpen,    setStockCheckOpen]     = useState(false);
   const [stockRetry,        setStockRetry]         = useState(0);
 
+  // missing is a derived array (new reference each render) — key on its actual contents (material ids +
+  // shortfall qty) instead to avoid a refetch loop.
+  const missingKey = missing.map(m => `${m.materialId}:${m.shortForRuns}`).join(',');
+  // Collapse the expanded detail whenever the item/shortfall (or anything that re-runs the check) changes.
+  const stockCheckKey = `${missingKey}|${materialRegionId}|${walletISK}|${stockRetry}`;
+  const [collapsedFor, setCollapsedFor] = useState(stockCheckKey);
+  if (collapsedFor !== stockCheckKey) {
+    setCollapsedFor(stockCheckKey);
+    setStockCheckOpen(false);
+  }
+  // Nothing missing means nothing to check: derived, not stored.
+  const stockCheck = missing.length === 0 ? null : fetchedStockCheck;
+
   useEffect(() => {
-    setStockCheckOpen(false); // collapse the expanded detail when the item/shortfall changes
-    if (missing.length === 0) { setStockCheck(null); return; }
+    if (missing.length === 0) return;
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     apiPost<MaterialStockCheckResponse>('/api/material-stock-check', {
@@ -350,10 +367,9 @@ const RightSidebar: FC<RightSidebarProps> = ({
       })
       .catch(() => { if (!cancelled) setStockCheck(null); });
     return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
-    // missing is a derived array (new reference each render) — key on its actual
-    // contents (material ids + shortfall qty) instead to avoid a refetch loop.
+    // `missing` is read inside but keyed by missingKey (see above) to avoid a refetch loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [missing.map(m => `${m.materialId}:${m.shortForRuns}`).join(','), materialRegionId, walletISK, stockRetry]);
+  }, [missingKey, materialRegionId, walletISK, stockRetry]);
 
   // Since MainContent now passes product type_id, selectedTypeId IS the product typeId.
   // We only need a fallback strip for edge cases where blueprint type_id was passed.
@@ -365,29 +381,30 @@ const RightSidebar: FC<RightSidebarProps> = ({
   // ── Inter-Hub: profitable buy orders fetch ───────────────────────────────
   // Fetches raw ESI buy orders at the sell hub for the selected item, then
   // filters to those where price > break-even (buy_at + all fees).
-  const [profOrders,  setProfOrders]  = useState<{ count: number; volume: number; totalAtStation: number | null } | null>(null);
-  const [profLoading, setProfLoading] = useState(false);
-  const [profError,   setProfError]   = useState<string | null>(null);
+  type ProfOrders = { count: number; volume: number; totalAtStation: number | null };
+  const [profResult, setProfResult] = useState<{ key: string; orders: ProfOrders | null; error: string | null } | null>(null);
+  const profKey     = interHubContext ? `${interHubContext.product_id}|${interHubContext.sell_region_id}` : null;
+  const profCurrent = profKey !== null && profResult?.key === profKey ? profResult : null;
+  const profOrders  = profCurrent?.orders ?? null;
+  const profError   = profCurrent?.error ?? null;
+  const profLoading = profKey !== null && profCurrent === null;
 
   // Auto-fetch when item changes — reads from the in-memory ESI book (instant),
   // so no manual button press is needed.
   useEffect(() => {
-    setProfOrders(null);
-    setProfError(null);
     if (!interHubContext) return;
     const { product_id, sell_region_id, sell_into, net_profit } = interHubContext;
     const breakEven = sell_into - net_profit;
+    const key = `${product_id}|${sell_region_id}`;
     let cancelled = false;
-    setProfLoading(true);
     fetch(`/api/inter-hub-item-profitable?typeId=${product_id}&regionId=${sell_region_id}&breakEven=${breakEven.toFixed(2)}`)
       .then(r => r.json())
       .then((data: { profitableOrderCount: number; totalVolumeRemain: number; totalAtStation?: number; error?: string }) => {
         if (cancelled) return;
-        if (data.error) { setProfError(data.error); return; }
-        setProfOrders({ count: data.profitableOrderCount, volume: data.totalVolumeRemain, totalAtStation: data.totalAtStation ?? null });
+        if (data.error) { setProfResult({ key, orders: null, error: data.error }); return; }
+        setProfResult({ key, orders: { count: data.profitableOrderCount, volume: data.totalVolumeRemain, totalAtStation: data.totalAtStation ?? null }, error: null });
       })
-      .catch(e => { if (!cancelled) setProfError((e as Error).message); })
-      .finally(() => { if (!cancelled) setProfLoading(false); });
+      .catch(e => { if (!cancelled) setProfResult({ key, orders: null, error: (e as Error).message }); });
     return () => { cancelled = true; };
   }, [interHubContext?.product_id, interHubContext?.sell_region_id]);
 

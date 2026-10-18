@@ -458,8 +458,12 @@ const TradingTab: FC<TradingTabProps> = ({ token, canDockKeestar = true }) => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedHub]);
 
-  // Reset pagination whenever a fresh scan arrives
-  useEffect(() => { setVisibleCount(200); }, [scanData]);
+  // Reset pagination whenever a fresh scan arrives (adjusted while rendering so no frame shows the old page size)
+  const [pagedFor, setPagedFor] = useState(scanData);
+  if (pagedFor !== scanData) {
+    setPagedFor(scanData);
+    setVisibleCount(200);
+  }
 
   // Sort scanner results — memoised so the 1s countdown tick doesn't re-sort 500 items each second
   const sortedResults = useMemo(

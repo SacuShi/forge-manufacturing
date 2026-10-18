@@ -181,6 +181,8 @@ const TABS = [
 
 // ── Component ────────────────────────────────────────────────────────────────
 
+const NO_PROFITS: Record<number, BlueprintProfit> = {};
+
 const MainContent: FC<MainContentProps> = ({
   activeTab,
   onTabChange,
@@ -237,7 +239,9 @@ const MainContent: FC<MainContentProps> = ({
   // POST every time MainContent mounted, racing the App.tsx request.
   const bpMetadata = bpMetadataProp;
   // v1.15.0 — My Blueprints profitability + sorting (mirrors Market Opportunities)
-  const [bpProfits, setBpProfits] = useState<Record<number, BlueprintProfit>>({});
+  const [loadedBpProfits, setBpProfits] = useState<Record<number, BlueprintProfit>>(NO_PROFITS);
+  // Without blueprints there is nothing to price: derived here instead of being cleared by an effect.
+  const bpProfits = blueprints && blueprints.length > 0 ? loadedBpProfits : NO_PROFITS;
   const [bpSort,    setBpSort]    = useState<BpSortField>('iskPerHour');
   const [bpSortDir, setBpSortDir] = useState<'asc' | 'desc'>('desc');
   // v1.33.0 — "Can Build Now" filter: owned materials + wallet ISK cover the shortfall
@@ -293,7 +297,7 @@ const MainContent: FC<MainContentProps> = ({
   // cold), silently retry once after 15s so the "Can Build Now" pill self-heals
   // once the background warm finishes, same pattern as useTrueCost's prices_warm.
   useEffect(() => {
-    if (!blueprints || blueprints.length === 0) { setBpProfits({}); return; }
+    if (!blueprints || blueprints.length === 0) return;
     const typeIds = [...new Set(blueprints.map(b => b.type_id))];
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;

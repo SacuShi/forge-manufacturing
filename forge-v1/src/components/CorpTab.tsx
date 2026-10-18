@@ -70,9 +70,13 @@ interface CorpBlueprintsProps {
   onSelectItem: (typeId: number, name: string) => void;
 }
 
+const NO_PROFITS: Record<number, BlueprintProfit> = {};
+
 const CorpBlueprintsView: FC<CorpBlueprintsProps> = ({ token, regionId, onSelectItem }) => {
   const [blueprints,  setBlueprints]  = useState<CorpBlueprint[]>([]);
-  const [bpProfits,   setBpProfits]   = useState<Record<number, BlueprintProfit>>({});
+  const [loadedProfits, setBpProfits] = useState<Record<number, BlueprintProfit>>(NO_PROFITS);
+  // No blueprints loaded means nothing to price: derived, not cleared by an effect.
+  const bpProfits = blueprints.length === 0 ? NO_PROFITS : loadedProfits;
   const [loading,     setLoading]     = useState(false);
   const [error,       setError]       = useState<string | null>(null);
   const [search,      setSearch]      = useState('');
@@ -121,7 +125,7 @@ const CorpBlueprintsView: FC<CorpBlueprintsProps> = ({ token, regionId, onSelect
 
   // Fetch profitability for all loaded blueprint type_ids
   useEffect(() => {
-    if (blueprints.length === 0) { setBpProfits({}); return; }
+    if (blueprints.length === 0) return;
     const typeIds = [...new Set(blueprints.map(b => b.type_id))];
     let cancelled = false;
     apiPost<Record<number, BlueprintProfit>>(
