@@ -39,6 +39,9 @@ RUN npm install --production
 COPY server/server.js        ./server.js
 COPY server/forge-security.js ./forge-security.js
 COPY server/sde-import.js    ./sde-import.js
+# server.js requires ./lib/* and ./routes/* (incl. lib/industry-data/*.json) — without these the container fails at boot
+COPY server/lib/             ./lib/
+COPY server/routes/          ./routes/
 
 # Copy built frontend into public/
 COPY --from=frontend-build /build/dist/ ./public/
