@@ -974,13 +974,13 @@ function decryptToken(ciphertext, ivHex, tagHex, key = CORP_ENCRYPTION_KEY) {
  * Updates corp_config with the new refresh token if one is issued (token rotation).
  */
 async function refreshCorpAccessToken(corpId) {
-  const config = await dbGet('SELECT * FROM corp_config WHERE corp_id = ?', [corpId]);
-  if (!config) throw new Error(`No corp config for corp_id ${corpId}`);
+  const corpRow = await dbGet('SELECT * FROM corp_config WHERE corp_id = ?', [corpId]);
+  if (!corpRow) throw new Error(`No corp config for corp_id ${corpId}`);
 
   const refreshToken = decryptToken(
-    config.enc_refresh_token,
-    config.token_iv,
-    config.token_tag
+    corpRow.enc_refresh_token,
+    corpRow.token_iv,
+    corpRow.token_tag
   );
 
   const clientId     = config.eve.clientId;
