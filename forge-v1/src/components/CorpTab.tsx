@@ -23,6 +23,7 @@ import ForgeWait from './ForgeWait';
 import { apiGet, apiPost } from '../api/client';
 import { formatISK, formatMargin, formatBuildTime } from '../utils/format';
 import { itemIconUrl } from '../utils/icons';
+import { useLatestRequest } from '../hooks/useLatestRequest';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -121,6 +122,7 @@ const CorpBlueprintsView: FC<CorpBlueprintsProps> = ({ token, regionId, onSelect
     }
   }, [token, typeFilter, debouncedSearch]);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- guarded request loader (loadIdRef): marks loading before the request
   useEffect(() => { load(); }, [load]);
 
   // Fetch profitability for all loaded blueprint type_ids
@@ -359,8 +361,10 @@ const CorpAssetsView: FC<CorpAssetsProps> = ({ token, onSelectItem }) => {
   };
   useEffect(() => () => { if (debounceRef.current) clearTimeout(debounceRef.current); }, []);
 
+  const latest = useLatestRequest();
   const load = useCallback(async () => {
     if (!token) return;
+    const requestId = latest.begin();
     setLoading(true); setError(null);
     try {
       const params = new URLSearchParams({
@@ -368,17 +372,19 @@ const CorpAssetsView: FC<CorpAssetsProps> = ({ token, onSelectItem }) => {
         ...(debouncedSearch ? { search: debouncedSearch } : {}),
       });
       const data = await apiGet<CorpAssetsResponse>(`/api/corp/assets?${params}`, token);
+      if (!latest.isCurrent(requestId)) return;
       setAssets(data.assets);
       setTotal(data.meta.total);
       setSafetyHiddenA(data.meta.safety_hidden ?? 0);
       setLastRefresh(data.meta.last_refresh_at);
     } catch (e) {
-      setError((e as Error).message);
+      if (latest.isCurrent(requestId)) setError((e as Error).message);
     } finally {
-      setLoading(false);
+      if (latest.isCurrent(requestId)) setLoading(false);
     }
-  }, [token, debouncedSearch]);
+  }, [token, debouncedSearch, latest]);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- guarded request loader: marks loading before the request
   useEffect(() => { load(); }, [load]);
 
   const handleRefresh = async () => {
@@ -455,20 +461,24 @@ const CorpJobsView: FC<CorpJobsProps> = ({ token }) => {
   const [error,       setError]       = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<string | null>(null);
 
+  const latest = useLatestRequest();
   const load = useCallback(async () => {
     if (!token) return;
+    const requestId = latest.begin();
     setLoading(true); setError(null);
     try {
       const data = await apiGet<CorpJobsResponse>('/api/corp/jobs', token);
+      if (!latest.isCurrent(requestId)) return;
       setJobs(data.jobs);
       setLastRefresh(data.meta.last_refresh_at);
     } catch (e) {
-      setError((e as Error).message);
+      if (latest.isCurrent(requestId)) setError((e as Error).message);
     } finally {
-      setLoading(false);
+      if (latest.isCurrent(requestId)) setLoading(false);
     }
-  }, [token]);
+  }, [token, latest]);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- guarded request loader: marks loading before the request
   useEffect(() => { load(); }, [load]);
 
   const handleRefresh = async () => {

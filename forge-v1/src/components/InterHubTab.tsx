@@ -8,6 +8,7 @@ import { MARKETS } from '../data/markets';
 import ForgeWait from './ForgeWait';
 import { itemIconUrl } from '../utils/icons';
 import InterHubHaulConfig from './InterHubHaulConfig';
+import { useLatestRequest } from '../hooks/useLatestRequest';
 
 interface CharacterSkillData {
   characterId: number;
@@ -109,11 +110,15 @@ const InterHubTab: FC<InterHubTabProps> = ({
   const [loadingMore, setLoadingMore] = useState(false);
   const [error,       setError]       = useState<string | null>(null);
   const loadingMoreRef = useRef(false);
+  const latest = useLatestRequest();
 
   const fetchPage = useCallback(async (
     buy: number, sell: number, margin: number, sort: SortKey, offset: number, append: boolean
   ) => {
     if (buy === sell) return;
+    // A fresh load (filters changed) starts a new generation; "load more" belongs to the current one. Anything
+    // from an older generation is dropped when it arrives.
+    const generation = append ? latest.current() : latest.begin();
     if (append) {
       if (loadingMoreRef.current) return;
       loadingMoreRef.current = true;
@@ -128,6 +133,7 @@ const InterHubTab: FC<InterHubTabProps> = ({
       const r = await fetch(url);
       const data: InterHubArbResponse = await r.json();
       if (!r.ok) throw new Error((data as { error?: string }).error || `HTTP ${r.status}`);
+      if (!latest.isCurrent(generation)) return;
 
       if (append) {
         setResults(prev => [...prev, ...data.results]);
@@ -138,7 +144,7 @@ const InterHubTab: FC<InterHubTabProps> = ({
       }
       setHasMore(data.has_more);
     } catch (e) {
-      if (!append) {
+      if (!append && latest.isCurrent(generation)) {
         setError((e as Error).message);
         setResults([]);
       }
@@ -146,11 +152,11 @@ const InterHubTab: FC<InterHubTabProps> = ({
       if (append) {
         loadingMoreRef.current = false;
         setLoadingMore(false);
-      } else {
+      } else if (latest.isCurrent(generation)) {
         setLoading(false);
       }
     }
-  }, []);
+  }, [latest]);
 
   // Reset + reload on any filter change
   useEffect(() => {

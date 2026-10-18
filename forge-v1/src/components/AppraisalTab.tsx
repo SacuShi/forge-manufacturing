@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, type FC } from 'react';
 import { itemIconUrl } from '../utils/icons';
 import { formatISK } from '../utils/format';
 import ForgeWait from './ForgeWait';
+import { useLatestRequest } from '../hooks/useLatestRequest';
 
 interface AppraisalInput {
   typeId: number;
@@ -91,8 +92,10 @@ const AppraisalTab: FC<AppraisalTabProps> = ({ seedItems, canDockKeestar = true 
     }
   }
 
+  const latest = useLatestRequest();
   const doAppraise = useCallback(async (toAppraise: AppraisalInput[], rId: number) => {
     if (toAppraise.length === 0) return;
+    const requestId = latest.begin();
     setLoading(true);
     setError(null);
     try {
@@ -105,13 +108,14 @@ const AppraisalTab: FC<AppraisalTabProps> = ({ seedItems, canDockKeestar = true 
         const errData = await res.json().catch(() => ({}));
         throw new Error((errData as { error?: string }).error ?? `Server error ${res.status}`);
       }
-      setResults(await res.json() as AppraisalResponse);
+      const appraisal = await res.json() as AppraisalResponse;
+      if (latest.isCurrent(requestId)) setResults(appraisal);   // a newer appraisal supersedes this one
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Appraisal failed');
+      if (latest.isCurrent(requestId)) setError(err instanceof Error ? err.message : 'Appraisal failed');
     } finally {
-      setLoading(false);
+      if (latest.isCurrent(requestId)) setLoading(false);
     }
-  }, []);
+  }, [latest]);
 
   const getActive = () => pasteText.trim() ? parsePaste(pasteText) : items;
 
@@ -135,6 +139,7 @@ const AppraisalTab: FC<AppraisalTabProps> = ({ seedItems, canDockKeestar = true 
 
   // Auto-appraise on first load with seed items
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- guarded request loader: marks loading before the request
     if (items.length > 0 && !results && !loading) doAppraise(items, regionId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

@@ -20,6 +20,7 @@ import type {
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 import { itemIconUrl } from '../utils/icons';
+import { useLatestRequest } from '../hooks/useLatestRequest';
 
 type TradeSortCol = 'iskPerDay' | 'netMarginPct' | 'avgDailyVol' | 'sellOrders';
 
@@ -298,13 +299,16 @@ const MyOrders: FC<{ token: string | null }> = ({ token }) => {
   const [error,   setError]   = useState<string | null>(null);
   const [scopeMissing, setScopeMissing] = useState(false);
 
+  const latest = useLatestRequest();
   const load = useCallback(() => {
     if (!token) return;
+    const requestId = latest.begin();
     setLoading(true);
     setError(null);
     apiGet<CharacterOrdersResponse>('/api/trading/character-orders', token)
-      .then(d => { setData(d.orders); setLoading(false); })
+      .then(d => { if (latest.isCurrent(requestId)) { setData(d.orders); setLoading(false); } })
       .catch(err => {
+        if (!latest.isCurrent(requestId)) return;
         if (err.message?.includes('scope_missing') || err.message?.includes('403')) {
           setScopeMissing(true);
         } else {
@@ -312,8 +316,9 @@ const MyOrders: FC<{ token: string | null }> = ({ token }) => {
         }
         setLoading(false);
       });
-  }, [token]);
+  }, [token, latest]);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- guarded request loader: marks loading before the request
   useEffect(() => { load(); }, [load]);
 
   if (scopeMissing) return (

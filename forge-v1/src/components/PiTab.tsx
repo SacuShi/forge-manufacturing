@@ -275,6 +275,8 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
 
   useEffect(() => {
     if (!piCharacters.length) return;
+    let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- guarded request loader: marks loading before the request
     setLoading(true); setError(null); setPartialErrors([]);
 
     // Fetch PI colonies for every character in parallel, then merge.
@@ -284,6 +286,7 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
           .then(d => ({ d, name: c.name }))
       )
     ).then(results => {
+      if (cancelled) return;   // a newer character set superseded this request
       const merged: PiData = {
         colonies: [], productNames: {}, schematics: {},
         systemNames: {}, prices: {}, factoryOutputs: {}, bpCrossRef: {},
@@ -322,6 +325,7 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
       }
       setLoading(false);
     });
+    return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [charKey]);
 
@@ -329,10 +333,13 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
   // POCO tax rate changes so rankings reflect the user's real rate.
   useEffect(() => {
     if (!piCharacters.length) return;
+    let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- guarded request loader: clears the previous error before the request
     setMarketError(null);
     apiGet<MarketData>(`/api/pi/market?pocoTaxRate=${pocoTaxRate}`, piCharacters[0].token)
-      .then(d  => setMarket(d))
-      .catch(e => setMarketError(e.message || 'Failed to load market data'));
+      .then(d  => { if (!cancelled) setMarket(d); })
+      .catch(e => { if (!cancelled) setMarketError(e.message || 'Failed to load market data'); });
+    return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [charKey, pocoTaxRate]);
 

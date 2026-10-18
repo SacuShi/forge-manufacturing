@@ -7,6 +7,7 @@ import { formatISK } from '../utils/format';
 import ForgeWait from './ForgeWait';
 
 import { itemIconUrl } from '../utils/icons';
+import { useLatestRequest } from '../hooks/useLatestRequest';
 
 const LS_FACTION  = 'forge_lp_faction';
 const LS_CORP     = 'forge_lp_corp';
@@ -127,7 +128,10 @@ const LPStoreTab: FC<LPStoreTabProps> = ({ onSelectItem, selectedTypeId, lpPoint
   useEffect(() => { localStorage.setItem(LS_MIN_VOL, String(minVolume)); },   [minVolume]);
   useEffect(() => { localStorage.setItem(LS_MY_LP,   String(myLPOnly)); },    [myLPOnly]);
 
+  const latest = useLatestRequest();
   const fetchOffers = useCallback((append = false, fetchOffset = 0) => {
+    // A fresh load (filters changed) starts a new generation; "load more" belongs to the current one.
+    const generation = append ? latest.current() : latest.begin();
     if (append) setLoadingMore(true);
     else { setLoading(true); setOffers([]); }
     setError(null);
@@ -139,6 +143,7 @@ const LPStoreTab: FC<LPStoreTabProps> = ({ onSelectItem, selectedTypeId, lpPoint
     fetch(`/api/lp-store?${params}`, { headers })
       .then(r => r.json())
       .then((d: LPStoreResponse) => {
+        if (!latest.isCurrent(generation)) { if (append) setLoadingMore(false); return; }
         setOffers(prev => append ? [...prev, ...(d.offers || [])] : (d.offers || []));
         setTotal(d.total || 0);
         setPricesLive(!!d.prices_live);
@@ -148,12 +153,14 @@ const LPStoreTab: FC<LPStoreTabProps> = ({ onSelectItem, selectedTypeId, lpPoint
         else setLoading(false);
       })
       .catch(e => {
+        if (!latest.isCurrent(generation)) { if (append) setLoadingMore(false); return; }
         setError(e.message);
         if (append) setLoadingMore(false);
         else setLoading(false);
       });
-  }, [factionId, corpId, sellRegionId]);
+  }, [factionId, corpId, sellRegionId, latest]);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- guarded request loader: marks loading before the request
   useEffect(() => { setOffset(0); fetchOffers(false, 0); }, [fetchOffers]);
 
   // Derive sorted category list from all loaded offers
