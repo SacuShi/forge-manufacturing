@@ -160,6 +160,7 @@ const InterHubTab: FC<InterHubTabProps> = ({
 
   // Reset + reload on any filter change
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- guarded request loader: marks loading before the request
     setTotalLoaded(0);
     fetchPage(buyHub, sellHub, minMargin, sortBy, 0, false);
   }, [fetchPage, buyHub, sellHub, minMargin, sortBy]);

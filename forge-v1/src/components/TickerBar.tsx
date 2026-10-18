@@ -88,6 +88,7 @@ const ScrollingPins: FC<ScrollingPinsProps> = ({ pins, slots, empty, speedMultip
   const innerRef   = useRef<HTMLDivElement>(null);
   const [marquee, setMarquee] = useState(false);
   const [speed,   setSpeed]   = useState(40); // px/s
+  const [contentWidth, setContentWidth] = useState(0); // measured scrollWidth of the pins row, for the scroll duration
 
   useEffect(() => {
     const wrap  = wrapRef.current;
@@ -97,6 +98,7 @@ const ScrollingPins: FC<ScrollingPinsProps> = ({ pins, slots, empty, speedMultip
     const check = () => {
       const overflow = inner.scrollWidth > wrap.clientWidth + 10;
       setMarquee(overflow);
+      setContentWidth(inner.scrollWidth);
       if (overflow) {
         // ~20px/s for short lists, faster for long ones (capped at 80)
         const ratio = inner.scrollWidth / wrap.clientWidth;
@@ -117,8 +119,9 @@ const ScrollingPins: FC<ScrollingPinsProps> = ({ pins, slots, empty, speedMultip
     </div>
   );
 
-  const duration = marquee && innerRef.current
-    ? `${(innerRef.current.scrollWidth / (speed * speedMultiplier)).toFixed(1)}s`
+  // Uses the width measured by the effect above (never reads a ref while rendering).
+  const duration = marquee && contentWidth > 0
+    ? `${(contentWidth / (speed * speedMultiplier)).toFixed(1)}s`
     : undefined;
 
   return (

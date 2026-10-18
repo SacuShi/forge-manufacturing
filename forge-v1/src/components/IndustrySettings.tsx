@@ -204,6 +204,8 @@ interface IndustrySettingsProps {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
+const NO_SUGGESTIONS: StructureFitSuggestion[] = [];
+
 const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
   open, token, initial, sourceMarket, sellMarket, onClose, onSaved,
   characters = [], focusSection = null,
@@ -230,8 +232,10 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
   const [droppedRigCount, setDroppedRigCount] = useState(0);
   const [sizeDroppedCount, setSizeDroppedCount] = useState(0);
   const [rigStats,       setRigStats]       = useState<IndustryRigsResponse | null>(null);
-  const [fitSuggestions, setFitSuggestions] = useState<StructureFitSuggestion[]>([]);
-  const [jobCheck,       setJobCheck]       = useState<JobCostCheck | null>(null);
+  const [fitResult, setFitResult] = useState<{ key: string; suggestions: StructureFitSuggestion[] } | null>(null);
+  const [jobCheckResult, setJobCheckResult] = useState<{ initial: IndustrySettings | null; data: JobCostCheck | null } | null>(null);
+  // Shown only while the modal is open and only for the saved setup it was computed for (derived, not cleared by an effect).
+  const jobCheck = open && token && jobCheckResult?.initial === initial ? jobCheckResult.data : null;
   const [expandedCats,   setExpandedCats]   = useState<Set<string>>(new Set());
 
   // ── Haulage state (Phase 1 + Phase 2) ─────────────────────────────────────
@@ -273,6 +277,7 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
   // Populate form from saved settings when modal opens
   useEffect(() => {
     if (!open) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the form is (re)seeded from the saved settings each time the modal opens
     setSaved(false);
     setSaveError(null);
     if (initial) {
@@ -347,28 +352,29 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
 
   // FORGE's install-cost estimate vs what CCP actually charged for the character's running jobs.
   useEffect(() => {
-    if (!open || !token) { setJobCheck(null); return; }
+    if (!open || !token) return;
     let cancelled = false;
     apiGet<JobCostCheck>('/api/job-cost-check', token)
-      .then((r) => { if (!cancelled) setJobCheck(r); })
-      .catch(() => { if (!cancelled) setJobCheck(null); });
+      .then((r) => { if (!cancelled) setJobCheckResult({ initial, data: r }); })
+      .catch(() => { if (!cancelled) setJobCheckResult({ initial, data: null }); });
     return () => { cancelled = true; };
   }, [open, token, initial]);
 
   // What other FORGE pilots report for this system + structure type (anonymous).
+  // Suggestions are stored with the system + structure type they answer; those for a previous selection are
+  // never shown (or applied) while the new request is in flight.
+  const fitKey = open && token && systemId && structureId !== null ? `${systemId}|${structureId}` : null;
+  const fitSuggestions = fitKey !== null && fitResult?.key === fitKey ? fitResult.suggestions : NO_SUGGESTIONS;
   useEffect(() => {
-    // Clear first: suggestions for the previous system/structure type must never stay visible (or
-    // be applied) while the new request is in flight.
-    setFitSuggestions([]);
-    if (!open || !token || !systemId || structureId === null) return;
+    if (fitKey === null || !token) return;
     let cancelled = false;
     apiGet<{ suggestions: StructureFitSuggestion[] }>(
       `/api/structure-fit-suggestions?system_id=${systemId}&structure_type_id=${structureId}`, token
     )
-      .then((r) => { if (!cancelled) setFitSuggestions(r.suggestions ?? []); })
-      .catch(() => { if (!cancelled) setFitSuggestions([]); });
+      .then((r) => { if (!cancelled) setFitResult({ key: fitKey, suggestions: r.suggestions ?? [] }); })
+      .catch(() => { if (!cancelled) setFitResult({ key: fitKey, suggestions: [] }); });
     return () => { cancelled = true; };
-  }, [open, token, systemId, structureId]);
+  }, [fitKey, token, systemId, structureId]);
 
   // ── System autocomplete ────────────────────────────────────────────────────
   const handleSystemInput = useCallback((value: string) => {
@@ -461,16 +467,15 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
   // If the structure type changes (or is cleared), drop any selected rigs that
   // no longer fit the new size — prevents saving e.g. an XL rig against a
   // Raitaru after switching structures mid-edit.
-  useEffect(() => {
-    const validIds = new Set(
-      (rigSize ? MANUFACTURING_RIGS.filter((r) => r.size === rigSize) : []).map((r) => r.type_id)
-    );
-    const kept = selectedRigs.filter((id) => validIds.has(id));
-    if (kept.length !== selectedRigs.length) {
-      setSizeDroppedCount(selectedRigs.length - kept.length);   // never drop rigs silently
-      setSelectedRigs(kept);
-    }
-  }, [rigSize, selectedRigs]);
+  const validRigIds = new Set(
+    (rigSize ? MANUFACTURING_RIGS.filter((r) => r.size === rigSize) : []).map((r) => r.type_id)
+  );
+  const keptRigs = selectedRigs.filter((id) => validRigIds.has(id));
+  if (keptRigs.length !== selectedRigs.length) {
+    // Adjusted while rendering (it converges on the next pass), so a rig that no longer fits is never shown selected.
+    setSizeDroppedCount(selectedRigs.length - keptRigs.length);   // never drop rigs silently
+    setSelectedRigs(keptRigs);
+  }
 
   // Auto-zero: if mfg system matches the source or sell hub's main station
   const leg1AutoZero = !!(systemId && HUB_SYSTEM_IDS[sourceMarket.id] === systemId);

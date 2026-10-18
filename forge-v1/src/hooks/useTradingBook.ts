@@ -61,7 +61,9 @@ export function useTradingBook(
   const countdownRef      = useRef<ReturnType<typeof setInterval> | null>(null);
   const sessionPollCount  = useRef(0);  // limits fast-polls when sessionCached is persistently false
   const filtersRef        = useRef(filters);
-  filtersRef.current = filters;
+  const runScanRef        = useRef<() => void>(() => {});   // the latest runScan, for the timers that re-run it
+  // Keep the latest filters readable by scheduled scans (written after render, not during it).
+  useEffect(() => { filtersRef.current = filters; });
 
   const clearTimers = useCallback(() => {
     if (timerRef.current)     { clearTimeout(timerRef.current);   timerRef.current = null; }
@@ -103,14 +105,14 @@ export function useTradingBook(
           // Book still fetching OR session not yet cached — poll fast (max 10 retries for session)
           if (data.sessionCached === false) sessionPollCount.current += 1;
           startCountdown(Math.round(WARMING_POLL_MS / 1000));
-          timerRef.current = setTimeout(runScan, WARMING_POLL_MS);
+          timerRef.current = setTimeout(() => runScanRef.current(), WARMING_POLL_MS);
         } else {
           if (data.sessionCached !== false) sessionPollCount.current = 0; // reset on success
           // Book is ready — align next refresh to when ESI cache expires
           const expiresIn = data.meta?.expiresInSec ?? 300;
           const delay = Math.min(Math.max(expiresIn * 1000 + 10_000, MIN_REFRESH_MS), MAX_REFRESH_MS);
           startCountdown(Math.round(delay / 1000));
-          timerRef.current = setTimeout(runScan, delay);
+          timerRef.current = setTimeout(() => runScanRef.current(), delay);
         }
       })
       .catch(err => {
@@ -118,9 +120,10 @@ export function useTradingBook(
         setScanning(false);
         // Back off 2 min on error
         startCountdown(120);
-        timerRef.current = setTimeout(runScan, 120_000);
+        timerRef.current = setTimeout(() => runScanRef.current(), 120_000);
       });
   }, [token, clearTimers, startCountdown]);
+  useEffect(() => { runScanRef.current = runScan; }, [runScan]);
 
   // Auto-run when token is available
   useEffect(() => {

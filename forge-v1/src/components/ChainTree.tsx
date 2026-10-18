@@ -23,16 +23,18 @@ interface ChainTreeProps {
 /** Lazily fetches + renders one level of sub-materials beneath a chain node. */
 export const ChainTree: FC<ChainTreeProps> = ({ parentTypeId, regionId, ownedBlueprints, depth, onSelectItem }) => {
   const cacheKey = `${parentTypeId}:${regionId}`;
-  const [data, setData]       = useState<MaterialBreakdownResponse | null>(breakdownCache.get(cacheKey) ?? null);
+  const [fetchedData, setData] = useState<MaterialBreakdownResponse | null>(null);
+  // A cached breakdown is read straight from the cache; the fetched one covers everything else.
+  const data = breakdownCache.get(cacheKey) ?? fetchedData;
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState(false);
   const [retry, setRetry]     = useState(0);   // bumps while the hub's prices are still loading
 
   useEffect(() => {
-    const cached = breakdownCache.get(cacheKey);
-    if (cached) { setData(cached); return; }
+    if (breakdownCache.has(cacheKey)) return;
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- guarded request loader: marks loading before the request
     setLoading(true);
     setError(false);
     apiPost<MaterialBreakdownResponse>('/api/material-breakdown', {

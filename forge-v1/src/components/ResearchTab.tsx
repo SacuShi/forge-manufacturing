@@ -85,6 +85,7 @@ const ResearchTab: FC<ResearchTabProps> = ({ blueprints, regionId, onSelectItem,
     if (ownedBpos.length === 0) return;
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- guarded request loader: marks loading before the request
     setLoading(true);
     setError(null);
     apiPost<ResearchRoiResponse>('/api/me-research-roi', {

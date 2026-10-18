@@ -42,6 +42,7 @@ const AssetSafetyPanel: FC<Props> = ({ holdings, unvaluedTypes = 0, wrapCount, h
   useEffect(() => {
     if (holdings.length === 0) return;
     let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- guarded request loader: marks loading before the request
     setVal(v => ({ ...v, status: 'loading' }));
     (async () => {
       try {

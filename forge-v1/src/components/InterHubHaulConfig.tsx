@@ -52,6 +52,7 @@ const InterHubHaulConfig: FC<InterHubHaulConfigProps> = ({
   useEffect(() => {
     if (!open || !token) return;
     let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- guarded request loader: marks loading before the request
     setLoading(true);
     setSaved(false);
     setSaveError(null);
