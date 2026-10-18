@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, type FC } from 'react';
 import { createPortal } from 'react-dom';
 import { useTickerContext } from '../hooks/useTickerPins';
 import type { TickerPinType, NewPinConfig } from '../types';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 
 export interface PinOption {
   type: TickerPinType;
@@ -21,11 +22,13 @@ const TickerPinButton: FC<TickerPinButtonProps> = ({ options, baseConfig }) => {
   const [pos,  setPos]        = useState<PopoverPos | null>(null);
   const btnRef                = useRef<HTMLButtonElement>(null);
   const popoverRef            = useRef<HTMLDivElement>(null);
+  const openedByKeyboard      = useRef(false);
 
   // Calculate portal position from the trigger button's screen coords
   const openPopover = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (open) { setOpen(false); return; }
+    openedByKeyboard.current = e.detail === 0; // Enter/Space on the button fires a click with detail 0
     const rect = btnRef.current!.getBoundingClientRect();
     const spaceAbove = rect.top;
     const spaceBelow = window.innerHeight - rect.bottom;
@@ -50,6 +53,23 @@ const TickerPinButton: FC<TickerPinButtonProps> = ({ options, baseConfig }) => {
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
+
+  // Keyboard: Escape closes and returns focus to the button; a keyboard-opened menu focuses its first item.
+  useEscapeKey(() => { setOpen(false); btnRef.current?.focus(); }, open);
+  useEffect(() => {
+    if (open && pos && openedByKeyboard.current) {
+      popoverRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+    }
+  }, [open, pos]);
+
+  const moveFocus = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    const items = [...e.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+    const at = items.indexOf(document.activeElement as HTMLElement);
+    const next = e.key === 'ArrowDown' ? at + 1 : at - 1;
+    items[(next + items.length) % items.length]?.focus();
+  };
 
   // Close on window scroll (position would drift if the button's ancestor scrolls).
   // Not capture-phase so inner scrollable containers (item table, sidebar) don't
@@ -129,8 +149,10 @@ const TickerPinButton: FC<TickerPinButtonProps> = ({ options, baseConfig }) => {
           ref={popoverRef}
           className="ticker-pin-popover"
           role="menu"
+          tabIndex={-1}
           style={{ position: 'fixed', ...pos }}
           onClick={e => e.stopPropagation()}
+          onKeyDown={moveFocus}
         >
           <div className="ticker-pin-popover-title">Pin to Ticker</div>
           {withState.map(opt => (

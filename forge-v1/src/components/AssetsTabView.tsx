@@ -157,7 +157,10 @@ const AssetsTabView: FC<AssetsTabViewProps> = ({ activeTab, assetExportSet, asse
               return (
                 <div key={locationId}>
                   {/* Location section header */}
-                  <div
+                  <button
+                    type="button"
+                    className="btn-reset"
+                    aria-expanded={!isCollapsed}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
@@ -188,14 +191,17 @@ const AssetsTabView: FC<AssetsTabViewProps> = ({ activeTab, assetExportSet, asse
                     <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>
                       {totalItems} {totalItems === 1 ? 'item' : 'items'}
                     </span>
-                  </div>
+                  </button>
 
                   {/* Item rows within this location */}
                   {!isCollapsed && sortedItems.map(({ name, qty, typeId }, i) => {
                     const itemKey     = `${typeId}:${locationId}`;
                     const isSelected  = assetExportSet.has(itemKey);
                     return (
-                      <div
+                      <button
+                        type="button"
+                        className="btn-reset"
+                        aria-pressed={isSelected}
                         key={itemKey}
                         title="Click to select · Shift+click to range-select · Ctrl+click to add/remove"
                         style={{
@@ -215,11 +221,11 @@ const AssetsTabView: FC<AssetsTabViewProps> = ({ activeTab, assetExportSet, asse
                         }}
                         onMouseEnter={e => {
                           if (!isSelected)
-                            (e.currentTarget as HTMLDivElement).style.boxShadow = 'inset 0 0 0 1px rgba(212, 150, 14, 0.55)';
+                            (e.currentTarget as HTMLElement).style.boxShadow = 'inset 0 0 0 1px rgba(212, 150, 14, 0.55)';
                         }}
                         onMouseLeave={e => {
                           if (!isSelected)
-                            (e.currentTarget as HTMLDivElement).style.boxShadow = '';
+                            (e.currentTarget as HTMLElement).style.boxShadow = '';
                         }}
                         onClick={(e) => {
                           const idx = visibleItemKeys.indexOf(itemKey);
@@ -274,7 +280,7 @@ const AssetsTabView: FC<AssetsTabViewProps> = ({ activeTab, assetExportSet, asse
                             ×{qty.toLocaleString()}
                           </span>
                         </div>
-                      </div>
+                      </button>
                     );
                   })}
                 </div>

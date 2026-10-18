@@ -20,6 +20,7 @@ import { formatISK } from '../utils/format';
 import ForgeWait from './ForgeWait';
 
 import { itemIconUrl } from '../utils/icons';
+import { onActivateKey } from '../utils/a11y';
 
 type SortKey = 'saving' | 'pct' | 'time' | 'projected';
 
@@ -193,7 +194,7 @@ const ResearchTab: FC<ResearchTabProps> = ({ blueprints, regionId, onSelectItem,
                   tabIndex={0}
                   aria-selected={it.productId === selectedTypeId ? 'true' : undefined}
                   onClick={() => onSelectItem(it.productId, it.productName)}
-                  onKeyDown={(e) => e.key === 'Enter' && onSelectItem(it.productId, it.productName)}
+                  onKeyDown={onActivateKey(() => onSelectItem(it.productId, it.productName))}
                 >
                   <td>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>

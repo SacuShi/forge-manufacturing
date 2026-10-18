@@ -21,6 +21,7 @@ import type {
 
 import { itemIconUrl } from '../utils/icons';
 import { useLatestRequest } from '../hooks/useLatestRequest';
+import { onActivateKey } from '../utils/a11y';
 
 type TradeSortCol = 'iskPerDay' | 'netMarginPct' | 'avgDailyVol' | 'sellOrders';
 
@@ -500,7 +501,12 @@ const TradingTab: FC<TradingTabProps> = ({ token, canDockKeestar = true }) => {
     <div
       key={item.typeId}
       className={`td-row${selectedItem?.typeId === item.typeId ? ' td-row-selected' : ''}`}
+      // Not a <button>: it holds the watch and pin buttons. Keyboard: Tab to the row, Enter/Space selects.
+      role="button"
+      tabIndex={0}
+      aria-pressed={selectedItem?.typeId === item.typeId}
       onClick={() => handleSelectItem(item)}
+      onKeyDown={onActivateKey(() => handleSelectItem(item))}
     >
       <span className="td-col-rank">{rank}</span>
       <span className="td-col-name">
@@ -524,7 +530,7 @@ const TradingTab: FC<TradingTabProps> = ({ token, canDockKeestar = true }) => {
           onClick={e => { e.stopPropagation(); handleWatch(item); }}
           title={isWatched(item.typeId) ? 'Remove from watchlist' : 'Add to watchlist'}
         >★</button>
-        <span onClick={e => e.stopPropagation()}>
+        <span role="presentation" onClick={e => e.stopPropagation()}>
           <TickerPinButton
             options={[
               { type: 'trade_spread', label: `${item.name} spread` },

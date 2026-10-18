@@ -4,6 +4,7 @@ import { INVENTION_DECRYPTORS } from '../types';
 import { apiPost } from '../api/client';
 import { formatISKDisplay as formatISK } from '../utils/format';
 import { itemIconUrl } from '../utils/icons';
+import { onActivateKey } from '../utils/a11y';
 
 // ── Chain drill-down (inline reaction / manufacturing tree) ───────────────────
 // Module-level cache keyed by `${typeId}:${regionId}` so re-opening a node (or
@@ -107,24 +108,21 @@ const ChainRow: FC<ChainRowProps> = ({ mat, regionId, ownedBlueprints, depth, on
         tabIndex={0}
         title={`Open ${mat.name} in market view`}
         onClick={() => onSelectItem(mat.materialId, mat.name)}
-        onKeyDown={(e) => e.key === 'Enter' && onSelectItem(mat.materialId, mat.name)}
+        onKeyDown={onActivateKey(() => onSelectItem(mat.materialId, mat.name))}
       >
         {/* Expand toggle (only when producible) */}
         {mat.canManufacture ? (
-          <span
-            className="chain-toggle"
-            role="button"
-            tabIndex={0}
+          <button type="button"
+            className="btn-reset chain-toggle"
             title={open ? 'Collapse' : `Expand ${isReaction ? 'reaction' : 'build'} chain`}
             onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}
-            onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); setOpen(o => !o); } }}
             style={{
               color: isReaction ? 'var(--color-reaction)' : 'var(--color-accent-primary)',
               cursor: 'pointer', width: 12, flexShrink: 0, fontSize: 10,
             }}
           >
             {open ? '▾' : '▸'}
-          </span>
+          </button>
         ) : (
           <span style={{ width: 12, flexShrink: 0 }} />
         )}

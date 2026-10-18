@@ -6,6 +6,7 @@ import { Fragment } from 'react';
 import { itemIconUrl } from '../utils/icons';
 import { ChainTree, DecryptorSelect } from './ChainTree';
 import { INVENTION_DECRYPTORS, type ItemDetailApiResponse, type EsiBlueprint, type InterHubArbRow, type Market, type MaterialStockCheckResponse, type TrueCostResponse } from '../types';
+import { onActivateKey } from '../utils/a11y';
 
 interface ItemMaterialsSectionProps {
   apiDetail: ItemDetailApiResponse | null;
@@ -238,7 +239,7 @@ const ItemMaterialsSection: FC<ItemMaterialsSectionProps> = ({ apiDetail, bluepr
                         tabIndex={0}
                         title={`Click to view market data for ${mat.name}`}
                         onClick={() => onSelectItem(mat.materialId, mat.name)}
-                        onKeyDown={(e) => e.key === 'Enter' && onSelectItem(mat.materialId, mat.name)}
+                        onKeyDown={onActivateKey(() => onSelectItem(mat.materialId, mat.name))}
                       >
                         {/* Material icon */}
                         <span className="mat-icon">
@@ -269,15 +270,12 @@ const ItemMaterialsSection: FC<ItemMaterialsSectionProps> = ({ apiDetail, bluepr
                         <span className="mat-name" style={{ flex: 1 }}>
                           {mat.name}
                           {isChain && (
-                            <span
-                              role="button"
-                              tabIndex={0}
+                            <button type="button"
                               title={isExpanded ? 'Collapse production chain' : 'Expand production chain'}
                               onClick={(e) => { e.stopPropagation(); toggleChain(mat.materialId); }}
-                              onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); toggleChain(mat.materialId); } }}
-                              className={`mat-badge ${isOwned ? 'mat-badge-own' : 'mat-badge-chain'}`}>
+                              className={`btn-reset btn-reset-inline mat-badge ${isOwned ? 'mat-badge-own' : 'mat-badge-chain'}`}>
                               {isExpanded ? '▾' : '▸'} ⛓ {isOwned ? 'owned' : 'chain'}
-                            </span>
+                            </button>
                           )}
                           {mat.piTier && (
                             <span className="mat-badge mat-badge-pi">
@@ -367,12 +365,9 @@ const ItemMaterialsSection: FC<ItemMaterialsSectionProps> = ({ apiDetail, bluepr
 
                   return (
                     <div style={{ marginTop: 6 }}>
-                      <div
-                        role="button"
-                        tabIndex={0}
+                      <button type="button" className="btn-reset"
                         title={message}
                         onClick={(e) => { e.stopPropagation(); setStockCheckOpen(o => !o); }}
-                        onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); setStockCheckOpen(o => !o); } }}
                         style={{
                           display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
                           fontSize: 10, cursor: 'pointer', color: cfg.color,
@@ -382,7 +377,7 @@ const ItemMaterialsSection: FC<ItemMaterialsSectionProps> = ({ apiDetail, bluepr
                       >
                         <span>{cfg.icon} {cfg.label}</span>
                         <span style={{ opacity: 0.6, fontSize: 8 }}>{stockCheckOpen ? '▾' : '▸'}</span>
-                      </div>
+                      </button>
                       {stockCheckOpen && (
                         <div style={{
                           marginTop: 4, fontSize: 10, color: 'var(--color-text-secondary)',
@@ -617,13 +612,11 @@ const ItemMaterialsSection: FC<ItemMaterialsSectionProps> = ({ apiDetail, bluepr
                     const adjProb = Math.min(1, opt.baseProbability * (1 + decr.probMult / 100) + (inventionProbBonus / 100));
                     const adjRuns = opt.outputRuns + decr.runs;
                     return (
-                      <div
+                      <button type="button"
                         key={opt.t2BlueprintId}
-                        className="stat-card"
+                        className="btn-reset stat-card"
                         style={{ marginBottom: 3, cursor: 'pointer', border: '0.5px solid rgba(255,152,0,0.3)' }}
-                        role="button" tabIndex={0}
                         onClick={() => onSelectItem(opt.t2ProductId, opt.t2Name)}
-                        onKeyDown={(e) => e.key === 'Enter' && onSelectItem(opt.t2ProductId, opt.t2Name)}
                       >
                         <div className="stat-card-label" style={{ color: '#ff9800' }}>
                           {opt.t2Name}
@@ -638,7 +631,7 @@ const ItemMaterialsSection: FC<ItemMaterialsSectionProps> = ({ apiDetail, bluepr
                             <span style={{ color: 'rgba(255,152,0,0.55)', fontSize: 10, marginLeft: 6 }}>(cost ~{formatISK(opt.perBpcCost)})</span>
                           )}
                         </div>
-                      </div>
+                      </button>
                     );
                   })}
                 </div>

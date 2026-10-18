@@ -2,6 +2,7 @@
 // Lets the user add characters, remove alts, and promote an alt to primary.
 
 import { useState, type FC } from 'react';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 import type { CharacterInfo, AltCharacter, RememberedCharacter } from '../types';
 
 interface CharacterManagementModalProps {
@@ -176,6 +177,7 @@ const CharacterManagementModal: FC<CharacterManagementModalProps> = ({
   onRestoreRemembered,
 }) => {
   const [restoringId, setRestoringId] = useState<number | null>(null);
+  useEscapeKey(onClose);
 
   // Characters we remember but that aren't loaded into this session right now —
   // those already loaded show above with their own Make Primary / × controls.
@@ -197,7 +199,7 @@ const CharacterManagementModal: FC<CharacterManagementModalProps> = ({
   };
 
   return (
-    <div style={S.overlay} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div style={S.overlay} role="presentation" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div style={S.modal} role="dialog" aria-modal="true" aria-label="Manage Characters">
 
         <div style={S.header}>

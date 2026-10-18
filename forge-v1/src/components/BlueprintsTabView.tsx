@@ -112,14 +112,11 @@ const BlueprintsTabView: FC<BlueprintsTabViewProps> = ({ activeTab, blueprintOwn
               const firstCopy = copies[0];
 
               return (
-                <div
+                <button type="button"
                   key={typeId}
-                  className="bp-card"
-                  role="button"
-                  tabIndex={0}
+                  className="btn-reset bp-card"
                   data-selected={selectId === selectedTypeId ? 'true' : undefined}
                   onClick={() => onSelectItem(selectId, selectName)}
-                  onKeyDown={(e) => e.key === 'Enter' && onSelectItem(selectId, selectName)}
                 >
                   {/* Blueprint icon — /bp for BPO (blue), /bpc for BPC (pale), or T2 tint via CSS */}
                   <div className={`bp-icon ${isT2 ? 'bp-icon-t2' : (isBpo ? 'bp-icon-bpo' : 'bp-icon-bpc')}`}>
@@ -217,7 +214,7 @@ const BlueprintsTabView: FC<BlueprintsTabViewProps> = ({ activeTab, blueprintOwn
                       </div>
                     );
                   })()}
-                </div>
+                </button>
               );
             })}
             {groupedBps.length === 0 && (

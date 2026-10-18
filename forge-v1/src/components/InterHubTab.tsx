@@ -9,6 +9,7 @@ import ForgeWait from './ForgeWait';
 import { itemIconUrl } from '../utils/icons';
 import InterHubHaulConfig from './InterHubHaulConfig';
 import { useLatestRequest } from '../hooks/useLatestRequest';
+import { onActivateKey } from '../utils/a11y';
 
 interface CharacterSkillData {
   characterId: number;
@@ -361,7 +362,7 @@ const InterHubTab: FC<InterHubTabProps> = ({
                     tabIndex={0}
                     aria-label={`View details for ${row.product_name}`}
                     onClick={() => onSelectArbItem(row.product_id, row.product_name, row)}
-                    onKeyDown={e => e.key === 'Enter' && onSelectArbItem(row.product_id, row.product_name, row)}
+                    onKeyDown={onActivateKey(() => onSelectArbItem(row.product_id, row.product_name, row))}
                     style={{
                       borderBottom: '0.5px solid var(--color-border-light)',
                       background: isSelected
