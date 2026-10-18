@@ -1,0 +1,35 @@
+services:
+  forge:
+    build: .
+    container_name: forge
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    volumes:
+      # Persistent database — create ./forge-db/ on the host before first run,
+      # or copy an existing forge.db into it for migration.
+      - ./forge-db:/forge-db
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ── Optional: Cloudflare tunnel ───────────────────────────────────────────
+  # Enable with: docker compose --profile cloudflared up -d
+  # Set TUNNEL_TOKEN in your .env file (from Cloudflare Zero Trust dashboard)
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: forge-cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+    depends_on:
+      forge:
+        condition: service_healthy
+    profiles:
+      - cloudflared

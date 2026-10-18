@@ -1,0 +1,184 @@
+/**
+ * FORGE v1.0 — Design tokens
+ *
+ * Dark mode is the default. Light mode applies via [data-theme='light']
+ * (set by the theme toggle in App.tsx) and also via prefers-color-scheme
+ * as a fallback for first load.
+ *
+ * Both --color-* and shorthand --bg-*, --text-*, --accent-* naming
+ * conventions are supported for backward compatibility.
+ */
+
+/* ── Dark mode (default) ───────────────────────────────────────────────────── */
+:root {
+  /* Backgrounds */
+  --bg-primary:   #0a0e1a;
+  --bg-secondary: #0f1420;
+  --bg-tertiary:  #151b2b;
+
+  /* Text */
+  --text-primary:   #e0e6ed;
+  --text-secondary: #b5bcc7;
+  --text-tertiary:  #8895a6;
+
+  /* Accents */
+  --accent-cyan:   #4fc3f7;
+  --accent-green:  #4caf50;
+  --accent-orange: #ff9800;
+  --accent-purple: #c084fc;
+  --accent-red:    #f44336;
+
+  /* Borders */
+  --border-color:        rgba(139, 149, 166, 0.1);
+  --border-color-medium: rgba(139, 149, 166, 0.2);
+  --border-color-strong: rgba(79, 195, 247, 0.3);
+
+  /* Scrollbar */
+  --scrollbar-track:       #0a0e1a;
+  --scrollbar-thumb:       #1e3a5f;
+  --scrollbar-thumb-hover: #2a5a8a;
+
+  /* ── Aliases for backward-compatible components ── */
+  --color-bg-primary:    var(--bg-primary);
+  --color-bg-secondary:  var(--bg-secondary);
+  --color-bg-tertiary:   var(--bg-tertiary);
+  --color-text-primary:  var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-tertiary: var(--text-tertiary);
+  --color-accent-primary: var(--accent-cyan);
+  --color-accent-hover:   #7ae7ff;
+  --color-success: var(--accent-green);
+  --color-warning: var(--accent-orange);
+  --color-danger:  var(--accent-red);
+  --color-info:    #2196f3;
+  --color-border-light:  var(--border-color);
+  --color-border-medium: var(--border-color-medium);
+  --color-border-strong: var(--border-color-strong);
+
+  /* Semantic aliases used across components */
+  --color-bg:         var(--bg-primary);
+  --color-border:     var(--border-color);
+  --color-text-muted: var(--text-tertiary);
+
+  /* Domain-specific semantic colors */
+  --color-amber-t2:  #D4960E;            /* EVE T2 item amber — nav hover glow */
+  --color-reaction:  #fbbf24;            /* Amber gold — reaction blueprints */
+  --color-contract:  #ab47bc;            /* Purple — contract-only market items */
+  --color-owned-bp:  var(--accent-purple); /* Purple — owned blueprints in chains */
+
+  /* PI tier indicator colors (EVE data-visualization, not UI semantic) */
+  --color-pi-t1: #a5d6a7;
+  --color-pi-t2: #90caf9;
+  --color-pi-t3: #ce93d8;
+  --color-pi-t4: #ff8a65;
+
+  /* Typography */
+  --font-sans: 'Courier New', 'Lucida Console', monospace;
+  --font-mono: 'Courier New', 'Lucida Console', monospace;
+  --font-body-size: 13px;
+  --font-line-height: 1.6;
+
+  /* Border radii */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  /* Layout */
+  --header-height:       48px;
+  --sidebar-left-width:  270px;   /* 75% of right sidebar (360px) */
+  --sidebar-right-width: 360px;   /* widened from 280px; also used as tablet overlay width */
+  --chat-panel-width:    510px;   /* 150% of original 340px */
+}
+
+/* ── Light mode — [data-theme='light'] toggle ───────────────────────────────── */
+[data-theme='light'] {
+  --bg-primary:   #f0f2f5;
+  --bg-secondary: #ffffff;
+  --bg-tertiary:  #e8edf2;
+  --text-primary:   #1a2030;
+  --text-secondary: #3d4a5c;
+  --text-tertiary:  #7a8899;
+  --accent-cyan:   #0891b2;
+  --accent-green:  #059669;
+  --accent-orange: #ea580c;
+  --accent-purple: #9333ea;
+  --border-color:        rgba(60, 80, 110, 0.12);
+  --border-color-medium: rgba(60, 80, 110, 0.22);
+  --scrollbar-track:       #e2e8f0;
+  --scrollbar-thumb:       #94a3b8;
+  --scrollbar-thumb-hover: #64748b;
+  --color-reaction: #d97706;
+  --color-contract: #7c3aed;
+}
+
+/* ── Font overrides — applied via data-font on <html> ───────────────────────── */
+/* Default (forge): Courier New monospace — the original terminal aesthetic     */
+[data-font='inter']  {
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-body-size: 13px;
+  --font-line-height: 1.55;
+}
+[data-font='roboto'] {
+  --font-sans: 'Roboto', system-ui, -apple-system, sans-serif;
+  --font-body-size: 13px;
+  --font-line-height: 1.55;
+}
+[data-font='lexend'] {
+  /* Lexend: designed to reduce visual stress for readers with dyslexia */
+  --font-sans: 'Lexend', system-ui, -apple-system, sans-serif;
+  --font-body-size: 13.5px;
+  --font-line-height: 1.7;
+}
+/* Droid Sans: confirmed in use on zKillboard — a known-readable choice
+   among EVE fan tools, not just a guess at "sci-fi" styling. */
+[data-font='droidsans'] {
+  --font-sans: 'Droid Sans', system-ui, -apple-system, sans-serif;
+  --font-body-size: 13px;
+  --font-line-height: 1.55;
+}
+/* Orbitron: geometric sci-fi display face, common in space-game dashboards.
+   Not built for small body text, so sized up slightly with extra tracking
+   to stay legible rather than just decorative. */
+[data-font='orbitron'] {
+  --font-sans: 'Orbitron', system-ui, -apple-system, sans-serif;
+  --font-body-size: 13px;
+  --font-line-height: 1.6;
+  letter-spacing: 0.02em;
+}
+/* Rajdhani: sci-fi/techy but still has real lowercase letterforms, so it
+   reads fine at body sizes unlike pure display faces (Orbitron). */
+[data-font='rajdhani'] {
+  --font-sans: 'Rajdhani', system-ui, -apple-system, sans-serif;
+  --font-body-size: 14px;
+  --font-line-height: 1.5;
+}
+/* Share Tech Mono: an alternative terminal/mono look to the default
+   Courier New FORGE theme, same sci-fi-console register but less generic. */
+[data-font='sharetechmono'] {
+  --font-sans: 'Share Tech Mono', 'Courier New', monospace;
+  --font-body-size: 12.5px;
+  --font-line-height: 1.55;
+}
+
+/* ── Light mode — system preference fallback ────────────────────────────────── */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    --bg-primary:   #f0f2f5;
+    --bg-secondary: #ffffff;
+    --bg-tertiary:  #e8edf2;
+    --text-primary:   #1a2030;
+    --text-secondary: #3d4a5c;
+    --text-tertiary:  #7a8899;
+    --accent-cyan:   #0891b2;
+    --accent-green:  #059669;
+    --accent-orange: #ea580c;
+    --accent-purple: #9333ea;
+    --border-color:        rgba(60, 80, 110, 0.12);
+    --border-color-medium: rgba(60, 80, 110, 0.22);
+    --scrollbar-track:       #e2e8f0;
+    --scrollbar-thumb:       #94a3b8;
+    --scrollbar-thumb-hover: #64748b;
+    --color-reaction: #d97706;
+    --color-contract: #7c3aed;
+  }
+}

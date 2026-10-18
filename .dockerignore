@@ -1,0 +1,47 @@
+# Node modules (rebuilt inside Docker)
+node_modules/
+forge-v1/node_modules/
+server/node_modules/
+
+# Database (mounted as volume)
+forge-db/
+*.db
+*.db-shm
+*.db-wal
+
+# Secrets (injected via env_file at runtime)
+.env
+.env.local
+.env.production
+config/secrets.js
+
+# Logs
+logs/
+*.log
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Build outputs (frontend is built inside Docker)
+forge-v1/dist/
+
+# Git
+.git/
+.gitignore
+
+# CI / Agent files
+.claude/
+.clone/
+.agents/
+
+# PM2
+.pm2/
+ecosystem.config.js
+
+# SSL
+*.pem
+*.key
+*.crt

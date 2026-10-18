@@ -1,0 +1,26 @@
+{
+  "name": "forge-server",
+  "version": "1.5.1",
+  "license": "MIT",
+  "description": "F.O.R.G.E. — Fabrication, Operations, Resource & Guidance Engine — EVE Online manufacturing intelligence server",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "sde": "node sde-import.js",
+    "test": "node test-hub-price.js && node test-profit-query.js && node test-ai-tools.js && node test-industry-math.js && node test-asset-safety.js && node test-corp-asset-safety.js && node test-client-supply-parity.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.3.1",
+    "helmet": "^7.1.0",
+    "node-fetch": "^2.7.0",
+    "sqlite3": "^5.1.7",
+    "web-push": "^3.6.7"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

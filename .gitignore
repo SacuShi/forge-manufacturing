@@ -1,0 +1,72 @@
+# Node modules
+node_modules/
+
+# Environment variables & secrets
+.env
+.env.local
+.env.production
+config/secrets.js
+
+# Local deployment credentials (server IP, SSH user — never commit these)
+.forge-deploy
+
+# Per-session memory / project context (local only — holds live server credentials)
+FORGE_MEMORY.md
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+forge-db/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+pm2-*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+
+# Editor files
+.vscode/
+.idea/
+
+# Build outputs
+dist/
+build/
+.cache/
+
+# PM2 files
+.pm2/
+ecosystem.config.js
+
+# SSL certificates
+*.pem
+*.key
+*.crt
+
+# AI agent session data (worktrees, plans, local runtime files)
+.claude/
+.clone/
+.agents/
+
+# Cloudflared credentials
+*.json
+!package.json
+!package-lock.json
+!tsconfig*.json
+!vite.config.ts
+
+# Industry mechanics data generated from CCP game data (required at runtime by lib/industry-math.js)
+!server/lib/industry-data/*.json
+
+# Logo source images and scratch material (not part of the app)
+design-assets/
+
+# Local-only notes and agent hand-off files (contain machine/server details)
+HANDOFF.md
+FORGE_MEMORY*.md

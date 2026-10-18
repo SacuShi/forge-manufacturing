@@ -1,0 +1,1751 @@
+{
+ "37146": {
+  "name": "Standup M-Set Basic Medium Ship Manufacturing Material Efficiency I",
+  "size": "M",
+  "family": "Basic Medium Ship",
+  "matPct": 2,
+  "thukkerMatPct": 0,
+  "timePct": 0,
+  "costPct": 0,
+  "matCovers": [
+   "basic_medium_ship"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "37147": {
+  "name": "Standup M-Set Basic Medium Ship Manufacturing Material Efficiency II",
+  "size": "M",
+  "family": "Basic Medium Ship",
+  "matPct": 2.4,
+  "thukkerMatPct": 0,
+  "timePct": 0,
+  "costPct": 0,
+  "matCovers": [
+   "basic_medium_ship"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "37148": {
+  "name": "Standup M-Set Drone and Fighter Manufacturing Time Efficiency I",
+  "size": "M",
+  "family": "Drone and Fighter",
+  "matPct": 0,
+  "thukkerMatPct": 0,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "drone_fighter"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "37149": {
+  "name": "Standup M-Set Drone and Fighter Manufacturing Time Efficiency II",
+  "size": "M",
+  "family": "Drone and Fighter",
+  "matPct": 0,
+  "thukkerMatPct": 0,
+  "timePct": 24,
+  "costPct": 0,
+  "matCovers": [],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "drone_fighter"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "37150": {
+  "name": "Standup M-Set Ammunition Manufacturing Time Efficiency I",
+  "size": "M",
+  "family": "Ammunition",
+  "matPct": 0,
+  "thukkerMatPct": 0,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "ammo"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "37151": {
+  "name": "Standup M-Set Ammunition Manufacturing Time Efficiency II",
+  "size": "M",
+  "family": "Ammunition",
+  "matPct": 0,
+  "thukkerMatPct": 0,
+  "timePct": 24,
+  "costPct": 0,
+  "matCovers": [],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "ammo"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "37152": {
+  "name": "Standup M-Set Basic Large Ship Manufacturing Material Efficiency II",
+  "size": "M",
+  "family": "Basic Large Ship",
+  "matPct": 2.4,
+  "thukkerMatPct": 0,
+  "timePct": 0,
+  "costPct": 0,
+  "matCovers": [
+   "basic_large_ship"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "37153": {
+  "name": "Standup M-Set Basic Medium Ship Manufacturing Time Efficiency II",
+  "size": "M",
+  "family": "Basic Medium Ship",
+  "matPct": 0,
+  "thukkerMatPct": 0,
+  "timePct": 24,
+  "costPct": 0,
+  "matCovers": [],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "basic_medium_ship"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "37154": {
+  "name": "Standup M-Set Basic Small Ship Manufacturing Material Efficiency I",
+  "size": "M",
+  "family": "Basic Small Ship",
+  "matPct": 2,
+  "thukkerMatPct": 0,
+  "timePct": 0,
+  "costPct": 0,
+  "matCovers": [
+   "basic_small_ship"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "37155": {
+  "name": "Standup M-Set Basic Small Ship Manufacturing Material Efficiency II",
+  "size": "M",
+  "family": "Basic Small Ship",
+  "matPct": 2.4,
+  "thukkerMatPct": 0,
+  "timePct": 0,
+  "costPct": 0,
+  "matCovers": [
+   "basic_small_ship"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "37156": {
+  "name": "Standup M-Set Drone and Fighter Manufacturing Material Efficiency I",
+  "size": "M",
+  "family": "Drone and Fighter",
+  "matPct": 2,
+  "thukkerMatPct": 0,
+  "timePct": 0,
+  "costPct": 0,
+  "matCovers": [
+   "drone_fighter"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "37157": {
+  "name": "Standup M-Set Drone and Fighter Manufacturing Material Efficiency II",
+  "size": "M",
+  "family": "Drone and Fighter",
+  "matPct": 2.4,
+  "thukkerMatPct": 0,
+  "timePct": 0,
+  "costPct": 0,
+  "matCovers": [
+   "drone_fighter"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "37158": {
+  "name": "Standup M-Set Ammunition Manufacturing Material Efficiency I",
+  "size": "M",
+  "family": "Ammunition",
+  "matPct": 2,
+  "thukkerMatPct": 0,
+  "timePct": 0,
+  "costPct": 0,
+  "matCovers": [
+   "ammo"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "37159": {
+  "name": "Standup M-Set Ammunition Manufacturing Material Efficiency II",
+  "size": "M",
+  "family": "Ammunition",
+  "matPct": 2.4,
+  "thukkerMatPct": 0,
+  "timePct": 0,
+  "costPct": 0,
+  "matCovers": [
+   "ammo"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "37160": {
+  "name": "Standup M-Set Equipment Manufacturing Time Efficiency I",
+  "size": "M",
+  "family": "Equipment",
+  "matPct": 0,
+  "thukkerMatPct": 0,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "equipment"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "37161": {
+  "name": "Standup M-Set Equipment Manufacturing Time Efficiency II",
+  "size": "M",
+  "family": "Equipment",
+  "matPct": 0,
+  "thukkerMatPct": 0,
+  "timePct": 24,
+  "costPct": 0,
+  "matCovers": [],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "equipment"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "37162": {
+  "name": "Standup M-Set Basic Small Ship Manufacturing Time Efficiency I",
+  "size": "M",
+  "family": "Basic Small Ship",
+  "matPct": 0,
+  "thukkerMatPct": 0,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "basic_small_ship"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "37163": {
+  "name": "Standup M-Set Basic Small Ship Manufacturing Time Efficiency II",
+  "size": "M",
+  "family": "Basic Small Ship",
+  "matPct": 0,
+  "thukkerMatPct": 0,
+  "timePct": 24,
+  "costPct": 0,
+  "matCovers": [],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "basic_small_ship"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "37164": {
+  "name": "Standup L-Set Ammunition Manufacturing Efficiency I",
+  "size": "L",
+  "family": "Ammunition",
+  "matPct": 2,
+  "thukkerMatPct": 0,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [
+   "ammo"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "ammo"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "37165": {
+  "name": "Standup L-Set Ammunition Manufacturing Efficiency II",
+  "size": "L",
+  "family": "Ammunition",
+  "matPct": 2.4,
+  "thukkerMatPct": 0,
+  "timePct": 24,
+  "costPct": 0,
+  "matCovers": [
+   "ammo"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "ammo"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "37166": {
+  "name": "Standup L-Set Basic Large Ship Manufacturing Efficiency I",
+  "size": "L",
+  "family": "Basic Large Ship",
+  "matPct": 2,
+  "thukkerMatPct": 0,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [
+   "basic_large_ship"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "basic_large_ship"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "37167": {
+  "name": "Standup L-Set Basic Large Ship Manufacturing Efficiency II",
+  "size": "L",
+  "family": "Basic Large Ship",
+  "matPct": 2.4,
+  "thukkerMatPct": 0,
+  "timePct": 24,
+  "costPct": 0,
+  "matCovers": [
+   "basic_large_ship"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "basic_large_ship"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "37168": {
+  "name": "Standup L-Set Advanced Large Ship Manufacturing Efficiency I",
+  "size": "L",
+  "family": "Advanced Large Ship",
+  "matPct": 2,
+  "thukkerMatPct": 0,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [
+   "adv_large_ship"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "adv_large_ship"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "37169": {
+  "name": "Standup L-Set Advanced Large Ship Manufacturing Efficiency II",
+  "size": "L",
+  "family": "Advanced Large Ship",
+  "matPct": 2.4,
+  "thukkerMatPct": 0,
+  "timePct": 24,
+  "costPct": 0,
+  "matCovers": [
+   "adv_large_ship"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "adv_large_ship"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "37170": {
+  "name": "Standup L-Set Equipment Manufacturing Efficiency I",
+  "size": "L",
+  "family": "Equipment",
+  "matPct": 2,
+  "thukkerMatPct": 0,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [
+   "equipment"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "equipment"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "37171": {
+  "name": "Standup L-Set Equipment Manufacturing Efficiency II",
+  "size": "L",
+  "family": "Equipment",
+  "matPct": 2.4,
+  "thukkerMatPct": 0,
+  "timePct": 24,
+  "costPct": 0,
+  "matCovers": [
+   "equipment"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "equipment"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "37172": {
+  "name": "Standup L-Set Capital Ship Manufacturing Efficiency II",
+  "size": "L",
+  "family": "Capital Ship",
+  "matPct": 2.4,
+  "thukkerMatPct": 0,
+  "timePct": 24,
+  "costPct": 0,
+  "matCovers": [
+   "capital_ship"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "capital_ship"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "37173": {
+  "name": "Standup L-Set Capital Ship Manufacturing Efficiency I",
+  "size": "L",
+  "family": "Capital Ship",
+  "matPct": 2,
+  "thukkerMatPct": 0,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [
+   "capital_ship"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "capital_ship"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "37174": {
+  "name": "Standup L-Set Advanced Component Manufacturing Efficiency I",
+  "size": "L",
+  "family": "Advanced Component",
+  "matPct": 2,
+  "thukkerMatPct": 0,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [
+   "adv_cap_component",
+   "adv_component"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "adv_cap_component",
+   "adv_component"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "37175": {
+  "name": "Standup L-Set Advanced Component Manufacturing Efficiency II",
+  "size": "L",
+  "family": "Advanced Component",
+  "matPct": 2.4,
+  "thukkerMatPct": 0,
+  "timePct": 24,
+  "costPct": 0,
+  "matCovers": [
+   "adv_cap_component",
+   "adv_component"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "adv_cap_component",
+   "adv_component"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "37178": {
+  "name": "Standup XL-Set Equipment and Consumable Manufacturing Efficiency I",
+  "size": "XL",
+  "family": "Equipment and Consumable",
+  "matPct": 2,
+  "thukkerMatPct": 0,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [
+   "ammo",
+   "drone_fighter",
+   "equipment"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "ammo",
+   "drone_fighter",
+   "equipment"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "37179": {
+  "name": "Standup XL-Set Equipment and Consumable Manufacturing Efficiency II",
+  "size": "XL",
+  "family": "Equipment and Consumable",
+  "matPct": 2.4,
+  "thukkerMatPct": 0,
+  "timePct": 24,
+  "costPct": 0,
+  "matCovers": [
+   "ammo",
+   "drone_fighter",
+   "equipment"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "ammo",
+   "drone_fighter",
+   "equipment"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "37180": {
+  "name": "Standup XL-Set Ship Manufacturing Efficiency I",
+  "size": "XL",
+  "family": "Ship",
+  "matPct": 2,
+  "thukkerMatPct": 0,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [
+   "adv_large_ship",
+   "adv_medium_ship",
+   "adv_small_ship",
+   "basic_large_ship",
+   "basic_medium_ship",
+   "basic_small_ship",
+   "capital_ship"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "adv_large_ship",
+   "adv_medium_ship",
+   "adv_small_ship",
+   "basic_large_ship",
+   "basic_medium_ship",
+   "basic_small_ship",
+   "capital_ship"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "37181": {
+  "name": "Standup XL-Set Ship Manufacturing Efficiency II",
+  "size": "XL",
+  "family": "Ship",
+  "matPct": 2.4,
+  "thukkerMatPct": 0,
+  "timePct": 24,
+  "costPct": 0,
+  "matCovers": [
+   "adv_large_ship",
+   "adv_medium_ship",
+   "adv_small_ship",
+   "basic_large_ship",
+   "basic_medium_ship",
+   "basic_small_ship",
+   "capital_ship"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "adv_large_ship",
+   "adv_medium_ship",
+   "adv_small_ship",
+   "basic_large_ship",
+   "basic_medium_ship",
+   "basic_small_ship",
+   "capital_ship"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43704": {
+  "name": "Standup XL-Set Structure and Component Manufacturing Efficiency I",
+  "size": "XL",
+  "family": "Structure and Component",
+  "matPct": 2,
+  "thukkerMatPct": 0,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [
+   "adv_cap_component",
+   "adv_component",
+   "cap_component",
+   "structure"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "adv_cap_component",
+   "adv_component",
+   "cap_component",
+   "structure"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43705": {
+  "name": "Standup XL-Set Structure and Component Manufacturing Efficiency II",
+  "size": "XL",
+  "family": "Structure and Component",
+  "matPct": 2.4,
+  "thukkerMatPct": 0,
+  "timePct": 24,
+  "costPct": 0,
+  "matCovers": [
+   "adv_cap_component",
+   "adv_component",
+   "cap_component",
+   "structure"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "adv_cap_component",
+   "adv_component",
+   "cap_component",
+   "structure"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43707": {
+  "name": "Standup L-Set Advanced Small Ship Manufacturing Efficiency I",
+  "size": "L",
+  "family": "Advanced Small Ship",
+  "matPct": 2,
+  "thukkerMatPct": 0,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [
+   "adv_small_ship"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "adv_small_ship"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43708": {
+  "name": "Standup L-Set Advanced Small Ship Manufacturing Efficiency II",
+  "size": "L",
+  "family": "Advanced Small Ship",
+  "matPct": 2.4,
+  "thukkerMatPct": 0,
+  "timePct": 24,
+  "costPct": 0,
+  "matCovers": [
+   "adv_small_ship"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "adv_small_ship"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43709": {
+  "name": "Standup L-Set Advanced Medium Ship Manufacturing Efficiency I",
+  "size": "L",
+  "family": "Advanced Medium Ship",
+  "matPct": 2,
+  "thukkerMatPct": 0,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [
+   "adv_medium_ship"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "adv_medium_ship"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43711": {
+  "name": "Standup L-Set Advanced Medium Ship Manufacturing Efficiency II",
+  "size": "L",
+  "family": "Advanced Medium Ship",
+  "matPct": 2.4,
+  "thukkerMatPct": 0,
+  "timePct": 24,
+  "costPct": 0,
+  "matCovers": [
+   "adv_medium_ship"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "adv_medium_ship"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43712": {
+  "name": "Standup L-Set Drone and Fighter Manufacturing Efficiency I",
+  "size": "L",
+  "family": "Drone and Fighter",
+  "matPct": 2,
+  "thukkerMatPct": 0,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [
+   "drone_fighter"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "drone_fighter"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43713": {
+  "name": "Standup L-Set Drone and Fighter Manufacturing Efficiency II",
+  "size": "L",
+  "family": "Drone and Fighter",
+  "matPct": 2.4,
+  "thukkerMatPct": 0,
+  "timePct": 24,
+  "costPct": 0,
+  "matCovers": [
+   "drone_fighter"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "drone_fighter"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43714": {
+  "name": "Standup L-Set Basic Small Ship Manufacturing Efficiency I",
+  "size": "L",
+  "family": "Basic Small Ship",
+  "matPct": 2,
+  "thukkerMatPct": 0,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [
+   "basic_small_ship"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "basic_small_ship"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43715": {
+  "name": "Standup L-Set Basic Small Ship Manufacturing Efficiency II",
+  "size": "L",
+  "family": "Basic Small Ship",
+  "matPct": 2.4,
+  "thukkerMatPct": 0,
+  "timePct": 24,
+  "costPct": 0,
+  "matCovers": [
+   "basic_small_ship"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "basic_small_ship"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43716": {
+  "name": "Standup L-Set Basic Medium Ship Manufacturing Efficiency I",
+  "size": "L",
+  "family": "Basic Medium Ship",
+  "matPct": 2,
+  "thukkerMatPct": 0,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [
+   "basic_medium_ship"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "basic_medium_ship"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43717": {
+  "name": "Standup L-Set Basic Medium Ship Manufacturing Efficiency II",
+  "size": "L",
+  "family": "Basic Medium Ship",
+  "matPct": 2.4,
+  "thukkerMatPct": 0,
+  "timePct": 24,
+  "costPct": 0,
+  "matCovers": [
+   "basic_medium_ship"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "basic_medium_ship"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43718": {
+  "name": "Standup L-Set Basic Capital Component Manufacturing Efficiency I",
+  "size": "L",
+  "family": "Basic Capital Component",
+  "matPct": 2,
+  "thukkerMatPct": 0,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [
+   "cap_component"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "cap_component"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43719": {
+  "name": "Standup L-Set Basic Capital Component Manufacturing Efficiency II",
+  "size": "L",
+  "family": "Basic Capital Component",
+  "matPct": 2.4,
+  "thukkerMatPct": 0,
+  "timePct": 24,
+  "costPct": 0,
+  "matCovers": [
+   "cap_component"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "cap_component"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43720": {
+  "name": "Standup L-Set Structure Manufacturing Efficiency I",
+  "size": "L",
+  "family": "Structure",
+  "matPct": 2,
+  "thukkerMatPct": 0,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [
+   "structure"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "structure"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43721": {
+  "name": "Standup L-Set Structure Manufacturing Efficiency II",
+  "size": "L",
+  "family": "Structure",
+  "matPct": 2.4,
+  "thukkerMatPct": 0,
+  "timePct": 24,
+  "costPct": 0,
+  "matCovers": [
+   "structure"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "structure"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43732": {
+  "name": "Standup M-Set Basic Large Ship Manufacturing Material Efficiency I",
+  "size": "M",
+  "family": "Basic Large Ship",
+  "matPct": 2,
+  "thukkerMatPct": 0,
+  "timePct": 0,
+  "costPct": 0,
+  "matCovers": [
+   "basic_large_ship"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43733": {
+  "name": "Standup M-Set Basic Large Ship Manufacturing Time Efficiency I",
+  "size": "M",
+  "family": "Basic Large Ship",
+  "matPct": 0,
+  "thukkerMatPct": 0,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "basic_large_ship"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43734": {
+  "name": "Standup M-Set Basic Large Ship Manufacturing Time Efficiency II",
+  "size": "M",
+  "family": "Basic Large Ship",
+  "matPct": 0,
+  "thukkerMatPct": 0,
+  "timePct": 24,
+  "costPct": 0,
+  "matCovers": [],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "basic_large_ship"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43854": {
+  "name": "Standup M-Set Advanced Small Ship Manufacturing Material Efficiency II",
+  "size": "M",
+  "family": "Advanced Small Ship",
+  "matPct": 2.4,
+  "thukkerMatPct": 0,
+  "timePct": 0,
+  "costPct": 0,
+  "matCovers": [
+   "adv_small_ship"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43855": {
+  "name": "Standup M-Set Advanced Small Ship Manufacturing Material Efficiency I",
+  "size": "M",
+  "family": "Advanced Small Ship",
+  "matPct": 2,
+  "thukkerMatPct": 0,
+  "timePct": 0,
+  "costPct": 0,
+  "matCovers": [
+   "adv_small_ship"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43856": {
+  "name": "Standup M-Set Advanced Small Ship Manufacturing Time Efficiency I",
+  "size": "M",
+  "family": "Advanced Small Ship",
+  "matPct": 0,
+  "thukkerMatPct": 0,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "adv_small_ship"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43857": {
+  "name": "Standup M-Set Advanced Small Ship Manufacturing Time Efficiency II",
+  "size": "M",
+  "family": "Advanced Small Ship",
+  "matPct": 0,
+  "thukkerMatPct": 0,
+  "timePct": 24,
+  "costPct": 0,
+  "matCovers": [],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "adv_small_ship"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43858": {
+  "name": "Standup M-Set Advanced Medium Ship Manufacturing Material Efficiency I",
+  "size": "M",
+  "family": "Advanced Medium Ship",
+  "matPct": 2,
+  "thukkerMatPct": 0,
+  "timePct": 0,
+  "costPct": 0,
+  "matCovers": [
+   "adv_medium_ship"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43859": {
+  "name": "Standup M-Set Advanced Medium Ship Manufacturing Material Efficiency II",
+  "size": "M",
+  "family": "Advanced Medium Ship",
+  "matPct": 2.4,
+  "thukkerMatPct": 0,
+  "timePct": 0,
+  "costPct": 0,
+  "matCovers": [
+   "adv_medium_ship"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43860": {
+  "name": "Standup M-Set Advanced Medium Ship Manufacturing Time Efficiency I",
+  "size": "M",
+  "family": "Advanced Medium Ship",
+  "matPct": 0,
+  "thukkerMatPct": 0,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "adv_medium_ship"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43861": {
+  "name": "Standup M-Set Advanced Medium Ship Manufacturing Time Efficiency II",
+  "size": "M",
+  "family": "Advanced Medium Ship",
+  "matPct": 0,
+  "thukkerMatPct": 0,
+  "timePct": 24,
+  "costPct": 0,
+  "matCovers": [],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "adv_medium_ship"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43862": {
+  "name": "Standup M-Set Advanced Large Ship Manufacturing Material Efficiency I",
+  "size": "M",
+  "family": "Advanced Large Ship",
+  "matPct": 2,
+  "thukkerMatPct": 0,
+  "timePct": 0,
+  "costPct": 0,
+  "matCovers": [
+   "adv_large_ship"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43863": {
+  "name": "Standup M-Set Advanced Large Ship Manufacturing Material Efficiency II",
+  "size": "M",
+  "family": "Advanced Large Ship",
+  "matPct": 2.4,
+  "thukkerMatPct": 0,
+  "timePct": 0,
+  "costPct": 0,
+  "matCovers": [
+   "adv_large_ship"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43864": {
+  "name": "Standup M-Set Advanced Large Ship Manufacturing Time Efficiency II",
+  "size": "M",
+  "family": "Advanced Large Ship",
+  "matPct": 0,
+  "thukkerMatPct": 0,
+  "timePct": 24,
+  "costPct": 0,
+  "matCovers": [],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "adv_large_ship"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43865": {
+  "name": "Standup M-Set Advanced Large Ship Manufacturing Time Efficiency I",
+  "size": "M",
+  "family": "Advanced Large Ship",
+  "matPct": 0,
+  "thukkerMatPct": 0,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "adv_large_ship"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43866": {
+  "name": "Standup M-Set Advanced Component Manufacturing Material Efficiency II",
+  "size": "M",
+  "family": "Advanced Component",
+  "matPct": 2.4,
+  "thukkerMatPct": 0,
+  "timePct": 0,
+  "costPct": 0,
+  "matCovers": [
+   "adv_cap_component",
+   "adv_component"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43867": {
+  "name": "Standup M-Set Advanced Component Manufacturing Material Efficiency I",
+  "size": "M",
+  "family": "Advanced Component",
+  "matPct": 2,
+  "thukkerMatPct": 0,
+  "timePct": 0,
+  "costPct": 0,
+  "matCovers": [
+   "adv_cap_component",
+   "adv_component"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43868": {
+  "name": "Standup M-Set Advanced Component Manufacturing Time Efficiency II",
+  "size": "M",
+  "family": "Advanced Component",
+  "matPct": 0,
+  "thukkerMatPct": 0,
+  "timePct": 24,
+  "costPct": 0,
+  "matCovers": [],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "adv_cap_component",
+   "adv_component"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43869": {
+  "name": "Standup M-Set Advanced Component Manufacturing Time Efficiency I",
+  "size": "M",
+  "family": "Advanced Component",
+  "matPct": 0,
+  "thukkerMatPct": 0,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "adv_cap_component",
+   "adv_component"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43870": {
+  "name": "Standup M-Set Basic Capital Component Manufacturing Material Efficiency I",
+  "size": "M",
+  "family": "Basic Capital Component",
+  "matPct": 2,
+  "thukkerMatPct": 0,
+  "timePct": 0,
+  "costPct": 0,
+  "matCovers": [
+   "cap_component"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43871": {
+  "name": "Standup M-Set Basic Capital Component Manufacturing Material Efficiency II",
+  "size": "M",
+  "family": "Basic Capital Component",
+  "matPct": 2.4,
+  "thukkerMatPct": 0,
+  "timePct": 0,
+  "costPct": 0,
+  "matCovers": [
+   "cap_component"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43872": {
+  "name": "Standup M-Set Basic Capital Component Manufacturing Time Efficiency I",
+  "size": "M",
+  "family": "Basic Capital Component",
+  "matPct": 0,
+  "thukkerMatPct": 0,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "cap_component"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43873": {
+  "name": "Standup M-Set Basic Capital Component Manufacturing Time Efficiency II",
+  "size": "M",
+  "family": "Basic Capital Component",
+  "matPct": 0,
+  "thukkerMatPct": 0,
+  "timePct": 24,
+  "costPct": 0,
+  "matCovers": [],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "cap_component"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43874": {
+  "name": "Standup M-Set Structure Manufacturing Material Efficiency II",
+  "size": "M",
+  "family": "Structure",
+  "matPct": 2.4,
+  "thukkerMatPct": 0,
+  "timePct": 0,
+  "costPct": 0,
+  "matCovers": [
+   "structure"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43875": {
+  "name": "Standup M-Set Structure Manufacturing Material Efficiency I",
+  "size": "M",
+  "family": "Structure",
+  "matPct": 2,
+  "thukkerMatPct": 0,
+  "timePct": 0,
+  "costPct": 0,
+  "matCovers": [
+   "structure"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43876": {
+  "name": "Standup M-Set Structure Manufacturing Time Efficiency I",
+  "size": "M",
+  "family": "Structure",
+  "matPct": 0,
+  "thukkerMatPct": 0,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "structure"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43877": {
+  "name": "Standup M-Set Structure Manufacturing Time Efficiency II",
+  "size": "M",
+  "family": "Structure",
+  "matPct": 0,
+  "thukkerMatPct": 0,
+  "timePct": 24,
+  "costPct": 0,
+  "matCovers": [],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "structure"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43919": {
+  "name": "Standup M-Set Basic Medium Ship Manufacturing Time Efficiency I",
+  "size": "M",
+  "family": "Basic Medium Ship",
+  "matPct": 0,
+  "thukkerMatPct": 0,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "basic_medium_ship"
+  ],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43920": {
+  "name": "Standup M-Set Equipment Manufacturing Material Efficiency I",
+  "size": "M",
+  "family": "Equipment",
+  "matPct": 2,
+  "thukkerMatPct": 0,
+  "timePct": 0,
+  "costPct": 0,
+  "matCovers": [
+   "equipment"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "43921": {
+  "name": "Standup M-Set Equipment Manufacturing Material Efficiency II",
+  "size": "M",
+  "family": "Equipment",
+  "matPct": 2.4,
+  "thukkerMatPct": 0,
+  "timePct": 0,
+  "costPct": 0,
+  "matCovers": [
+   "equipment"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [],
+  "sec": {
+   "hi": 1,
+   "low": 1.9,
+   "null": 2.1
+  }
+ },
+ "45544": {
+  "name": "Standup M-Set Thukker Basic Capital Component Manufacturing Material Efficiency",
+  "size": "M",
+  "family": "Basic Capital Component",
+  "matPct": 0,
+  "thukkerMatPct": 3.7,
+  "timePct": 0,
+  "costPct": 0,
+  "matCovers": [],
+  "thukkerCovers": [
+   "cap_component"
+  ],
+  "timeCovers": [],
+  "sec": {
+   "hi": 0.1,
+   "low": 1.9,
+   "null": 0.1
+  }
+ },
+ "45546": {
+  "name": "Standup L-Set Thukker Basic Capital Component Manufacturing Efficiency",
+  "size": "L",
+  "family": "Basic Capital Component",
+  "matPct": 0,
+  "thukkerMatPct": 3.7,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [],
+  "thukkerCovers": [
+   "cap_component"
+  ],
+  "timeCovers": [
+   "cap_component"
+  ],
+  "sec": {
+   "hi": 0.1,
+   "low": 1.9,
+   "null": 0.1
+  }
+ },
+ "45548": {
+  "name": "Standup XL-Set Thukker Structure and Component Manufacturing Efficiency",
+  "size": "XL",
+  "family": "Structure and Component",
+  "matPct": 2,
+  "thukkerMatPct": 3.7,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [
+   "adv_component",
+   "structure"
+  ],
+  "thukkerCovers": [
+   "adv_cap_component",
+   "cap_component"
+  ],
+  "timeCovers": [
+   "adv_cap_component",
+   "adv_component",
+   "cap_component",
+   "structure"
+  ],
+  "sec": {
+   "hi": 0.1,
+   "low": 1.9,
+   "null": 0.1
+  }
+ },
+ "45640": {
+  "name": "Standup M-Set Thukker Advanced Component Manufacturing Material Efficiency",
+  "size": "M",
+  "family": "Advanced Component",
+  "matPct": 2,
+  "thukkerMatPct": 3.7,
+  "timePct": 0,
+  "costPct": 0,
+  "matCovers": [
+   "adv_component"
+  ],
+  "thukkerCovers": [
+   "adv_cap_component"
+  ],
+  "timeCovers": [],
+  "sec": {
+   "hi": 0.1,
+   "low": 1.9,
+   "null": 0.1
+  }
+ },
+ "45641": {
+  "name": "Standup L-Set Thukker Advanced Component Manufacturing Efficiency",
+  "size": "L",
+  "family": "Advanced Component",
+  "matPct": 2,
+  "thukkerMatPct": 3.7,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [
+   "adv_component"
+  ],
+  "thukkerCovers": [
+   "adv_cap_component"
+  ],
+  "timeCovers": [
+   "adv_cap_component",
+   "adv_component"
+  ],
+  "sec": {
+   "hi": 0.1,
+   "low": 1.9,
+   "null": 0.1
+  }
+ }
+}

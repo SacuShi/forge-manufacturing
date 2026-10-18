@@ -1,0 +1,106 @@
+{
+ "3395": {
+  "name": "Advanced Small Ship Construction",
+  "pctPerLevel": 1
+ },
+ "3396": {
+  "name": "Advanced Industrial Ship Construction",
+  "pctPerLevel": 1
+ },
+ "3397": {
+  "name": "Advanced Medium Ship Construction",
+  "pctPerLevel": 1
+ },
+ "3398": {
+  "name": "Advanced Large Ship Construction",
+  "pctPerLevel": 1
+ },
+ "3400": {
+  "name": "Outpost Construction",
+  "pctPerLevel": 1
+ },
+ "11433": {
+  "name": "High Energy Physics",
+  "pctPerLevel": 1
+ },
+ "11441": {
+  "name": "Plasma Physics",
+  "pctPerLevel": 1
+ },
+ "11442": {
+  "name": "Nanite Engineering",
+  "pctPerLevel": 1
+ },
+ "11443": {
+  "name": "Hydromagnetic Physics",
+  "pctPerLevel": 1
+ },
+ "11444": {
+  "name": "Amarr Starship Engineering",
+  "pctPerLevel": 1
+ },
+ "11445": {
+  "name": "Minmatar Starship Engineering",
+  "pctPerLevel": 1
+ },
+ "11446": {
+  "name": "Graviton Physics",
+  "pctPerLevel": 1
+ },
+ "11447": {
+  "name": "Laser Physics",
+  "pctPerLevel": 1
+ },
+ "11448": {
+  "name": "Electromagnetic Physics",
+  "pctPerLevel": 1
+ },
+ "11449": {
+  "name": "Rocket Science",
+  "pctPerLevel": 1
+ },
+ "11450": {
+  "name": "Gallente Starship Engineering",
+  "pctPerLevel": 1
+ },
+ "11451": {
+  "name": "Nuclear Physics",
+  "pctPerLevel": 1
+ },
+ "11452": {
+  "name": "Mechanical Engineering",
+  "pctPerLevel": 1
+ },
+ "11453": {
+  "name": "Electronic Engineering",
+  "pctPerLevel": 1
+ },
+ "11454": {
+  "name": "Caldari Starship Engineering",
+  "pctPerLevel": 1
+ },
+ "11455": {
+  "name": "Quantum Physics",
+  "pctPerLevel": 1
+ },
+ "11529": {
+  "name": "Molecular Engineering",
+  "pctPerLevel": 1
+ },
+ "52307": {
+  "name": "Triglavian Quantum Engineering",
+  "pctPerLevel": 1
+ },
+ "77725": {
+  "name": "Advanced Capital Ship Construction",
+  "pctPerLevel": 1
+ },
+ "81050": {
+  "name": "Upwell Starship Engineering",
+  "pctPerLevel": 1
+ },
+ "81896": {
+  "name": "Mutagenic Stabilization",
+  "pctPerLevel": 2
+ }
+}

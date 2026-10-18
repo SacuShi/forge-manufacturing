@@ -1,0 +1,40 @@
+<svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+  <!-- Hexagon outline -->
+  <path
+    d="M 60 8 L 104 32 L 104 88 L 60 112 L 16 88 L 16 32 Z"
+    fill="none"
+    stroke="#4fc3f7"
+    stroke-width="2.5"
+    stroke-linejoin="round"
+  />
+
+  <!-- F letter -->
+  <text
+    x="60"
+    y="58"
+    font-family="'Courier New', monospace"
+    font-size="56"
+    font-weight="bold"
+    fill="#e0e6ed"
+    text-anchor="middle"
+    dominant-baseline="middle"
+    letter-spacing="0"
+  >
+    F
+  </text>
+
+  <!-- UKC text -->
+  <text
+    x="60"
+    y="88"
+    font-family="'Courier New', monospace"
+    font-size="14"
+    font-weight="bold"
+    fill="#4fc3f7"
+    text-anchor="middle"
+    dominant-baseline="middle"
+    letter-spacing="2"
+  >
+    UKC
+  </text>
+</svg>
