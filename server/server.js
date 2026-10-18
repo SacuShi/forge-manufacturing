@@ -5461,9 +5461,17 @@ function looksOffTopic(text) {
 }
 
 // -- AI tool dispatch (lib/ai-tools.js) --------------------------------------
-const { executeAiTool } = require('./lib/ai-tools').createAiTools({
-  CORP_BP_USABLE_SQL, PORT, REGIONS, VALID_REGIONS, dbAll, dbGet, ensureCorpDataFresh, esiFetch, fetch, getItemPricesAllRegions, hubBooks, resolveViewerCorpAccess, security,
-});
+// Built on first use: several of these (e.g. CORP_BP_USABLE_SQL) are declared further down this file,
+// so constructing it here at load time would read them before they exist.
+let aiTools = null;
+function executeAiTool(...args) {
+  if (!aiTools) {
+    aiTools = require('./lib/ai-tools').createAiTools({
+      CORP_BP_USABLE_SQL, PORT, REGIONS, VALID_REGIONS, dbAll, dbGet, ensureCorpDataFresh, esiFetch, fetch, getItemPricesAllRegions, hubBooks, resolveViewerCorpAccess, security,
+    });
+  }
+  return aiTools.executeAiTool(...args);
+}
 
 // ── AI chat context builder ───────────────────────────────────────────────────
 // Builds the player context string passed as the second system block on every
