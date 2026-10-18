@@ -8,7 +8,6 @@ const cors = require('cors');
 const fetch = require('node-fetch');
 const path = require('path');
 const helmet = require('helmet');
-const crypto = require('crypto');  // built-in — AES-256-GCM token encryption
 const security = require('./forge-security');
 const HP = require('./lib/hub-price');
 const { buildTopProfitableQuery, orderFor } = require('./lib/profit-query');   // hub prices: own orders first, Jita fallback (always tagged), order depth
@@ -28,7 +27,6 @@ const database = require('./lib/db');
 const { initDatabase, dbAll, dbGet, dbRun } = database;
 const { runMigrations } = require('./lib/migrations');
 const { CACHE_TTL_MS, cache, getCached } = require('./lib/cache');
-const { CORP_ENCRYPTION_KEY, encryptToken } = require('./lib/token-crypto'); // reads FORGE_CORP_KEY / FORGE_REMEMBER_KEY at load
 const {
   HUB_CONFIG, HUB_STRUCTURE_FEES, REGION_TO_HUB, VALID_REGIONS, REGIONS, HUB_STANDINGS, HUB_SYSTEM_IDS,
   KEEPSTAR_STRUCTURE_ID, KEEPSTAR_REGION_ID,
@@ -127,155 +125,6 @@ const piMarketCache  = new Map();
 // PI schematic lookup cache: schematicId -> resolved schematic object
 const schematicMemo  = new Map();
 
-
-// GET /api/can-dock-keepstar — checks if the authenticated character has docking rights
-// at the C-J6MT Keepstar by probing the structure market endpoint.
-// Uses esi-markets.structure_markets.v1 (already in the character's SCOPES — no re-login needed).
-// ESI returns 200 if the character has docking rights, 403 if not.
-// All non-403 outcomes (network errors, ESI 5xx, etc.) return canDock: true — fail-open so
-// Imperium/corp/alliance members are NEVER locked out due to a transient ESI issue.
-app.get('/api/can-dock-keepstar', security.apiLimiter, security.verifyEveToken, async (req, res) => {
-  // Kill switch: when disabled, everyone sees C-J6MT (safe rollback).
-  if (!KEEPSTAR_ACCESS_CHECK_ENABLED) return res.json({ canDock: true });
-
-  const eveToken = req.headers.authorization?.replace(/^Bearer\s+/i, '');
-  try {
-    const esiRes = await fetch(
-      `https://esi.evetech.net/latest/markets/structures/${KEEPSTAR_STRUCTURE_ID}/?datasource=tranquility&page=1`,
-      { headers: { Authorization: `Bearer ${eveToken}` } }
-    );
-    // Drain body to close the connection — we only need the status code.
-    await esiRes.text().catch(() => '');
-    if (esiRes.status === 403) return res.json({ canDock: false });
-    return res.json({ canDock: true });
-  } catch {
-    // Network error, ESI down, etc. — fail-open.
-    return res.json({ canDock: true });
-  }
-});
-
-app.get('/api/jita-prices', security.apiLimiter, async (req, res) => {
-  try {
-    if (jitaPricesCache && Date.now() < market.jitaPricesCacheExpiry) {
-      logger.info(`✓ Jita prices (cached) — ${Object.keys(jitaPricesCache).length} items`);
-      return res.json({ prices: jitaPricesCache });
-    }
-
-    const prices = await fetchRegionPrices(10000002); // The Forge (Jita)
-    jitaPricesCache = prices;
-    market.jitaPricesCacheExpiry = Date.now() + CACHE_TTL_MS;
-    res.json({ prices });
-
-  } catch (err) {
-    logger.error('Jita prices error:', err.message);
-    if (jitaPricesCache) {
-      return res.json({ prices: jitaPricesCache, stale: true });
-    }
-    res.status(500).json({ error: clientErrMsg(err), prices: {} });
-  }
-});
-
-
-// Kill switch: set false to show C-J6MT to all users (e.g. if ESI check causes unexpected issues).
-// Redeploy server.js + pm2 restart 0 to activate — no frontend change needed.
-const KEEPSTAR_ACCESS_CHECK_ENABLED = true;
-
-
-// ── Keepstar structure-token (re-)authorisation flow ─────────────────────────
-// Manual recovery path for when the stored structure_token refresh token gets
-// revoked/expired (CCP returns an HTML error page instead of JSON in that case —
-// see "[KS token] DB refresh failed" in logs). Referenced by error messages
-// throughout this file and by test-keepstar-poll.js; was missing from the
-// route table entirely until restored here (found during the Oct 2026 outage
-// investigation — the normal session-pool token had been self-healing instead,
-// masking the fact that this manual path was a dead link).
-// Gated by FORGE_ADMIN_KEY (as a query param — this is a plain browser-visited
-// link, not an API call, so it can't use the X-Admin-Key header convention).
-const _ksAuthStates = new Map(); // state → expiry; short-lived CSRF nonce store
-
-function isAdminKeyValid(provided) {
-  const adminKey = config.adminKey;
-  if (!adminKey || !provided) return false;
-  const a = Buffer.from(String(provided));
-  const b = Buffer.from(adminKey);
-  if (a.length !== b.length) return false;
-  return crypto.timingSafeEqual(a, b);
-}
-
-app.get('/api/ks-test-auth', (req, res) => {
-  if (!isAdminKeyValid(req.query.key)) return res.status(403).send('Forbidden — bad or missing ?key=');
-  if (!CORP_ENCRYPTION_KEY) return res.status(500).send('FORGE_CORP_KEY not configured on server');
-  if (!config.eve.clientId) return res.status(500).send('EVE_CLIENT_ID not configured on server');
-
-  const state = crypto.randomBytes(16).toString('hex');
-  _ksAuthStates.set(state, Date.now() + 10 * 60 * 1000); // 10 min to complete login
-
-  const redirectUri = `${req.protocol}://${req.get('host')}/api/ks-test-callback`;
-  const authorizeUrl = 'https://login.eveonline.com/v2/oauth/authorize?' + new URLSearchParams({
-    response_type: 'code',
-    redirect_uri:  redirectUri,
-    client_id:     config.eve.clientId,
-    scope:         'esi-markets.structure_markets.v1',
-    state,
-  });
-  res.redirect(authorizeUrl);
-});
-
-app.get('/api/ks-test-callback', async (req, res) => {
-  try {
-    const { code, state } = req.query;
-    const expiry = state && _ksAuthStates.get(state);
-    if (!expiry || Date.now() > expiry) return res.status(400).send('Invalid or expired state — start again from /api/ks-test-auth?key=...');
-    _ksAuthStates.delete(state);
-    if (!code) return res.status(400).send('Missing code');
-
-    const authHdr = 'Basic ' + Buffer.from(`${config.eve.clientId}:${config.eve.clientSecret}`).toString('base64');
-    const redirectUri = `${req.protocol}://${req.get('host')}/api/ks-test-callback`;
-    const tokenRes = await fetch('https://login.eveonline.com/v2/oauth/token', {
-      method:  'POST',
-      headers: { 'Authorization': authHdr, 'Content-Type': 'application/x-www-form-urlencoded', 'Host': 'login.eveonline.com' },
-      body:    `grant_type=authorization_code&code=${encodeURIComponent(code)}&redirect_uri=${encodeURIComponent(redirectUri)}`,
-    });
-    const tokenData = await tokenRes.json();
-    if (!tokenRes.ok || !tokenData.refresh_token) {
-      return res.status(400).json({ error: `Token exchange failed: ${tokenData.error_description || tokenData.error || tokenRes.status}` });
-    }
-
-    // Identify the authorising character for the confirmation page (best-effort).
-    let charName = 'unknown character';
-    try {
-      const verifyRes = await fetch('https://login.eveonline.com/oauth/verify', {
-        headers: { Authorization: `Bearer ${tokenData.access_token}` },
-      });
-      if (verifyRes.ok) charName = (await verifyRes.json()).CharacterName || charName;
-    } catch (_) { /* best-effort only */ }
-
-    const enc = encryptToken(tokenData.refresh_token); // default key = CORP_ENCRYPTION_KEY
-    await dbRun(
-      `INSERT INTO structure_token (structure_id, enc_refresh_token, token_iv, token_tag, stored_at)
-       VALUES (?, ?, ?, ?, datetime('now'))
-       ON CONFLICT(structure_id) DO UPDATE SET
-         enc_refresh_token = excluded.enc_refresh_token,
-         token_iv           = excluded.token_iv,
-         token_tag           = excluded.token_tag,
-         stored_at           = excluded.stored_at`,
-      [KEEPSTAR_STRUCTURE_ID, enc.ciphertext, enc.iv, enc.tag]
-    );
-
-    // Drop the in-memory pool so the next Keepstar fetch re-reads the fresh DB token
-    // immediately instead of waiting out whatever stale window it had cached.
-    _ksTkPool.token = null;
-    _ksTkPool.expiry = 0;
-    _ksTkPool.fromDb = false;
-
-    logger.info(`✓ [KS auth] Structure token re-authorised by ${charName}`);
-    // Constant page: nothing from CCP is placed into HTML (who authorised it is in the server log above).
-    res.send('<html><body style="font-family:sans-serif;padding:40px"><h2 style="color:#2a2">✓ Keepstar structure token refreshed</h2><p>The stored refresh token has been updated — Keepstar market polling will use it on the next fetch.</p></body></html>');
-  } catch (err) {
-    logger.error('[KS auth] Callback failed:', err.message);
-    res.status(500).json({ error: clientErrMsg(err) });
-  }
-});
 
 // ── Haulage provider rate tables (Phase 2) ────────────────────────────────────
 // Approximate published rates — versioned. Users should verify against provider
@@ -429,32 +278,6 @@ async function getJumpCountStrict(originId, destId) {
 async function getJumpCount(originId, destId) {
   return (await getJumpCountStrict(originId, destId)) ?? 0;
 }
-
-
-app.get('/api/prices/:regionId', security.apiLimiter, async (req, res) => {
-  try {
-    const regionId = parseInt(req.params.regionId);
-
-    if (!VALID_REGIONS.includes(regionId)) {
-      return res.status(400).json({ error: 'Invalid region ID' });
-    }
-
-    const entry = regionPriceCache.get(regionId);
-    if (entry && Date.now() < entry.expiry) {
-      logger.info(`✓ Region ${regionId} prices (cached) — ${Object.keys(entry.prices).length} items`);
-      return res.json({ regionId, prices: entry.prices });
-    }
-
-    logger.info(`⟳ Fetching region ${regionId} prices from ESI...`);
-    const prices = await fetchRegionPrices(regionId);
-    setRegionPriceCache(regionId, prices);
-    res.json({ regionId, prices });
-
-  } catch (err) {
-    logger.error(`Region ${req.params.regionId} prices error:`, err.message);
-    res.status(500).json({ error: clientErrMsg(err) });
-  }
-});
 
 
 // Resolve type names via ESI for any type_ids missing from the items table.
@@ -3883,80 +3706,6 @@ app.post('/api/queue-planner', security.apiLimiter, security.verifyEveToken, asy
 });
 
 
-// ── Ticker prices — batch price/profit lookup for all pinned items ────────────
-// Body: { items: [{ pinId, pinType, regionId, typeId? }] }
-// Returns live data for each pin from the in-memory caches + DB.
-
-app.post('/api/ticker-prices',
-  security.apiLimiter,
-  security.verifyEveToken,
-  async (req, res) => {
-    try {
-      const { items } = req.body || {};
-      if (!Array.isArray(items)) return res.status(400).json({ error: 'items array required' });
-
-      const results = [];
-      for (const item of items) {
-        const { pinId, pinType, regionId, typeId } = item;
-        try {
-          if (['price_sell', 'price_buy', 'price_spread'].includes(pinType)) {
-            const cached = regionPriceCache.get(Number(regionId));
-            const p = cached?.prices?.[Number(typeId)];
-            results.push({ pinId, sell: p?.sell ?? null, buy: p?.buy ?? null });
-          }
-          else if (['mfg_profit', 'mfg_margin', 'mfg_isk_hour'].includes(pinType)) {
-            const row = await dbGet(
-              `SELECT profit, profit_margin, isk_per_hour
-               FROM precomputed_profits WHERE region_id = ? AND product_id = ?
-               ORDER BY computed_at DESC LIMIT 1`,
-              [Number(regionId), Number(typeId)]
-            );
-            results.push({ pinId, profit: row?.profit ?? null, margin: row?.profit_margin ?? null, iskPerHour: row?.isk_per_hour ?? null });
-          }
-          else if (pinType === 'mfg_top_hub') {
-            const row = await dbGet(
-              `SELECT product_name, product_id, profit, profit_margin, isk_per_hour
-               FROM precomputed_profits WHERE region_id = ?
-               ORDER BY profit DESC LIMIT 1`,
-              [Number(regionId)]
-            );
-            results.push({ pinId, itemName: row?.product_name ?? null, topTypeId: row?.product_id ?? null, profit: row?.profit ?? null, margin: row?.profit_margin ?? null });
-          }
-          else if (pinType === 'trade_spread') {
-            const hubKey = Object.entries(HUB_CONFIG).find(([, v]) => v.regionId === Number(regionId))?.[0];
-            const entry = hubKey ? hubBooks[hubKey]?.get(Number(typeId)) : null;
-            results.push({ pinId, sell: entry?.sell ?? null, buy: entry?.buy ?? null, spreadPct: entry?.spreadPct ?? null });
-          }
-          else if (pinType === 'trade_top_hub') {
-            const hubKey = Object.entries(HUB_CONFIG).find(([, v]) => v.regionId === Number(regionId))?.[0];
-            let topTypeId = null, topSpread = -Infinity, topSell = null, topBuy = null;
-            for (const [tid, e] of (hubKey ? (hubBooks[hubKey] || new Map()) : [])) {
-              if ((e.spreadPct ?? -Infinity) > topSpread) {
-                topSpread = e.spreadPct;
-                topTypeId = tid;
-                topSell = e.sell;
-                topBuy = e.buy;
-              }
-            }
-            results.push({ pinId, topTypeId, spreadPct: topSpread > -Infinity ? topSpread : null, sell: topSell, buy: topBuy });
-          }
-          else {
-            results.push({ pinId }); // character-state pins handled client-side
-          }
-        } catch (innerErr) {
-          logger.error(`ticker-prices inner error pin ${pinId}:`, innerErr.message);
-          results.push({ pinId, error: 'fetch failed' });
-        }
-      }
-      res.json({ results });
-    } catch (err) {
-      logger.error('ticker-prices error:', err.message);
-      res.status(500).json({ error: 'Failed to fetch ticker prices' });
-    }
-  }
-);
-
-
 // PRE-COMPUTATION ENGINE (v0.9.0)
 // Calculates profitability for ALL blueprints, stores in DB
 // Replaces real-time AI calculations for common queries
@@ -7006,6 +6755,11 @@ app.use(require('./routes/session')({ cacheStructureToken }));
 // ── Corp tab ──────────────────────────────────────────────────────────────────
 app.use(require('./routes/corp'));
 
+// ── LP store, Keepstar, market prices ─────────────────────────────────────────
+app.use(require('./routes/lp-store'));
+app.use(require('./routes/keepstar'));
+app.use(require('./routes/market'));
+
 // ── Station trading ───────────────────────────────────────────────────────────
 app.use(require('./routes/trading'));
 
@@ -7030,226 +6784,6 @@ app.use(piPlannerRoutes({ dbAll, dbGet, security }));
 const iconRoutes = require('./routes/icons');
 app.use(iconRoutes({ security }));
 
-
-// ── LP Store endpoints (v1.36.0) ─────────────────────────────────────────
-
-// Character LP balances — requires esi-characters.read_loyalty.v1
-app.get('/api/lp-balance', security.apiLimiter, security.verifyEveToken, async (req, res) => {
-  try {
-    const characterId = req.characterId;
-    const eveToken    = req.headers.authorization?.replace(/^Bearer\s+/i, '');
-    const esiRes = await esiFetch(
-      `https://esi.evetech.net/v1/characters/${characterId}/loyalty/points/`,
-      { headers: { Authorization: `Bearer ${eveToken}` } }
-    );
-    if (!esiRes.ok) {
-      const text = await esiRes.text();
-      if (esiRes.status === 403 && text.includes('scope')) {
-        return res.json({ balances: [], scope_missing: true });
-      }
-      return res.status(esiRes.status).json({ error: `ESI ${esiRes.status}`, balances: [] });
-    }
-    const points = await esiRes.json(); // [{corporation_id, loyalty_points}]
-
-    // Enrich with corp/faction names from our DB
-    const corpIds = points.map(p => p.corporation_id);
-    let corpRows = [];
-    if (corpIds.length) {
-      corpRows = await dbAll(
-        `SELECT corp_id, corp_name, faction_id, faction_name
-           FROM npc_corporations
-          WHERE corp_id IN (${corpIds.map(() => '?').join(',')})`,
-        corpIds
-      );
-    }
-    const corpMap = new Map(corpRows.map(r => [r.corp_id, r]));
-
-    const balances = points
-      .map(p => {
-        const info = corpMap.get(p.corporation_id) || {};
-        return {
-          corp_id:      p.corporation_id,
-          corp_name:    info.corp_name  || `Corp ${p.corporation_id}`,
-          faction_id:   info.faction_id || null,
-          faction_name: info.faction_name || null,
-          lp:           p.loyalty_points,
-        };
-      })
-      .filter(b => b.lp > 0)
-      .sort((a, b) => b.lp - a.lp);
-
-    res.json({ balances, scope_missing: false });
-  } catch (err) {
-    res.status(500).json({ error: clientErrMsg(err), balances: [] });
-  }
-});
-
-// Factions that have LP store offers (for the faction picker dropdown)
-app.get('/api/lp-store/factions', security.apiLimiter, async (req, res) => {
-  try {
-    const rows = await dbAll(`
-      SELECT nc.faction_id, nc.faction_name, COUNT(DISTINCT nc.corp_id) AS corp_count
-        FROM npc_corporations nc
-       WHERE nc.faction_id IS NOT NULL AND nc.faction_name IS NOT NULL
-         AND nc.corp_id IN (SELECT DISTINCT corp_id FROM lp_offers)
-       GROUP BY nc.faction_id, nc.faction_name
-       ORDER BY nc.faction_name
-    `);
-    res.json({ factions: rows });
-  } catch (err) {
-    res.status(500).json({ error: clientErrMsg(err), factions: [] });
-  }
-});
-
-// Corps within a faction (for the corp sub-filter)
-app.get('/api/lp-store/corps', security.apiLimiter, async (req, res) => {
-  try {
-    const factionId = parseInt(req.query.factionId, 10) || 0;
-    const rows = await dbAll(`
-      SELECT nc.corp_id, nc.corp_name, COUNT(lo.offer_id) AS offer_count
-        FROM npc_corporations nc
-        JOIN lp_offers lo ON lo.corp_id = nc.corp_id
-       ${factionId ? 'WHERE nc.faction_id = ?' : ''}
-       GROUP BY nc.corp_id, nc.corp_name
-       ORDER BY nc.corp_name
-    `, factionId ? [factionId] : []);
-    res.json({ corps: rows });
-  } catch (err) {
-    res.status(500).json({ error: clientErrMsg(err), corps: [] });
-  }
-});
-
-// LP store offers — computes ISK/LP using live Jita order book
-app.get('/api/lp-store', security.apiLimiter, async (req, res) => {
-  try {
-    ensureHubPollerRunning('jita');
-
-    const factionId  = parseInt(req.query.factionId, 10) || 0;
-    const corpId     = parseInt(req.query.corpId,    10) || 0;
-    const limit      = Math.min(1000, parseInt(req.query.limit  || '500', 10));
-    const offset     = Math.max(0,    parseInt(req.query.offset || '0',   10));
-    const sellRegion = parseInt(req.query.regionId,  10) || 10000002;
-    const hubKey     = REGION_TO_HUB[sellRegion] || 'jita';
-
-    const wheres = [];
-    const params = [];
-    if (corpId) {
-      wheres.push('lo.corp_id = ?');        params.push(corpId);
-    } else if (factionId) {
-      wheres.push('nc.faction_id = ?');     params.push(factionId);
-    }
-    const where = wheres.length ? 'WHERE ' + wheres.join(' AND ') : '';
-
-    const offers = await dbAll(`
-      SELECT lo.corp_id, lo.offer_id, lo.type_id, lo.quantity, lo.lp_cost, lo.isk_cost,
-             i.name  AS item_name, i.category_name,
-             nc.corp_name, nc.faction_id, nc.faction_name,
-             ihp.avg_30d_volume AS volume
-        FROM lp_offers lo
-        JOIN npc_corporations nc ON nc.corp_id = lo.corp_id
-        LEFT JOIN items i ON i.type_id = lo.type_id
-        LEFT JOIN item_history_prices ihp ON ihp.type_id = lo.type_id
-        ${where}
-    `, params);
-
-    if (offers.length === 0) return res.json({ offers: [], total: 0, prices_live: false });
-
-    // Required items for these offers (chunked to stay under SQLite param limit)
-    const offerIds = [...new Set(offers.map(o => o.offer_id))];
-    let reqRows = [];
-    for (let i = 0; i < offerIds.length; i += 900) {
-      const chunk = offerIds.slice(i, i + 900);
-      const rows = await dbAll(`
-        SELECT lori.offer_id, lori.corp_id, lori.req_type_id, lori.quantity,
-               i.name AS req_name
-          FROM lp_offer_required_items lori
-          LEFT JOIN items i ON i.type_id = lori.req_type_id
-         WHERE lori.offer_id IN (${chunk.map(() => '?').join(',')})
-      `, chunk);
-      reqRows.push(...rows);
-    }
-
-    // Index required items by "corpId:offerId"
-    const reqMap = new Map();
-    for (const r of reqRows) {
-      const key = `${r.corp_id}:${r.offer_id}`;
-      if (!reqMap.has(key)) reqMap.set(key, []);
-      reqMap.get(key).push(r);
-    }
-
-    // Live prices from the selected sell hub's order book
-    const hubBook    = hubBooks[hubKey];
-    const pricesLive = !!(hubBook && hubBook.size > 0);
-    const getPrice   = (typeId) => {
-      const entry = hubBook?.get(typeId);
-      return { sell: entry?.sell || 0, buy: entry?.buy || 0 };
-    };
-    const hubName    = REGIONS[sellRegion]?.hub || 'Jita';
-
-    // Sales Tax — character-specific if token provided, else worst-case default
-    let transactionTaxRate = 0.075; // Accounting 0 = 7.5%
-    let sessionCached = false;
-    const authHeader = req.headers.authorization;
-    if (authHeader) {
-      try {
-        const { characterId } = await security.extractCharacterFromToken(authHeader);
-        const { skillMap, standings } = getCharacterSession(characterId);
-        if (Object.keys(skillMap).length > 0) {
-          const rates = calcSalesFeeRates(skillMap, standings, HUB_STANDINGS[sellRegion], HUB_STRUCTURE_FEES[sellRegion] ?? null);
-          transactionTaxRate = rates.transactionTaxRate;
-          sessionCached = true;
-        }
-      } catch { /* invalid/expired token — fall back to defaults */ }
-    }
-
-    const results = [];
-    for (const offer of offers) {
-      const reqs     = reqMap.get(`${offer.corp_id}:${offer.offer_id}`) || [];
-      const outPrice = getPrice(offer.type_id);
-      const revenue  = outPrice.buy * offer.quantity * (1 - transactionTaxRate);
-
-      let reqCost = 0;
-      const reqDetails = reqs.map(r => {
-        const p    = getPrice(r.req_type_id);
-        const cost = p.sell * r.quantity;
-        reqCost += cost;
-        return { type_id: r.req_type_id, name: r.req_name || `Item ${r.req_type_id}`,
-                 quantity: r.quantity, unit_price: p.sell, total_cost: cost };
-      });
-
-      const netIsk   = revenue - offer.isk_cost - reqCost;
-      const iskPerLp = offer.lp_cost > 0 ? netIsk / offer.lp_cost : 0;
-
-      results.push({
-        offer_id:       offer.offer_id,
-        corp_id:        offer.corp_id,
-        corp_name:      offer.corp_name,
-        faction_id:     offer.faction_id,
-        faction_name:   offer.faction_name,
-        type_id:        offer.type_id,
-        item_name:      offer.item_name || `Item ${offer.type_id}`,
-        quantity:       offer.quantity,
-        lp_cost:        offer.lp_cost,
-        isk_cost:       offer.isk_cost,
-        required_items: reqDetails,
-        jita_buy:       outPrice.buy,
-        revenue,
-        req_cost:       reqCost,
-        net_isk:        netIsk,
-        isk_per_lp:     iskPerLp,
-        volume:         offer.volume || null,
-        category_name:  offer.category_name || null,
-      });
-    }
-
-    results.sort((a, b) => b.isk_per_lp - a.isk_per_lp);
-
-    res.json({ offers: results.slice(offset, offset + limit), total: results.length, prices_live: pricesLive, hub_name: hubName, transaction_tax_rate: transactionTaxRate, session_cached: sessionCached });
-  } catch (err) {
-    logger.error('LP store error:', err.message);
-    res.status(500).json({ error: clientErrMsg(err), offers: [] });
-  }
-});
 
 // START SERVER
 initDatabase(DB_PATH).then(async () => {

@@ -5,6 +5,9 @@ const express = require('express');
 const logger = require('../lib/logger');
 const security = require('../forge-security');
 const { dbGet, dbRun } = require('../lib/db');
+const { HUB_CONFIG } = require('../lib/hubs');
+const { regionPriceCache } = require('../lib/market-cache');
+const { hubBooks } = require('../lib/hub-pollers');
 
 const router = express.Router();
 
@@ -87,6 +90,79 @@ router.post('/api/ticker-config',
     } catch (err) {
       logger.error('ticker-config POST error:', err.message);
       res.status(500).json({ error: 'Failed to save ticker config' });
+    }
+  }
+);
+
+// ── Ticker prices — batch price/profit lookup for all pinned items ────────────
+// Body: { items: [{ pinId, pinType, regionId, typeId? }] }
+// Returns live data for each pin from the in-memory caches + DB.
+
+router.post('/api/ticker-prices',
+  security.apiLimiter,
+  security.verifyEveToken,
+  async (req, res) => {
+    try {
+      const { items } = req.body || {};
+      if (!Array.isArray(items)) return res.status(400).json({ error: 'items array required' });
+
+      const results = [];
+      for (const item of items) {
+        const { pinId, pinType, regionId, typeId } = item;
+        try {
+          if (['price_sell', 'price_buy', 'price_spread'].includes(pinType)) {
+            const cached = regionPriceCache.get(Number(regionId));
+            const p = cached?.prices?.[Number(typeId)];
+            results.push({ pinId, sell: p?.sell ?? null, buy: p?.buy ?? null });
+          }
+          else if (['mfg_profit', 'mfg_margin', 'mfg_isk_hour'].includes(pinType)) {
+            const row = await dbGet(
+              `SELECT profit, profit_margin, isk_per_hour
+               FROM precomputed_profits WHERE region_id = ? AND product_id = ?
+               ORDER BY computed_at DESC LIMIT 1`,
+              [Number(regionId), Number(typeId)]
+            );
+            results.push({ pinId, profit: row?.profit ?? null, margin: row?.profit_margin ?? null, iskPerHour: row?.isk_per_hour ?? null });
+          }
+          else if (pinType === 'mfg_top_hub') {
+            const row = await dbGet(
+              `SELECT product_name, product_id, profit, profit_margin, isk_per_hour
+               FROM precomputed_profits WHERE region_id = ?
+               ORDER BY profit DESC LIMIT 1`,
+              [Number(regionId)]
+            );
+            results.push({ pinId, itemName: row?.product_name ?? null, topTypeId: row?.product_id ?? null, profit: row?.profit ?? null, margin: row?.profit_margin ?? null });
+          }
+          else if (pinType === 'trade_spread') {
+            const hubKey = Object.entries(HUB_CONFIG).find(([, v]) => v.regionId === Number(regionId))?.[0];
+            const entry = hubKey ? hubBooks[hubKey]?.get(Number(typeId)) : null;
+            results.push({ pinId, sell: entry?.sell ?? null, buy: entry?.buy ?? null, spreadPct: entry?.spreadPct ?? null });
+          }
+          else if (pinType === 'trade_top_hub') {
+            const hubKey = Object.entries(HUB_CONFIG).find(([, v]) => v.regionId === Number(regionId))?.[0];
+            let topTypeId = null, topSpread = -Infinity, topSell = null, topBuy = null;
+            for (const [tid, e] of (hubKey ? (hubBooks[hubKey] || new Map()) : [])) {
+              if ((e.spreadPct ?? -Infinity) > topSpread) {
+                topSpread = e.spreadPct;
+                topTypeId = tid;
+                topSell = e.sell;
+                topBuy = e.buy;
+              }
+            }
+            results.push({ pinId, topTypeId, spreadPct: topSpread > -Infinity ? topSpread : null, sell: topSell, buy: topBuy });
+          }
+          else {
+            results.push({ pinId }); // character-state pins handled client-side
+          }
+        } catch (innerErr) {
+          logger.error(`ticker-prices inner error pin ${pinId}:`, innerErr.message);
+          results.push({ pinId, error: 'fetch failed' });
+        }
+      }
+      res.json({ results });
+    } catch (err) {
+      logger.error('ticker-prices error:', err.message);
+      res.status(500).json({ error: 'Failed to fetch ticker prices' });
     }
   }
 );
