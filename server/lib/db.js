@@ -62,16 +62,42 @@ async function addColumn(table, spec) {
   try {
     await dbRun(`ALTER TABLE ${table} ADD COLUMN ${spec}`);
   } catch (err) {
-    if (!/duplicate column name/i.test(err.message)) logger.error(`� migration: ALTER TABLE ${table} ADD COLUMN ${spec} failed: ${err.message}`);
+    if (!/duplicate column name/i.test(err.message)) logger.error(`� migration: ALTER TABLE ${table} ADD COLUMN ${spec} failed: ${err.message}`);
   }
 }
+
+// PRE-COMPUTATION ENGINE (v0.9.0)
+// Calculates profitability for ALL blueprints, stores in DB
+// Replaces real-time AI calculations for common queries
+
+// ── DB transaction mutex ──────────────────────────────────────────────────────
+// SQLite rejects concurrent BEGIN TRANSACTION calls with
+// "cannot start a transaction within a transaction".
+// All background jobs must acquire this lock before BEGIN and release after
+// COMMIT/ROLLBACK. SELECT reads are unaffected — no lock needed for reads.
+class DbTxMutex {
+  constructor() { this._locked = false; this._queue = []; }
+  lock() {
+    if (!this._locked) { this._locked = true; return Promise.resolve(); }
+    return new Promise(resolve => this._queue.push(resolve));
+  }
+  unlock() {
+    if (this._queue.length > 0) {
+      this._queue.shift()();
+    } else {
+      this._locked = false;
+    }
+  }
+}
+
+const dbTxMutex = new DbTxMutex();
 
 // Maximum number of SQL bind variables per query (SQLite default limit is 999).
 // We leave headroom for other parameters in the same query (e.g. piIds + bpIds).
 const SQL_VARIABLE_LIMIT = 950;
 
 module.exports = {
-  initDatabase, dbAll, dbGet, dbRun, addColumn, SQL_VARIABLE_LIMIT,
+  initDatabase, dbAll, dbGet, dbRun, addColumn, SQL_VARIABLE_LIMIT, dbTxMutex,
   /** The open connection (undefined until initDatabase has finished). */
   get db() { return db; },
 };
