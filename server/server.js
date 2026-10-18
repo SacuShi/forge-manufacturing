@@ -27,16 +27,15 @@ const { esiFetch, ESI_USER_AGENT } = require('./lib/esi');
 const database = require('./lib/db');
 const { initDatabase, dbAll, dbGet, dbRun } = database;
 const { runMigrations } = require('./lib/migrations');
-const { CACHE_TTL_MS, CACHE_TTL_ADJ_MS, cache, getCached, setCached } = require('./lib/cache');
+const { CACHE_TTL_MS, cache, getCached, setCached } = require('./lib/cache');
 const { CORP_ENCRYPTION_KEY, encryptToken, decryptToken } = require('./lib/token-crypto'); // reads FORGE_CORP_KEY / FORGE_REMEMBER_KEY at load
 const {
   HUB_CONFIG, HUB_STRUCTURE_FEES, HUB_IDS, REGION_TO_HUB, VALID_REGIONS, REGIONS, HUB_STANDINGS, HUB_SYSTEM_IDS,
   KEEPSTAR_STRUCTURE_ID, KEEPSTAR_REGION_ID,
 } = require('./lib/hubs');
-const { costIndexCache, fetchAdjustedPrices, fetchCostIndices } = require('./lib/esi-industry-data');
+const { fetchAdjustedPrices, fetchCostIndices } = require('./lib/esi-industry-data');
 const {
-  sanitizeSkills, sanitizeStandings, sanitizeImplants, loadSkillSnapshots, saveSkillSnapshot, getCharacterSession,
-  calcSalesFeeRates, INDUSTRY_IMPLANTS,
+  loadSkillSnapshots, getCharacterSession, calcSalesFeeRates, INDUSTRY_IMPLANTS,
 } = require('./lib/character-session');
 {
   const missing = config.missingRecommended();

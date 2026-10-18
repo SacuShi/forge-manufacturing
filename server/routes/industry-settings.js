@@ -7,13 +7,12 @@ const logger = require('../lib/logger');
 const security = require('../forge-security');
 const IM = require('../lib/industry-math'); // shared manufacturing mechanics (rigs, ME, EIV, job cost, time)
 const { dbAll, dbGet, dbRun } = require('../lib/db');
-const { esiFetch } = require('../lib/esi');
 const { clientErrMsg } = require('../lib/http-errors');
 const { getCached } = require('../lib/cache');
 const { HUB_STANDINGS, HUB_STRUCTURE_FEES, REGIONS, VALID_REGIONS } = require('../lib/hubs');
 const { costIndexCache, fetchAdjustedPrices, fetchCostIndices } = require('../lib/esi-industry-data');
-const { sanitizeSkills, sanitizeStandings, sanitizeImplants, getCharacterSession, calcSalesFeeRates } = require('../lib/character-session');
-const { INT32_MAX_ID, isPlayerStructureId, lookupStructure, recordFitReport, learnStructureFit } = require('../lib/structures');
+const { getCharacterSession, calcSalesFeeRates } = require('../lib/character-session');
+const { INT32_MAX_ID, learnStructureFit } = require('../lib/structures');
 
 /** @param {{ blueprintMaterialsCache: Map }} deps */
 module.exports = function industrySettingsRoutes({ blueprintMaterialsCache }) {
