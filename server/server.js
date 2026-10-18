@@ -3195,9 +3195,6 @@ app.get('/api/ks-test-auth', (req, res) => {
   res.redirect(authorizeUrl);
 });
 
-// Values from CCP (error text, character name) are interpolated into the HTML below, so escape them.
-const escapeHtml = (v) => String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-
 app.get('/api/ks-test-callback', async (req, res) => {
   try {
     const { code, state } = req.query;
@@ -3215,7 +3212,7 @@ app.get('/api/ks-test-callback', async (req, res) => {
     });
     const tokenData = await tokenRes.json();
     if (!tokenRes.ok || !tokenData.refresh_token) {
-      return res.status(400).send(`Token exchange failed: ${escapeHtml(tokenData.error_description || tokenData.error || tokenRes.status)}`);
+      return res.status(400).json({ error: `Token exchange failed: ${tokenData.error_description || tokenData.error || tokenRes.status}` });
     }
 
     // Identify the authorising character for the confirmation page (best-effort).
@@ -3246,13 +3243,11 @@ app.get('/api/ks-test-callback', async (req, res) => {
     _ksTkPool.fromDb = false;
 
     logger.info(`✓ [KS auth] Structure token re-authorised by ${charName}`);
-    res.send(`<html><body style="font-family:sans-serif;padding:40px">
-      <h2 style="color:#2a2">✓ Keepstar structure token refreshed</h2>
-      <p>Authorised by <strong>${escapeHtml(charName)}</strong>. The stored refresh token has been updated — Keepstar market polling will use it on the next fetch.</p>
-    </body></html>`);
+    // Constant page: nothing from CCP is placed into HTML (who authorised it is in the server log above).
+    res.send('<html><body style="font-family:sans-serif;padding:40px"><h2 style="color:#2a2">✓ Keepstar structure token refreshed</h2><p>The stored refresh token has been updated — Keepstar market polling will use it on the next fetch.</p></body></html>');
   } catch (err) {
     logger.error('[KS auth] Callback failed:', err.message);
-    res.status(500).send(`Error: ${escapeHtml(err.message)}`);
+    res.status(500).json({ error: clientErrMsg(err) });
   }
 });
 
