@@ -269,6 +269,23 @@ async function runMigrations() {
     ON ai_usage (created_at)
   `);
 
+  // Advisor chat history (the live database already has this table from an earlier release; this makes a fresh install match)
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS chat_history (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      character_id    INTEGER NOT NULL,
+      role            TEXT NOT NULL,
+      content         TEXT NOT NULL,
+      conversation_id TEXT NOT NULL DEFAULT 'default',
+      timestamp       TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+
+  await dbRun(`
+    CREATE INDEX IF NOT EXISTS idx_chat_history_character
+    ON chat_history (character_id, timestamp)
+  `);
+
   // Pre-compute metadata table (tracks job runs)
   await dbRun(`
     CREATE TABLE IF NOT EXISTS precompute_runs (
