@@ -406,6 +406,8 @@ const RightSidebar: FC<RightSidebarProps> = ({
       })
       .catch(e => { if (!cancelled) setProfResult({ key, orders: null, error: (e as Error).message }); });
     return () => { cancelled = true; };
+  // Deliberately keyed on the ids, not the whole context object (which is recreated by the parent).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [interHubContext?.product_id, interHubContext?.sell_region_id]);
 
   /* ── Empty state — rendered AFTER all hooks ──────────────────────────────── */

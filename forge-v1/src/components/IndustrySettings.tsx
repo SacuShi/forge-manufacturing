@@ -551,7 +551,7 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
       setSaving(false);
     }
   }, [canSave, token, systemId, systemName, systemSecurity, structureId, isNpc, selectedRigs,
-      facilityTax, haulEnabled, leg1AutoZero, leg1SaveZero, leg2AutoZero,
+      facilityTax, haulEnabled, leg1SaveZero, leg2AutoZero,
       leg1Method, leg2Method, leg1Rate, leg2Rate,
       leg1Collateral, leg2Collateral, leg1IskPerJump, leg2IskPerJump,
       leg1FlatTotal, leg2FlatTotal, leg1ServiceLabel, leg2ServiceLabel,

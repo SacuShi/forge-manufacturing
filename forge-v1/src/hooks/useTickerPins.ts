@@ -273,6 +273,9 @@ export function useTickerPins(input: UseTickerPinsInput): UseTickerPinsOutput {
       apiPost('/api/ticker-config', { pins, groups, activeGroupId, dualRow }, token).catch(() => {});
     }, 1000);
     return () => clearTimeout(t);
+  // characterId is deliberately not a dependency: a character switch must not re-save the previous
+  // character's config under the new one (the load effect above handles the switch).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pins, groups, activeGroupId, dualRow, token]);
 
   // ── Poll hub-specific pins (active group + second group in dual-row mode) ─────

@@ -23,8 +23,9 @@ Not applicable to this codebase: the brief's EVE Tycoon field names (`minSell`, 
 |---|---|---|
 | TS strictness | pass (0 errors under `--strict`) | pass |
 | `any` | 0 | 0 |
-| Lint | 68 problems (59 errors) | **47 (41 errors, 6 warnings)**; every remaining one is an effect/ref rule (section 6) |
-| React effects (derived state) | fail — 37 `set-state-in-effect` | unchanged (see 6.8: needs per-site tests) |
+| Lint | 68 problems (59 errors) | **1 warning, 0 errors** (`LPStoreTab` missing `token` dependency, see finding 10) |
+| React effects (derived state) | fail — 37 `set-state-in-effect`, 3 `refs`, 1 `immutability` | **pass**: see section 6.8 — 20 sites rewritten to derive state, 18 fetch loaders kept with a per-site justification and a stale-response guard |
+| Effect race handling | partial | **pass**: shared `useLatestRequest` guard added to every loader that lacked one (Appraisal, Inter-Hub, LP store, Trading orders, Corp assets/jobs, Queue planner, PI) |
 | Components defined inside components | fail — 8 sites | **pass** (moved to module level) |
 | Component size (>300 lines) | 12+ files | 20 files still over 300 (App.tsx 1,192; IndustrySettings 900; TradingTab 851; LPStoreTab 744; PiTab 721) — see 6.9 |
 | Express error handling | fail — no central handler, 113 per-route `catch` | **pass for the centre**: one JSON error handler registered last; async rejections forwarded for all `app` and `Router` routes; per-route `catch` left as is (no behaviour change) |
@@ -35,7 +36,7 @@ Not applicable to this codebase: the brief's EVE Tycoon field names (`minSell`, 
 | SQL parameterised | mostly pass | **pass after audit**: all 27 interpolated queries use fixed fragments, `?` placeholder lists or allow-listed sort columns; user text only enters as bound parameters. Double-quoted SQL literals replaced by single quotes |
 | N+1 queries | not assessed | 50 queries inside loops listed (finding 3); none changed |
 | Transactions | partial | report only (finding 5) |
-| Tests | 7 script suites, no HTTP tests | **+ 27 Vitest server tests (18 HTTP integration, 9 unit) + 43 frontend unit tests**; all 7 script suites kept |
+| Tests | 7 script suites, no HTTP tests | **+ 27 Vitest server tests (18 HTTP integration, 9 unit) + 96 frontend tests (utils, 8 hooks, 1 component)**; all 7 script suites kept |
 | Dead code | 7 candidates | 3 removed (`TabId`, `FeeRates`, `SetPins`); 3 corp response types are now used by `CorpTab`; `REMEMBER_REQUIRED_SCOPES` was a false positive (it is used) |
 
 ## 3. Changes per phase
@@ -58,7 +59,7 @@ Files removed from the repository earlier (privacy clean-up): internal notes, on
 
 ## 5. Dependencies
 
-Added (dev only, approved): `vitest`, `supertest` (server), `vitest` (frontend). Removed: none (none were unused).
+Added (dev only, approved): `vitest`, `supertest` (server); `vitest`, `jsdom`, `@testing-library/react`, `@testing-library/jest-dom` (frontend). Removed: none (none were unused).
 
 ## 6. Review findings
 
@@ -71,25 +72,32 @@ Added (dev only, approved): `vitest`, `supertest` (server), `vitest` (frontend).
 | 5 | `server/server.js` | various | Multi-statement writes are not consistently wrapped in transactions (6 `BEGIN` mentions in 375 queries) | Medium | Correctness |
 | 6 | `server/server.js` | whole file | No input-validation library; validation is ad-hoc (`parseInt`, regex strips) | Low | Security |
 | 7 | `server/server.js` | startup | 113 per-route `try/catch → res.status(500)` remain next to the new central handler | Low | Maintainability |
-| 8 | frontend | see 6.8 | 37 `react-hooks/set-state-in-effect`, 3 `refs`, 1 `immutability` | Medium | Maintainability |
+| 8 | frontend | see 6.8 | 37 `set-state-in-effect`, 3 `refs`, 1 `immutability` — **fixed or justified** (6.8) | Medium | Maintainability |
 | 9 | frontend | see 6.9 | 20 files over 300 lines | Medium | Maintainability |
-| 10 | `IndustrySettings.tsx:548`, `LPStoreTab.tsx:145`, `MainContent.tsx:555`, `RightSidebar.tsx:392`, `useItemDetail.ts:99`, `useTickerPins.ts:277` | — | `exhaustive-deps` warnings: effects/memos reading values not in their dependency list (possible stale closures, e.g. `token` in `useItemDetail`) | Medium | Correctness |
+| 10 | `LPStoreTab.tsx` | 161 | `fetchOffers` reads `token` but is not re-created when it changes, so a login that completes after mount keeps the first (token-less) request. Fixing it would add a refetch on login, a behaviour change, so it is left as the one lint warning. The other five such warnings were reviewed: each omission is deliberate and now carries a comment explaining why | Medium | Correctness |
 | 11 | `server/server.js` | 94–103 | CSP `scriptSrc` allows `'unsafe-inline'`, `'unsafe-eval'`, `cdn.tailwindcss.com` and `unpkg.com`; the built Vite app needs none of these. Weakens XSS protection | Medium | Security |
 | 12 | `server/server.js` | 100 | CSP `connectSrc` still lists `https://evetycoon.com`; nothing in the code fetches it (the AI prompt only links to evetycoon.com pages, which are navigations, not connections) | Low | Security |
 | 13 | `server/server.js` | 110 | CORS allows `http://localhost:3000` in production | Low | Security |
-| 14 | `TickerBar.tsx` | 120–121 | Reads `innerRef.current.scrollWidth` during render (value lags one render) | Low | Correctness |
-| 15 | `useTradingBook.ts` | 64, 106 | Writes a ref during render; `runScan` referenced inside its own callback | Low | Correctness |
+| 14 | `TickerBar.tsx` | 120–121 | Read a ref during render — **fixed** (width is measured in the effect and stored) | Low | Correctness |
+| 15 | `useTradingBook.ts` | 64, 106 | Wrote a ref during render; `runScan` referenced inside its own callback — **fixed** (ref updated in an effect, timers go through a ref), covered by 8 new tests | Low | Correctness |
 | 16 | `server/server.js` | 10572 | `/api/character-fee-rates` is not called by the client (its type was removed); candidate unused endpoint | Low | Maintainability |
 | 17 | `server/server.js` | schema | Index suggestions (report only): `precomputed_profits (blueprint_id, region_id)` for the cross-hub self-join, `precomputed_profits (region_id, profit)` for the main list, `corp_blueprints (corp_id)` (assets and jobs have one, blueprints do not) | Low | Performance |
 | 18 | `server/server.js` | DB layer | Statements are not prepared once and reused; `sqlite3` re-prepares each call | Low | Performance |
 | 19 | frontend | — | 5 click handlers on non-interactive `div`/`span`; image `alt` coverage needs a multi-line check (a naive count over-reports) | Low | Accessibility |
 | 20 | `server/package.json` | — | Express 4.22: consider Express 5, which removes the need for the async wrapper | Low | Maintainability |
 
-### 6.8 Effect findings by kind (not changed)
+### 6.8 Effect work (done)
 
-- *Data fetching that sets a loading flag first* (`CorpTab` ×3, `TradingTab`, `LPStoreTab`, `QueuePlannerTab`, `InterHubHaulConfig`, `PiTab`, `useCorpData`, `useItemDetail`, `useTrueCost`, …): the standard pattern; the lint rule is stricter than needed.
-- *Reset state when an id changes* (`RightSidebar:267, 336, 375`, `ChainTree`, `App:435`, `IndustrySettings`, `InterHubTab`, `TradingTab:462`): should become keyed components or "adjust state during render". Each changes render timing, so each needs a component-level test first.
-- *Derived values* (`MainContent:296`, `App:325`, `ResearchTab:80`, `PiPlannerTab:110`): could be computed during render.
+Method: for every hook, a characterisation test was written and run against the **old** implementation first, then the code was rewritten and the same test kept green. For components, the old-vs-new render comparison (25 scenarios) and the integration suite were used.
+
+**Rewritten so the state is derived or adjusted during render (20 sites):**
+- Hooks `useTrueCost`, `useItemDetail`, `useCorpData`: an answer is stored with the exact request it answers and `data` / `loading` / `error` are derived, so switching item or character drops the old figures on the same render (previously one render later).
+- `useCanBuildNow`, `usePushNotifications` (unsupported/denied known at init), `useLocationNames` (shared cache through `useSyncExternalStore`).
+- Components: `RightSidebar` (chain collapse, stock-check collapse, inter-hub order lookup), `App` (leaving the inter-hub tab, session-expired reset, haul lookup), `TradingTab` (pagination reset), `MainContent`, `CorpTab`, `ResearchTab`, `PiPlannerTab` (empty cases derived), `AppraisalTab` (seed items), `LPStoreTab` (corp reset, corp list), `CharacterManagementModal`, `IndustrySettings` (install-cost check, structure suggestions, rig pruning), `ChainTree` (cache read directly), `TickerBar`, `useTradingBook`.
+
+**Kept as effects, with a per-line justification (18 loaders):** an effect that starts a request and marks it as loading is the standard way to synchronise with a server; the lint rule cannot tell it from a reset. Each now has a stale-response guard (new shared hook `useLatestRequest`, or an existing `cancelled` flag) and an `eslint-disable-next-line … -- reason` comment. Several of these had **no guard before**: a fast hub or filter change could let an older answer win. That is now fixed (tested for the Appraisal tab; the guard helper is tested and mutation-checked).
+
+**Behaviour nuances (UI timing only, not data):** a re-opened Corp tab or re-selected item shows its last result immediately while it refreshes instead of a spinner; `IndustrySettings` form seeding on open is intentionally still an effect (see section 7).
 
 ### 6.9 Components over 300 lines
 
@@ -97,7 +105,7 @@ Added (dev only, approved): `vitest`, `supertest` (server), `vitest` (frontend).
 
 ## 7. Not fixed — needs a decision or is a behaviour change
 
-1. **Effect restructuring (finding 8)** needs a component test harness (`jsdom` + `@testing-library/react`, a new dependency) so each change can be proven. Recommend adding it first.
+1. **Effect restructuring (finding 8)** is done (6.8). `IndustrySettings` still seeds its ~30 form fields from the saved settings in one effect when the modal opens; the clean fix is to split the modal into an outer gate and an inner form that is mounted fresh, which is a larger restructure.
 2. **Graceful shutdown (4)**: adding it changes how PM2 restarts behave; please confirm the intended sequence.
 3. **CSP (11–13)**: tightening needs a check that the deployed app runs under the stricter policy.
 4. **Routes → services → data (1)** should be done domain by domain (AI, corp, trading, LP, PI), each behind the integration tests.
@@ -107,7 +115,7 @@ Added (dev only, approved): `vitest`, `supertest` (server), `vitest` (frontend).
 
 ## 8. Recommended next steps
 
-1. Add `jsdom` + Testing Library and start on the keyed-reset effects.
+1. Split `IndustrySettings` into gate + form (see section 7.1).
 2. Deploy `lib/config.js`, `lib/logger.js`, `lib/http-errors.js`, `lib/ai-tools.js`, `lib/profit-query.js` together with `server.js` (they are new files in `lib/`).
 3. Investigate the known **item-name-resolution bug (type IDs showing as raw numbers)**: not touched here, and now easier to reproduce with the integration harness.
 4. Tighten the CSP and add the shutdown handler once decided.

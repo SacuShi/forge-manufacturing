@@ -556,6 +556,8 @@ const MainContent: FC<MainContentProps> = ({
       }
     }
     return keys;
+    // locationLabelFor is rebuilt every render; locationNames is the input it reads, so key on that instead.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [locationGroups, expandedLocs, assetSort, assetSortDir, locationNames]);
 
   const sendToAppraise = () => {

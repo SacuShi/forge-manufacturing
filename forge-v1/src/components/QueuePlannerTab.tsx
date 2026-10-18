@@ -109,6 +109,7 @@ const LIQ_DOT: Record<string, string> = {
 };
 
 import { itemIconUrl } from '../utils/icons';
+import { useLatestRequest } from '../hooks/useLatestRequest';
 
 const HORIZON_OPTIONS = [
   { value: 24,  label: '24 hours' },
@@ -141,8 +142,10 @@ const QueuePlannerTab: FC<QueuePlannerTabProps> = ({ queueCharacters, primaryTok
   // primaryToken is passed from App.tsx (always auth.token — the primary's token).
   // queueCharacters may be filtered to a single alt, so we cannot derive it from [0].token.
 
+  const latest = useLatestRequest();
   const runPlan = useCallback(() => {
     if (!primaryToken) return;
+    const requestId = latest.begin();
     setLoading(true);
     setError(null);
 
@@ -173,11 +176,13 @@ const QueuePlannerTab: FC<QueuePlannerTabProps> = ({ queueCharacters, primaryTok
       characters,
     }, primaryToken)
       .then(d => {
+        if (!latest.isCurrent(requestId)) return;   // a newer plan request superseded this one
         sessionRetryCount.current = 0;
         setResult(d as QueuePlanResult);
         setLoading(false);
       })
       .catch(e => {
+        if (!latest.isCurrent(requestId)) return;
         const msg = e.message || 'Failed to generate plan';
         if (msg.includes('SESSION_MISSING') || msg.includes('No session data')) {
           if (sessionRetryCount.current < 3) {
@@ -199,12 +204,14 @@ const QueuePlannerTab: FC<QueuePlannerTabProps> = ({ queueCharacters, primaryTok
           setLoading(false);
         }
       });
-  }, [primaryToken, queueCharacters, regionId, materialRegionId, horizonHours, budgetCapInput, includeCorpBps, activityFilter]);
+  }, [primaryToken, queueCharacters, regionId, materialRegionId, horizonHours, budgetCapInput, includeCorpBps, activityFilter, latest]);
 
   // Keep runPlanRef pointing at the latest closure so the retry setTimeout never calls a stale version
   useEffect(() => { runPlanRef.current = runPlan; }, [runPlan]);
 
-  useEffect(() => { if (primaryToken) runPlan(); }, [primaryToken, regionId, materialRegionId]);  // eslint-disable-line react-hooks/exhaustive-deps
+  // Re-plan when the token or hubs change (other inputs re-plan only on the button). Guarded request loader.
+  // eslint-disable-next-line react-hooks/set-state-in-effect, react-hooks/exhaustive-deps
+  useEffect(() => { if (primaryToken) runPlan(); }, [primaryToken, regionId, materialRegionId]);
 
   // Clean up any pending retry on unmount
   useEffect(() => () => { if (sessionRetryRef.current) clearTimeout(sessionRetryRef.current); }, []);

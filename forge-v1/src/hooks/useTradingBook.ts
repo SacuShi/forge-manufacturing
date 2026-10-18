@@ -127,6 +127,7 @@ export function useTradingBook(
 
   // Auto-run when token is available
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- guarded request loader: marks loading before the request
     if (autoRun && token) runScan();
     return clearTimers;
   // eslint-disable-next-line react-hooks/exhaustive-deps
