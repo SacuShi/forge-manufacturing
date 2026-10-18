@@ -6,10 +6,12 @@ const fs = require('fs');
 const path = require('path');
 const sqlite3 = require('sqlite3');
 
-const src = fs.readFileSync(path.join(__dirname, 'server.js'), 'utf8');
+// The SQL lives in whichever server source file currently holds it (server.js, lib/ or routes/).
+const sourceFiles = ['server.js', ...['lib', 'routes'].flatMap((d) => fs.readdirSync(path.join(__dirname, d)).filter((f) => f.endsWith('.js')).map((f) => path.join(d, f)))];
+const src = sourceFiles.map((f) => fs.readFileSync(path.join(__dirname, f), 'utf8')).join('\n');
 const viewMatch = src.match(/CREATE VIEW corp_asset_safety_items AS[\s\S]*?SELECT corp_id, item_id FROM s/);
 const predMatch = src.match(/const CORP_BP_USABLE_SQL = `([\s\S]*?)`;/);
-assert.ok(viewMatch && predMatch, 'view / predicate not found in server.js');
+assert.ok(viewMatch && predMatch, 'view / predicate not found in the server source');
 const VIEW_SQL = viewMatch[0].replace(/\r/g, '');
 const PRED = predMatch[1].replace(/\r/g, '');
 

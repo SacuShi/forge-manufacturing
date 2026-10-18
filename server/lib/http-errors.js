@@ -26,6 +26,16 @@ function forwardRejectionsOn(target) {
   }
 }
 
+// ── Error sanitisation ────────────────────────────────────────────────────────
+// Strips filesystem paths from error messages before sending to clients.
+// SQLite errors include the full DB path — strip it before sending to clients
+// which reveals server internals. Internal logging keeps the full message.
+function clientErrMsg(err) {
+  return (err.message || 'Internal server error')
+    .replace(/\/[^\s"']+\.(db|js|json|sqlite)/gi, '[file]')
+    .replace(/\/home\/[^\s"']+/gi, '[path]');
+}
+
 /**
  * The last middleware: always JSON `{ error }`, never a stack trace. Client errors (e.g. malformed JSON, body too
  * large) keep their 4xx status and Express's own safe message; anything else is a 500 with paths stripped.
@@ -40,4 +50,4 @@ function createErrorHandler({ logger, clientErrMsg }) {
   };
 }
 
-module.exports = { forwardRejections, forwardRejectionsOn, createErrorHandler };
+module.exports = { forwardRejections, forwardRejectionsOn, createErrorHandler, clientErrMsg };
