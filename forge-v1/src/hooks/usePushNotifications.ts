@@ -10,26 +10,30 @@ function urlBase64ToUint8Array(b64: string): Uint8Array {
   return Uint8Array.from(raw, c => c.charCodeAt(0));
 }
 
+/** What the browser already tells us synchronously: no support, or notifications blocked. */
+function initialPushState(): PushState {
+  if (typeof window === 'undefined') return 'idle';
+  if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) return 'unsupported';
+  if (Notification.permission === 'denied') return 'denied';
+  return 'idle';
+}
+
 export function usePushNotifications(token: string | null) {
-  const [state,        setState]       = useState<PushState>('idle');
+  const [state,        setState]       = useState<PushState>(initialPushState);
   const [subscription, setSubscription] = useState<PushSubscription | null>(null);
 
-  // Check initial state on mount
+  // On mount, when permission was already granted, check whether this browser is actually subscribed.
+  // (Unsupported / denied are known synchronously and set by initialPushState.)
   useEffect(() => {
-    if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) {
-      setState('unsupported');
-      return;
-    }
-    if (Notification.permission === 'denied') { setState('denied'); return; }
-    if (Notification.permission === 'granted') {
-      // Check if actually subscribed
-      navigator.serviceWorker.getRegistration('/sw.js').then(reg => {
-        if (!reg) return;
-        reg.pushManager.getSubscription().then(sub => {
-          if (sub) { setSubscription(sub); setState('granted'); }
-        });
+    if (state !== 'idle' || Notification.permission !== 'granted') return;
+    navigator.serviceWorker.getRegistration('/sw.js').then(reg => {
+      if (!reg) return;
+      reg.pushManager.getSubscription().then(sub => {
+        if (sub) { setSubscription(sub); setState('granted'); }
       });
-    }
+    });
+    // Mount-only check: later state changes come from enable()/disable().
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const enable = useCallback(async () => {

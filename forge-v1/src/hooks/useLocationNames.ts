@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useSyncExternalStore } from 'react';
 
 // Well-known structures from HUB_CONFIG — resolved without an ESI call.
 const KNOWN_STRUCTURES: Record<number, string> = {
@@ -10,6 +10,17 @@ const KNOWN_STRUCTURES: Record<number, string> = {
 const _cache = new Map<number, string>(
   Object.entries(KNOWN_STRUCTURES).map(([id, name]) => [Number(id), name]),
 );
+
+// Components read the cache through useSyncExternalStore: whenever a lookup adds names, publish() swaps in a new
+// snapshot and every mounted hook re-renders (including ones that did not make the request).
+let snapshot = new Map(_cache);
+const listeners = new Set<() => void>();
+const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
+const getSnapshot = () => snapshot;
+function publish() {
+  snapshot = new Map(_cache);
+  listeners.forEach((l) => l());
+}
 
 // EVE ESI public entity ID ranges accepted by /universe/names/.
 // Item-instance IDs (ships, containers) that happen to fall in the 32-bit
@@ -23,7 +34,7 @@ const isPublicEntityId = (id: number): boolean =>
 const ESI = 'https://esi.evetech.net/latest';
 
 export function useLocationNames(locationIds: number[], token?: string | null): Map<number, string> {
-  const [names, setNames] = useState<Map<number, string>>(() => new Map(_cache));
+  const names = useSyncExternalStore(subscribe, getSnapshot);
   const inFlight = useRef(new Set<number>());
 
   const idsKey = [...locationIds].sort((a, b) => a - b).join(',');
@@ -33,8 +44,6 @@ export function useLocationNames(locationIds: number[], token?: string | null): 
       (id) => id > 0 && !_cache.has(id) && !inFlight.current.has(id),
     );
 
-    // Always reflect whatever is already cached synchronously.
-    setNames(new Map(_cache));
     if (uncached.length === 0) return;
 
     uncached.forEach((id) => inFlight.current.add(id));
@@ -117,7 +126,7 @@ export function useLocationNames(locationIds: number[], token?: string | null): 
       uncached
         .filter((id) => !structureIds.includes(id) || !!token)
         .forEach((id) => inFlight.current.delete(id));
-      setNames(new Map(_cache));
+      publish();
     });
 
     // eslint-disable-next-line react-hooks/exhaustive-deps

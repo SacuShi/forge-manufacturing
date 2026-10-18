@@ -8,6 +8,8 @@ interface UseCanBuildNowParams {
   totalWalletISK: number;
 }
 
+const EMPTY_MAP: Map<number, boolean> = new Map();
+
 export function useCanBuildNow({ allBlueprints, combinedAssets, selectedSourceMarket, totalWalletISK }: UseCanBuildNowParams) {
   // v1.33.1 — "Can Build Now" map for Market Opportunities' Can Build pill: owned
   // materials + wallet ISK cover each owned blueprint's shortfall. Reuses
@@ -15,10 +17,10 @@ export function useCanBuildNow({ allBlueprints, combinedAssets, selectedSourceMa
   // canBuildNow field is used here, priced at the MATERIALS hub (not the sell hub).
   // v1.33.2 — silently retries once after 15s if the server flags the price cache
   // as cold (_meta.canBuildDataWarm === false), same pattern as useTrueCost.
-  const [canBuildNowMap, setCanBuildNowMap] = useState<Map<number, boolean>>(new Map());
+  const [loadedMap, setLoadedMap] = useState<Map<number, boolean>>(EMPTY_MAP);
 
   useEffect(() => {
-    if (allBlueprints.length === 0) { setCanBuildNowMap(new Map()); return; }
+    if (allBlueprints.length === 0) return;
     const typeIds = [...new Set(allBlueprints.map((b) => b.type_id))];
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -42,18 +44,19 @@ export function useCanBuildNow({ allBlueprints, combinedAssets, selectedSourceMa
             if (bpId === '_meta') return;
             map.set(Number(bpId), !!(v as { canBuildNow?: boolean } | undefined)?.canBuildNow);
           });
-          setCanBuildNowMap(map);
+          setLoadedMap(map);
           const meta = data._meta as { canBuildDataWarm?: boolean } | undefined;
           if (!silent && meta && meta.canBuildDataWarm === false) {
             retryTimer = setTimeout(() => load(true), 15_000);
           }
         })
-        .catch(() => { if (!cancelled) setCanBuildNowMap(new Map()); });
+        .catch(() => { if (!cancelled) setLoadedMap(EMPTY_MAP); });
     };
     load();
 
     return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
   }, [allBlueprints, selectedSourceMarket.id, combinedAssets, totalWalletISK]);
 
-  return { canBuildNowMap };
+  // No blueprints means nothing can be built: derived here, not stored, so it is correct on the same render.
+  return { canBuildNowMap: allBlueprints.length === 0 ? EMPTY_MAP : loadedMap };
 }

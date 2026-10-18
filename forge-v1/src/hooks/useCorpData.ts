@@ -32,9 +32,12 @@ export function useCorpData(
   /** Only fires requests when the Corp tab is active and the user is logged in */
   isActive: boolean,
 ): UseCorpDataReturn {
-  const [corpStatus,   setCorpStatus]   = useState<CorpStatus | null>(null);
-  const [accessStatus, setAccessStatus] = useState<CorpAccessStatus | null>(null);
-  const [loading,      setLoading]      = useState(false);
+  const [corpStatus, setCorpStatus] = useState<CorpStatus | null>(null);
+  // Access belongs to the character (token) it was checked for; checkedToken is the last one whose checks finished.
+  const [access, setAccess] = useState<{ token: string; value: CorpAccessStatus } | null>(null);
+  const [checkedToken, setCheckedToken] = useState<string | null>(null);
+
+  const active = isActive && !!token;
 
   // ── Load corp status + access status when the Corp tab becomes active OR the
   //    selected character (token) changes. Re-keying on the token value (not just
@@ -43,10 +46,6 @@ export function useCorpData(
     if (!isActive || !token) return;
 
     let cancelled = false;
-    setLoading(true);
-    // Clear stale access so a character switch never briefly shows the previous
-    // character's corp access (or denial) before the re-check resolves.
-    setAccessStatus(null);
 
     Promise.allSettled([
       // v1.14.0 — status is now per-character (the selected Director's corp)
@@ -63,18 +62,23 @@ export function useCorpData(
           console.warn('Corp status check failed:', (statusResult.reason as Error)?.message);
         }
         if (accessResult.status === 'fulfilled') {
-          setAccessStatus(accessResult.value);
+          setAccess({ token, value: accessResult.value });
         } else {
           console.warn('Corp access check failed:', (accessResult.reason as Error)?.message);
         }
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) setCheckedToken(token);
       });
 
     return () => { cancelled = true; };
   // Re-fire on Corp-tab activation AND whenever the selected character's token changes
   }, [isActive, token]);
+
+  // Derived: a character switch never briefly shows the previous character's corp access (or denial) — it is
+  // hidden on the same render the token changes, and loading is true until the new checks finish.
+  const accessStatus = access !== null && access.token === token ? access.value : null;
+  const loading = active && checkedToken !== token;
 
   return { corpStatus, accessStatus, loading };
 }
