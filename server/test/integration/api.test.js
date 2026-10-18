@@ -175,6 +175,23 @@ describe('AI advisor', () => {
   });
 });
 
+describe('error responses', () => {
+  it('answers malformed JSON with a JSON 400, not an HTML page', async () => {
+    const res = await as(PILOT).post('/api/true-cost', '{ not json').set('Content-Type', 'application/json');
+    expect(res.status).toBe(400);
+    expect(res.headers['content-type']).toMatch(/json/);
+    expect(res.body.error).toBeTruthy();
+    expect(res.text).not.toMatch(/<pre>|at .*.js:d+/); // no stack trace
+  });
+
+  it('answers an oversized body with a JSON 413', async () => {
+    const big = JSON.stringify({ blob: 'x'.repeat(6 * 1024 * 1024) });
+    const res = await as(PILOT).post('/api/session-data', big).set('Content-Type', 'application/json');
+    expect(res.status).toBe(413);
+    expect(res.body.error).toBeTruthy();
+  });
+});
+
 describe('isolation', () => {
   it('never reached the real internet', () => {
     const blocked = upstreamCalls().filter((l) => l.startsWith('BLOCKED-GLOBAL-FETCH'));

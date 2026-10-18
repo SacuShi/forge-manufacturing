@@ -21,6 +21,13 @@ const IM = require('./lib/industry-math');  // shared manufacturing mechanics (r
 // 404/500 but env vars are missing. This has caused three production outages (June 2026).
 // Do not 'simplify' these. Any agent or developer who removes __dirname here is wrong.
 require('dotenv').config({ path: require('path').join(__dirname, '.env') });
+const config = require('./lib/config');
+const logger = require('./lib/logger');
+const { forwardRejectionsOn, createErrorHandler } = require('./lib/http-errors');
+{
+  const missing = config.missingRecommended();
+  if (missing.length) logger.warn(`⚠ Not configured (the features that need them will return errors): ${missing.join(', ')}`);
+}
 
 // ── Push notifications (web-push) ─────────────────────────────────────────────
 // Must be after dotenv.config() so VAPID keys are available in process.env.
@@ -29,22 +36,25 @@ require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 let webpush = null;
 try {
   webpush = require('web-push');
-  if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
+  if (config.vapid.publicKey && config.vapid.privateKey) {
     webpush.setVapidDetails(
       'mailto:admin@forge-ukc.com',
-      process.env.VAPID_PUBLIC_KEY,
-      process.env.VAPID_PRIVATE_KEY
+      config.vapid.publicKey,
+      config.vapid.privateKey
     );
-    console.log('✓ Push notifications: VAPID configured');
+    logger.info('✓ Push notifications: VAPID configured');
   } else {
-    console.warn('⚠ Push notifications: VAPID keys not set in .env — push disabled');
+    logger.warn('⚠ Push notifications: VAPID keys not set in .env — push disabled');
     webpush = null;
   }
-} catch { console.warn('⚠ Push notifications: web-push not installed — push disabled'); }
+} catch { logger.warn('⚠ Push notifications: web-push not installed — push disabled'); }
 
 const app = express();
+// Express 4 ignores rejected promises from async handlers; forward them to the error handler (registered last).
+forwardRejectionsOn(app);
+forwardRejectionsOn(express.Router);
 app.set('trust proxy', 1); // Trust Cloudflared proxy
-const PORT = process.env.PORT || 3000;
+const PORT = config.port;
 
 // ── ESI HTTP helper ───────────────────────────────────────────────────────────
 // EVE ESI policy requires a descriptive User-Agent on every outbound request.
@@ -63,7 +73,7 @@ async function esiFetch(url, opts = {}) {
   // Caller receives the retry response and handles any further failure.
   if (res.status === 429) {
     const wait = parseInt(res.headers.get('Retry-After') || '5', 10);
-    console.warn(`⚠ ESI 429 rate-limit on ${url} — waiting ${wait}s then retrying`);
+    logger.warn(`⚠ ESI 429 rate-limit on ${url} — waiting ${wait}s then retrying`);
     await new Promise(r => setTimeout(r, wait * 1000));
     return fetch(url, Object.assign({}, opts, { headers }));
   }
@@ -73,10 +83,10 @@ async function esiFetch(url, opts = {}) {
 
 // ── Global process error handlers ────────────────────────────────────────────
 process.on('unhandledRejection', (reason) => {
-  console.error('⚠ Unhandled promise rejection:', reason);
+  logger.error('⚠ Unhandled promise rejection:', reason);
 });
 process.on('uncaughtException', (err) => {
-  console.error('⚠ Uncaught exception:', err);
+  logger.error('⚠ Uncaught exception:', err);
   process.exit(1);
 });
 
@@ -114,12 +124,12 @@ function initDatabase() {
   return new Promise((resolve, reject) => {
     db = new sqlite3.Database(DB_PATH, (err) => {
       if (err) {
-        console.error('❌ Database not found. Run seed script first:');
-        console.log('   mkdir -p ../forge-db');
-        console.log('   cd ../forge-db && node seed.js');
+        logger.error('❌ Database not found. Run seed script first:');
+        logger.info('   mkdir -p ../forge-db');
+        logger.info('   cd ../forge-db && node seed.js');
         reject(err);
       } else {
-        console.log('✓ Connected to SQLite database');
+        logger.info('✓ Connected to SQLite database');
         // WAL mode: allows concurrent readers while a write is in progress.
         // Without this, the precompute/volume-copy UPDATE locks every incoming request.
         db.run('PRAGMA journal_mode=WAL', () => {
@@ -165,12 +175,12 @@ async function addColumn(table, spec) {
   try {
     await dbRun(`ALTER TABLE ${table} ADD COLUMN ${spec}`);
   } catch (err) {
-    if (!/duplicate column name/i.test(err.message)) console.error(`� migration: ALTER TABLE ${table} ADD COLUMN ${spec} failed: ${err.message}`);
+    if (!/duplicate column name/i.test(err.message)) logger.error(`� migration: ALTER TABLE ${table} ADD COLUMN ${spec} failed: ${err.message}`);
   }
 }
 
 async function runMigrations() {
-  console.log('⟳ Running database migrations...');
+  logger.info('⟳ Running database migrations...');
 
   // Pre-computed profitability table
   await dbRun(`
@@ -275,7 +285,7 @@ async function runMigrations() {
     `SELECT 1 FROM pragma_table_info('precomputed_profits') WHERE name = 'region_id'`
   );
   if (!hasRegionId) {
-    console.log('⟳ v1.1 migration: recreating precomputed_profits with multi-region schema...');
+    logger.info('⟳ v1.1 migration: recreating precomputed_profits with multi-region schema...');
     await dbRun('DROP TABLE IF EXISTS precomputed_profits');
     await dbRun(`
       CREATE TABLE precomputed_profits (
@@ -304,7 +314,7 @@ async function runMigrations() {
     await dbRun(`CREATE INDEX IF NOT EXISTS idx_precomputed_margin  ON precomputed_profits (region_id, profit_margin DESC)`);
     await dbRun(`CREATE INDEX IF NOT EXISTS idx_precomputed_isk_hr  ON precomputed_profits (region_id, isk_per_hour DESC)`);
     await dbRun(`CREATE INDEX IF NOT EXISTS idx_precomputed_product ON precomputed_profits (product_id)`);
-    console.log('✓ precomputed_profits migrated to multi-region schema');
+    logger.info('✓ precomputed_profits migrated to multi-region schema');
   }
 
   // v1.2.0 migration: product_id index for fast volume copy
@@ -819,7 +829,7 @@ async function runMigrations() {
     }
   } catch (_) { /* test tables may not exist on a fresh install */ }
 
-  console.log('✓ Database migrations complete');
+  logger.info('✓ Database migrations complete');
 }
 
 // ── Error sanitisation ────────────────────────────────────────────────────────
@@ -868,9 +878,9 @@ const CORP_ENCRYPTION_KEY = (() => {
   // Derive a fixed 32-byte key from FORGE_CORP_KEY (env var) via SHA-256.
   // If the env var is not set, the server still boots but corp setup will fail
   // loudly — this is intentional (don't silently use a predictable key).
-  const raw = process.env.FORGE_CORP_KEY || '';
+  const raw = config.corpKey;
   if (!raw) {
-    console.warn('⚠ FORGE_CORP_KEY not set — corp token encryption disabled. Set this env var before using corp features.');
+    logger.warn('⚠ FORGE_CORP_KEY not set — corp token encryption disabled. Set this env var before using corp features.');
     return null;
   }
   return crypto.createHash('sha256').update(raw).digest(); // 32-byte Buffer
@@ -881,9 +891,9 @@ const CORP_ENCRYPTION_KEY = (() => {
 // decrypt the other (corp director tokens vs. individual players' alt tokens
 // are very different blast radii). Same derivation pattern as above.
 const REMEMBER_ENCRYPTION_KEY = (() => {
-  const raw = process.env.FORGE_REMEMBER_KEY || '';
+  const raw = config.rememberKey;
   if (!raw) {
-    console.warn('⚠ FORGE_REMEMBER_KEY not set — "Remember my characters" disabled. Set this env var to enable it.');
+    logger.warn('⚠ FORGE_REMEMBER_KEY not set — "Remember my characters" disabled. Set this env var to enable it.');
     return null;
   }
   return crypto.createHash('sha256').update(raw).digest();
@@ -943,8 +953,8 @@ async function refreshCorpAccessToken(corpId) {
     config.token_tag
   );
 
-  const clientId     = process.env.EVE_CLIENT_ID;
-  const clientSecret = process.env.EVE_CLIENT_SECRET;
+  const clientId     = config.eve.clientId;
+  const clientSecret = config.eve.clientSecret;
   const authHeader   = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
 
   const res = await esiFetch('https://login.eveonline.com/v2/oauth/token', {
@@ -971,7 +981,7 @@ async function refreshCorpAccessToken(corpId) {
        WHERE corp_id = ?`,
       [enc.ciphertext, enc.iv, enc.tag, corpId]
     );
-    console.log(`✓ Corp ${corpId}: refresh token rotated and re-encrypted`);
+    logger.info(`✓ Corp ${corpId}: refresh token rotated and re-encrypted`);
   }
 
   return data.access_token;
@@ -1028,14 +1038,14 @@ async function ensureCorpDataFresh(corpId, accessToken, { force = false } = {}) 
   if (!force && Date.now() - last < CORP_DATA_TTL_MS) return;
   if (corpRefreshInFlight.has(corpId)) { try { await corpRefreshInFlight.get(corpId); } catch (_) {} return; }
   const p = refreshCorpData(corpId, accessToken)
-    .catch(err => { console.warn(`⚠ Corp ${corpId} on-demand refresh failed: ${err.message}`); })
+    .catch(err => { logger.warn(`⚠ Corp ${corpId} on-demand refresh failed: ${err.message}`); })
     .finally(() => corpRefreshInFlight.delete(corpId));
   corpRefreshInFlight.set(corpId, p);
   await p;
 }
 
 async function refreshCorpData(corpId, providedAccessToken = null) {
-  console.log(`⟳ Corp ${corpId}: refreshing ESI data...`);
+  logger.info(`⟳ Corp ${corpId}: refreshing ESI data...`);
   try {
     // v1.14.0: prefer the viewing Director's access token (dynamic any-corp model);
     // fall back to the legacy stored corp refresh token if one was ever configured.
@@ -1065,7 +1075,7 @@ async function refreshCorpData(corpId, providedAccessToken = null) {
         ]
       );
     }
-    console.log(`  ✓ Corp ${corpId}: ${bps.length} blueprints cached`);
+    logger.info(`  ✓ Corp ${corpId}: ${bps.length} blueprints cached`);
 
     // ── Assets ───────────────────────────────────────────────────────────────
     const assets = await esiCorpFetchAll(
@@ -1088,7 +1098,7 @@ async function refreshCorpData(corpId, providedAccessToken = null) {
         ]
       );
     }
-    console.log(`  ✓ Corp ${corpId}: ${assets.length} assets cached`);
+    logger.info(`  ✓ Corp ${corpId}: ${assets.length} assets cached`);
 
     // ── Industry Jobs ────────────────────────────────────────────────────────
     const jobs = await esiCorpFetchAll(
@@ -1123,14 +1133,14 @@ async function refreshCorpData(corpId, providedAccessToken = null) {
               }
             }
           } else {
-            console.warn(`  ⚠ Corp ${corpId}: /universe/names/ returned ${r.status} for installer IDs`);
+            logger.warn(`  ⚠ Corp ${corpId}: /universe/names/ returned ${r.status} for installer IDs`);
           }
         } catch (nameErr) {
           // Non-fatal — jobs still get stored, installer_name will be null
-          console.warn(`  ⚠ Corp ${corpId}: installer name lookup failed — ${nameErr.message}`);
+          logger.warn(`  ⚠ Corp ${corpId}: installer name lookup failed — ${nameErr.message}`);
         }
       }
-      console.log(`  ✓ Corp ${corpId}: resolved ${Object.keys(installerNames).length}/${installerIds.length} installer names`);
+      logger.info(`  ✓ Corp ${corpId}: resolved ${Object.keys(installerNames).length}/${installerIds.length} installer names`);
     }
 
     // ── replace corp_jobs ──
@@ -1160,7 +1170,7 @@ async function refreshCorpData(corpId, providedAccessToken = null) {
         ]
       );
     }
-    console.log(`  ✓ Corp ${corpId}: ${jobs.length} active jobs cached`);
+    logger.info(`  ✓ Corp ${corpId}: ${jobs.length} active jobs cached`);
 
     // Update last_refresh timestamp
     await dbRun(
@@ -1169,7 +1179,7 @@ async function refreshCorpData(corpId, providedAccessToken = null) {
        WHERE corp_id = ?`,
       [corpId]
     );
-    console.log(`✓ Corp ${corpId}: ESI data refresh complete`);
+    logger.info(`✓ Corp ${corpId}: ESI data refresh complete`);
     corpDataRefreshedAt.set(corpId, Date.now());
     if (corpDataRefreshedAt.size > 500) {
       const cutoff = Date.now() - 3600000;
@@ -1180,7 +1190,7 @@ async function refreshCorpData(corpId, providedAccessToken = null) {
     return { ok: true, blueprints: bps.length, assets: assets.length, jobs: jobs.length };
 
   } catch (err) {
-    console.error(`❌ Corp ${corpId}: ESI refresh failed — ${err.message}`);
+    logger.error(`❌ Corp ${corpId}: ESI refresh failed — ${err.message}`);
     await dbRun(
       `UPDATE corp_config
          SET last_refresh_status = ?, updated_at = datetime('now')
@@ -1281,7 +1291,7 @@ async function resolveViewerCorpAccess(characterId, bearerToken) {
       }
     }
   } catch (esiErr) {
-    console.warn(`Corp access resolve failed for ${characterId}: ${esiErr.message}`);
+    logger.warn(`Corp access resolve failed for ${characterId}: ${esiErr.message}`);
     ttl = DIRECTOR_CACHE_TTL_SHORT;
   }
 
@@ -1314,7 +1324,7 @@ async function requireDirectorRole(req, res, next) {
     req.corpAccessToken = token;
     return next();
   } catch (err) {
-    console.error('requireDirectorRole error:', err.message);
+    logger.error('requireDirectorRole error:', err.message);
     return res.status(500).json({ error: 'Access check failed' });
   }
 }
@@ -1325,7 +1335,7 @@ async function requireDirectorRole(req, res, next) {
 async function fetchRegionPrices(regionId) {
   if (regionId === KEEPSTAR_REGION_ID) return fetchStructureMarketPrices();
 
-  console.log(`⟳ Fetching prices for region ${regionId}...`);
+  logger.info(`⟳ Fetching prices for region ${regionId}...`);
   const startTime = Date.now();
 
   const buyOrders = [];
@@ -1339,7 +1349,7 @@ async function fetchRegionPrices(regionId) {
         `?datasource=tranquility&order_type=sell&page=${page}`
       );
       if (!res.ok) {
-        console.warn(`⚠ Sell orders page ${page} returned ${res.status}, stopping pagination`);
+        logger.warn(`⚠ Sell orders page ${page} returned ${res.status}, stopping pagination`);
         break;
       }
       const data = await res.json();
@@ -1349,7 +1359,7 @@ async function fetchRegionPrices(regionId) {
       if (!xPages || page >= parseInt(xPages)) break;
       await new Promise(r => setTimeout(r, 100));
     } catch (err) {
-      console.error(`⚠ Error fetching sell orders page ${page}:`, err.message);
+      logger.error(`⚠ Error fetching sell orders page ${page}:`, err.message);
       break;
     }
   }
@@ -1362,7 +1372,7 @@ async function fetchRegionPrices(regionId) {
         `?datasource=tranquility&order_type=buy&page=${page}`
       );
       if (!res.ok) {
-        console.warn(`⚠ Buy orders page ${page} returned ${res.status}, stopping pagination`);
+        logger.warn(`⚠ Buy orders page ${page} returned ${res.status}, stopping pagination`);
         break;
       }
       const data = await res.json();
@@ -1372,7 +1382,7 @@ async function fetchRegionPrices(regionId) {
       if (!xPages || page >= parseInt(xPages)) break;
       await new Promise(r => setTimeout(r, 100));
     } catch (err) {
-      console.error(`⚠ Error fetching buy orders page ${page}:`, err.message);
+      logger.error(`⚠ Error fetching buy orders page ${page}:`, err.message);
       break;
     }
   }
@@ -1469,7 +1479,7 @@ async function fetchRegionPrices(regionId) {
   const durationMs = Date.now() - startTime;
   const outlierNote = (outlierMargin + outlierNoBid) > 0
     ? `, ${outlierNoBid} no-bid + ${outlierMargin} margin outliers filtered` : '';
-  console.log(`✓ Region ${regionId} prices loaded — ${Object.keys(prices).length} items ` +
+  logger.info(`✓ Region ${regionId} prices loaded — ${Object.keys(prices).length} items ` +
               `(${buyOrders.length} buy + ${sellOrders.length} sell orders` +
               `${outlierNote}) in ${(durationMs / 1000).toFixed(1)}s`);
 
@@ -1493,7 +1503,7 @@ async function fetchStructureMarketPrices() {
   const token = await getOrRefreshStructureToken();
   if (!token) throw new Error('No active alliance token and no stored refresh token — visit /api/ks-test-auth to authorise');
 
-  console.log(`⟳ Fetching Keepstar structure market (${KEEPSTAR_STRUCTURE_ID})...`);
+  logger.info(`⟳ Fetching Keepstar structure market (${KEEPSTAR_STRUCTURE_ID})...`);
   const startTime = Date.now();
 
   let page = 1, allOrders = [];
@@ -1547,7 +1557,7 @@ async function fetchStructureMarketPrices() {
   }
 
   const durationMs = Date.now() - startTime;
-  console.log(`✓ Keepstar market loaded — ${Object.keys(prices).length} types, ` +
+  logger.info(`✓ Keepstar market loaded — ${Object.keys(prices).length} types, ` +
               `${allOrders.length} orders in ${(durationMs / 1000).toFixed(1)}s`);
   return HP.attachDepth(prices, depthAcc.finish());
 }
@@ -1560,8 +1570,8 @@ app.post('/api/eve-token', security.authLimiter, async (req, res) => {
       return res.status(400).json({ error: "Missing code or redirect_uri" });
     }
 
-    const clientId = process.env.EVE_CLIENT_ID;
-    const clientSecret = process.env.EVE_CLIENT_SECRET;
+    const clientId = config.eve.clientId;
+    const clientSecret = config.eve.clientSecret;
 
     const auth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
     const tokenRes = await fetch('https://login.eveonline.com/v2/oauth/token', {
@@ -1576,11 +1586,11 @@ app.post('/api/eve-token', security.authLimiter, async (req, res) => {
 
     const tokenData = await tokenRes.json();
     if (!tokenRes.ok) {
-      console.error("EVE OAuth error:", tokenData.error, tokenData.error_description);
+      logger.error("EVE OAuth error:", tokenData.error, tokenData.error_description);
       return res.status(400).json({ error: tokenData.error_description || "Token exchange failed" });
     }
 
-    console.log("✓ EVE OAuth successful");
+    logger.info("✓ EVE OAuth successful");
 
     // ── "Remember my characters" capture (alt-add only) ───────────────────────
     // Only runs when the client asks for it (remember=true, sent when adding an
@@ -1591,7 +1601,7 @@ app.post('/api/eve-token', security.authLimiter, async (req, res) => {
       try {
         await captureRememberedCharacter(req.headers.authorization, tokenData);
       } catch (e) {
-        console.warn('⚠ Remember-character capture failed (alt still logs in normally):', e.message);
+        logger.warn('⚠ Remember-character capture failed (alt still logs in normally):', e.message);
       }
     }
 
@@ -1599,7 +1609,7 @@ app.post('/api/eve-token', security.authLimiter, async (req, res) => {
     res.json({ access_token: tokenData.access_token });
 
   } catch (err) {
-    console.error("OAuth error:", err.message);
+    logger.error("OAuth error:", err.message);
     res.status(500).json({ error: clientErrMsg(err) });
   }
 });
@@ -1732,7 +1742,7 @@ async function captureRememberedCharacter(mainAuthHeader, tokenData) {
      payload.owner || '', scopesStr]
   );
 
-  console.log(`✓ Remembered alt ${characterName} (${altCharacterId}) under main ${mainCharacterId}`);
+  logger.info(`✓ Remembered alt ${characterName} (${altCharacterId}) under main ${mainCharacterId}`);
 }
 
 // GET current remember preference for the logged-in main.
@@ -1828,8 +1838,8 @@ app.post('/api/remember/restore', security.authLimiter, security.verifyEveToken,
       [req.characterId, ...requested]
     );
 
-    const clientId     = process.env.EVE_CLIENT_ID;
-    const clientSecret  = process.env.EVE_CLIENT_SECRET;
+    const clientId     = config.eve.clientId;
+    const clientSecret  = config.eve.clientSecret;
     const basicAuth     = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
 
     const results = await Promise.all(rows.map(async (row) => {
@@ -1886,7 +1896,7 @@ app.post('/api/remember/restore', security.authLimiter, security.verifyEveToken,
 
     res.json({ results });
   } catch (err) {
-    console.error('Remember-restore error:', err.message);
+    logger.error('Remember-restore error:', err.message);
     res.status(500).json({ error: clientErrMsg(err) });
   }
 });
@@ -1932,7 +1942,7 @@ async function warmAllRegions() {
       const prices = await fetchRegionPrices(regionId);
       setRegionPriceCache(regionId, prices);
     } catch (err) {
-      console.warn(`⚠ warmAllRegions: region ${regionId} failed:`, err.message);
+      logger.warn(`⚠ warmAllRegions: region ${regionId} failed:`, err.message);
     } finally {
       regionWarmingSet.delete(regionId);
     }
@@ -1971,9 +1981,9 @@ async function loadHistoryPriceMap() {
   try {
     const rows = await dbAll('SELECT type_id, avg_30d_price FROM item_history_prices WHERE avg_30d_price > 0');
     historyPriceMap = new Map(rows.map(r => [r.type_id, r.avg_30d_price]));
-    console.log(`✓ History price map loaded — ${historyPriceMap.size} items`);
+    logger.info(`✓ History price map loaded — ${historyPriceMap.size} items`);
   } catch (err) {
-    console.error('⚠ Failed to load history price map:', err.message);
+    logger.error('⚠ Failed to load history price map:', err.message);
   }
 }
 
@@ -1989,9 +1999,9 @@ async function loadGlobalItemNameMap() {
     const rows = await dbAll("SELECT type_id, name FROM items WHERE name IS NOT NULL AND name != ''");
     globalItemNameMap = new Map(rows.map(r => [r.type_id, r.name]));
     globalNameToTypeId = new Map(rows.map(r => [r.name.toLowerCase(), r.type_id]));
-    console.log(`✓ Global item name map loaded — ${globalItemNameMap.size} items`);
+    logger.info(`✓ Global item name map loaded — ${globalItemNameMap.size} items`);
   } catch (err) {
-    console.error('⚠ Failed to load global item name map:', err.message);
+    logger.error('⚠ Failed to load global item name map:', err.message);
   }
 }
 
@@ -2009,14 +2019,14 @@ async function loadBlueprintMaterialsCache() {
         blueprintMaterialsCache.set(r.blueprint_id, []);
       blueprintMaterialsCache.get(r.blueprint_id).push({ material_id: r.material_id, quantity: r.quantity });
     }
-    console.log(`✓ Blueprint materials cache loaded — ${blueprintMaterialsCache.size} blueprints`);
+    logger.info(`✓ Blueprint materials cache loaded — ${blueprintMaterialsCache.size} blueprints`);
 
     const bpRows = await dbAll('SELECT blueprint_id, product_id FROM blueprints WHERE product_id IS NOT NULL');
     productToBlueprintCache.clear();
     for (const r of bpRows) productToBlueprintCache.set(r.product_id, r.blueprint_id);
-    console.log(`✓ Product→blueprint cache loaded — ${productToBlueprintCache.size} entries`);
+    logger.info(`✓ Product→blueprint cache loaded — ${productToBlueprintCache.size} entries`);
   } catch (err) {
-    console.error('⚠ Failed to load blueprint materials cache:', err.message);
+    logger.error('⚠ Failed to load blueprint materials cache:', err.message);
   }
 }
 
@@ -2144,10 +2154,10 @@ async function loadHubSnapshots() {
       const parsed = JSON.parse(row.snapshot);
       hubBooks.jita = new Map(Object.entries(parsed).map(([k, v]) => [parseInt(k, 10), v]));
       hubMetas.jita = { updatedAt: 0, expiresAt: 0, fetching: false, lastError: null, types: hubBooks.jita.size };
-      console.log(`✓ Jita book snapshot loaded — ${hubBooks.jita.size} types (from ${row.updated_at} UTC)`);
-      refreshHubNameMap('jita', [...hubBooks.jita.keys()]).catch(e => console.warn('Name map load error:', e.message));
+      logger.info(`✓ Jita book snapshot loaded — ${hubBooks.jita.size} types (from ${row.updated_at} UTC)`);
+      refreshHubNameMap('jita', [...hubBooks.jita.keys()]).catch(e => logger.warn('Name map load error:', e.message));
     }
-  } catch (e) { console.warn('⚠ Could not load Jita snapshot:', e.message); }
+  } catch (e) { logger.warn('⚠ Could not load Jita snapshot:', e.message); }
 
   // Non-Jita hubs: hub_book_cache table
   for (const hubId of HUB_IDS.filter(h => h !== 'jita')) {
@@ -2157,10 +2167,10 @@ async function loadHubSnapshots() {
         const parsed = JSON.parse(row.snapshot);
         hubBooks[hubId] = new Map(Object.entries(parsed).map(([k, v]) => [parseInt(k, 10), v]));
         hubMetas[hubId] = { updatedAt: 0, expiresAt: 0, fetching: false, lastError: null, types: hubBooks[hubId].size };
-        console.log(`✓ ${HUB_CONFIG[hubId].name} snapshot loaded — ${hubBooks[hubId].size} types (from ${row.updated_at} UTC)`);
-        refreshHubNameMap(hubId, [...hubBooks[hubId].keys()]).catch(e => console.warn(`Name map load error (${hubId}):`, e.message));
+        logger.info(`✓ ${HUB_CONFIG[hubId].name} snapshot loaded — ${hubBooks[hubId].size} types (from ${row.updated_at} UTC)`);
+        refreshHubNameMap(hubId, [...hubBooks[hubId].keys()]).catch(e => logger.warn(`Name map load error (${hubId}):`, e.message));
       }
-    } catch (e) { console.warn(`⚠ Could not load ${hubId} snapshot:`, e.message); }
+    } catch (e) { logger.warn(`⚠ Could not load ${hubId} snapshot:`, e.message); }
   }
 }
 
@@ -2224,10 +2234,10 @@ async function fetchTradePage(regionId, stationId, orderType, page) {
 function persistHubSnapshot(hubId, snap) {
   if (hubId === 'jita') {
     dbRun(`INSERT OR REPLACE INTO jita_book_cache (id, snapshot, updated_at) VALUES (1, ?, datetime('now'))`, [snap])
-      .catch(e => console.error('jita_book_cache write error:', e.message));
+      .catch(e => logger.error('jita_book_cache write error:', e.message));
   } else {
     dbRun(`INSERT OR REPLACE INTO hub_book_cache (hub_id, snapshot, updated_at) VALUES (?, ?, datetime('now'))`, [hubId, snap])
-      .catch(e => console.error(`hub_book_cache write error (${hubId}):`, e.message));
+      .catch(e => logger.error(`hub_book_cache write error (${hubId}):`, e.message));
   }
 }
 
@@ -2276,7 +2286,7 @@ async function pollFuzzworkHub(hubId) {
       for (const result of batchResults) {
         if (result.status !== 'fulfilled') {
           failedChunks++;
-          console.warn(`⚠ Fuzzwork ${hubId} chunk failed: ${result.reason?.message || result.reason}`);
+          logger.warn(`⚠ Fuzzwork ${hubId} chunk failed: ${result.reason?.message || result.reason}`);
           continue;
         }
         for (const [typeIdStr, agg] of Object.entries(result.value)) {
@@ -2309,9 +2319,9 @@ async function pollFuzzworkHub(hubId) {
     Object.assign(hubMetas[hubId], { updatedAt: Date.now(), expiresAt: Date.now() + TRADE_POLL_FALLBACK_MS, fetching: false, lastError: null, types: newBook.size });
 
     const failNote = failedChunks ? ` (${failedChunks} chunks skipped)` : '';
-    console.log(`⟳ ${cfg.name} book refreshed via Fuzzwork — ${newBook.size} types in ${((Date.now() - started) / 1000).toFixed(1)}s${failNote}`);
+    logger.info(`⟳ ${cfg.name} book refreshed via Fuzzwork — ${newBook.size} types in ${((Date.now() - started) / 1000).toFixed(1)}s${failNote}`);
 
-    refreshHubNameMap(hubId, [...newBook.keys()]).catch(e => console.error(`Name map error (${hubId}):`, e.message));
+    refreshHubNameMap(hubId, [...newBook.keys()]).catch(e => logger.error(`Name map error (${hubId}):`, e.message));
 
     // Persist snapshot (non-blocking)
     setImmediate(() => {
@@ -2320,13 +2330,13 @@ async function pollFuzzworkHub(hubId) {
     });
 
     if (Date.now() - lastTradingRequestAt < 60_000 || hubEnrichPending[hubId]) {
-      runHubHistoryEnrichment(hubId).catch(e => console.error(`History enrichment error (${hubId}):`, e.message));
+      runHubHistoryEnrichment(hubId).catch(e => logger.error(`History enrichment error (${hubId}):`, e.message));
     }
 
   } catch (err) {
     hubMetas[hubId].fetching = false;
     hubMetas[hubId].lastError = err.message;
-    console.error(`⚠ Fuzzwork fallback poll failed for ${hubId}:`, err.message);
+    logger.error(`⚠ Fuzzwork fallback poll failed for ${hubId}:`, err.message);
   }
 
   scheduleNextHubPoll(hubId, !!hubMetas[hubId].lastError);
@@ -2396,14 +2406,14 @@ async function pollHubESI(hubId) {
         // let Fuzzwork fill the gap this cycle instead.
         meta.fetching = false;
         meta.lastError = 'empty-result-suspected-rate-limit';
-        console.warn(`⚠ ${cfg.name} ESI poll returned 0 types (suspected rate-limit degradation) — keeping last good book, trying Fuzzwork`);
+        logger.warn(`⚠ ${cfg.name} ESI poll returned 0 types (suspected rate-limit degradation) — keeping last good book, trying Fuzzwork`);
         return pollFuzzworkHub(hubId); // schedules its own next poll — don't schedule here too
       }
 
       hubBooks[hubId] = newBook;
       Object.assign(hubMetas[hubId], { updatedAt: Date.now(), expiresAt: latestExpires || (Date.now() + TRADE_POLL_FALLBACK_MS), fetching: false, lastError: null, types: newBook.size });
-      console.log(`⟳ ${cfg.name} book refreshed via ESI — ${newBook.size} types in ${((Date.now() - started) / 1000).toFixed(1)}s`);
-      refreshHubNameMap(hubId, [...newBook.keys()]).catch(e => console.error(`Name map error (${hubId}):`, e.message));
+      logger.info(`⟳ ${cfg.name} book refreshed via ESI — ${newBook.size} types in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+      refreshHubNameMap(hubId, [...newBook.keys()]).catch(e => logger.error(`Name map error (${hubId}):`, e.message));
 
       // Persist snapshot (strip buyOrderBook — it's memory-only, repopulated on next poll)
       setImmediate(() => {
@@ -2413,7 +2423,7 @@ async function pollHubESI(hubId) {
         persistHubSnapshot(hubId, snap);
       });
       if (Date.now() - lastTradingRequestAt < 60_000 || hubEnrichPending[hubId]) {
-        runHubHistoryEnrichment(hubId).catch(e => console.error(`History enrichment error (${hubId}):`, e.message));
+        runHubHistoryEnrichment(hubId).catch(e => logger.error(`History enrichment error (${hubId}):`, e.message));
       }
     } else {
       // Error-budget backoff (mid-pagination, unlike the all-pages-succeeded-but-
@@ -2426,16 +2436,16 @@ async function pollHubESI(hubId) {
       // so it's safe to use here regardless of why ESI backed off.
       meta.fetching = false;
       meta.lastError = 'error-budget-backoff';
-      console.warn(`⚠ ${cfg.name} ESI poll backed off (low error budget) — keeping last good book`);
+      logger.warn(`⚠ ${cfg.name} ESI poll backed off (low error budget) — keeping last good book`);
       if (!hubBooks[hubId] || hubBooks[hubId].size === 0) {
-        console.warn(`⚠ ${cfg.name} has no usable cached book — trying Fuzzwork`);
+        logger.warn(`⚠ ${cfg.name} has no usable cached book — trying Fuzzwork`);
         return pollFuzzworkHub(hubId); // schedules its own next poll — don't schedule here too
       }
     }
   } catch (err) {
     meta.fetching = false;
     meta.lastError = err.message;
-    console.error(`⚠ ${cfg.name} ESI poll failed:`, err.message, '— falling back to Fuzzwork');
+    logger.error(`⚠ ${cfg.name} ESI poll failed:`, err.message, '— falling back to Fuzzwork');
     return pollFuzzworkHub(hubId);
   }
 
@@ -2446,7 +2456,7 @@ function scheduleNextHubPoll(hubId, backoff) {
   if (hubPollTimers[hubId]) { clearTimeout(hubPollTimers[hubId]); delete hubPollTimers[hubId]; }
   if (Date.now() - lastTradingRequestAt > TRADE_IDLE_STOP_MS) {
     hubPollRunning[hubId] = false;
-    console.log(`⏸ ${HUB_CONFIG[hubId].name} poller idle — pausing until next request`);
+    logger.info(`⏸ ${HUB_CONFIG[hubId].name} poller idle — pausing until next request`);
     return;
   }
   const meta = hubMetas[hubId];
@@ -2461,7 +2471,7 @@ function scheduleNextHubPoll(hubId, backoff) {
  *  Staggers initial polls 90 s apart to avoid simultaneous Fuzzwork/ESI bursts. */
 function ensureHubPollerRunning(hubId) {
   lastTradingRequestAt = Date.now();
-  if (process.env.DISABLE_TRADING_POLLER === '1') return;
+  if (config.disableTradingPoller) return;
   if (hubPollRunning[hubId]) return;
   hubPollRunning[hubId] = true;
 
@@ -2471,10 +2481,10 @@ function ensureHubPollerRunning(hubId) {
 
   const pollFn = HUB_CONFIG[hubId].isStructure ? pollStructureHub : pollHubESI;
   if (delay > 0) {
-    console.log(`▶ ${HUB_CONFIG[hubId].name} poller starting (staggered ${Math.round(delay / 1000)}s)`);
+    logger.info(`▶ ${HUB_CONFIG[hubId].name} poller starting (staggered ${Math.round(delay / 1000)}s)`);
     setTimeout(() => pollFn(hubId), delay);
   } else {
-    console.log(`▶ ${HUB_CONFIG[hubId].name} poller starting`);
+    logger.info(`▶ ${HUB_CONFIG[hubId].name} poller starting`);
     pollFn(hubId);
   }
 }
@@ -2487,7 +2497,7 @@ async function pollStructureHub(hubId) {
 
   const token = await getOrRefreshStructureToken();
   if (!token) {
-    console.log(`⏸ ${cfg.name} poller: no active token — will retry`);
+    logger.info(`⏸ ${cfg.name} poller: no active token — will retry`);
     scheduleNextHubPoll(hubId, true); // backoff
     return;
   }
@@ -2538,8 +2548,8 @@ async function pollStructureHub(hubId) {
 
     hubBooks[hubId] = newBook;
     Object.assign(hubMetas[hubId], { updatedAt: Date.now(), expiresAt: Date.now() + TRADE_POLL_FALLBACK_MS, fetching: false, lastError: null, types: newBook.size });
-    console.log(`⟳ ${cfg.name} book refreshed — ${newBook.size} types in ${((Date.now() - started) / 1000).toFixed(1)}s`);
-    refreshHubNameMap(hubId, [...newBook.keys()]).catch(e => console.error(`Name map error (${hubId}):`, e.message));
+    logger.info(`⟳ ${cfg.name} book refreshed — ${newBook.size} types in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+    refreshHubNameMap(hubId, [...newBook.keys()]).catch(e => logger.error(`Name map error (${hubId}):`, e.message));
 
     // Persist snapshot
     setImmediate(() => {
@@ -2550,7 +2560,7 @@ async function pollStructureHub(hubId) {
   } catch (err) {
     meta.fetching = false;
     meta.lastError = err.message;
-    console.error(`⚠ ${cfg.name} structure market poll failed:`, err.message);
+    logger.error(`⚠ ${cfg.name} structure market poll failed:`, err.message);
   }
 
   scheduleNextHubPoll(hubId, !!hubMetas[hubId].lastError);
@@ -2566,7 +2576,7 @@ async function runHubHistoryEnrichment(hubId) {
   if (enrichRunning) return;
   if (preComputeRunning) {
     hubEnrichPending[hubId] = true;
-    console.log(`⟳ ${HUB_CONFIG[hubId].name} history enrichment deferred — precompute active, will retry next poll`);
+    logger.info(`⟳ ${HUB_CONFIG[hubId].name} history enrichment deferred — precompute active, will retry next poll`);
     return;
   }
   hubEnrichPending[hubId] = false;
@@ -2592,12 +2602,12 @@ async function runHubHistoryEnrichment(hubId) {
 
     const toEnrich = [...hubBooks[hubId].keys()].filter(id => !freshSet.has(id));
     if (toEnrich.length === 0) {
-      console.log(`✓ ${cfg.name} history fully enriched`);
+      logger.info(`✓ ${cfg.name} history fully enriched`);
       enrichRunning = false;
       return;
     }
 
-    console.log(`⟳ ${cfg.name} history enrichment: ${toEnrich.length} items need ESI history`);
+    logger.info(`⟳ ${cfg.name} history enrichment: ${toEnrich.length} items need ESI history`);
     let done = 0;
     let lastErrorRemain = 100;
 
@@ -2611,7 +2621,7 @@ async function runHubHistoryEnrichment(hubId) {
         const errorRemain = parseInt(r.headers.get('x-esi-error-limit-remain') || '100', 10);
         lastErrorRemain = errorRemain;
         if (errorRemain < TRADE_MIN_ERROR_BUDGET || r.status === 420 || r.status >= 500) {
-          console.warn(`⚠ ${cfg.name} history enrichment pausing — ESI error budget low (${errorRemain} remain)`);
+          logger.warn(`⚠ ${cfg.name} history enrichment pausing — ESI error budget low (${errorRemain} remain)`);
           await new Promise(res => setTimeout(res, 60_000));
           break;
         }
@@ -2661,7 +2671,7 @@ async function runHubHistoryEnrichment(hubId) {
       await new Promise(res => setTimeout(res, delayMs));
     }
 
-    console.log(`✓ ${cfg.name} history enrichment complete: ${done}/${toEnrich.length} items`);
+    logger.info(`✓ ${cfg.name} history enrichment complete: ${done}/${toEnrich.length} items`);
   } finally {
     enrichRunning = false;
   }
@@ -2870,7 +2880,7 @@ app.post('/api/trading/scan', security.apiLimiter, security.verifyEveToken, asyn
       meta:              tradingMeta(hubId),
     });
   } catch (err) {
-    console.error('Trading scan error:', err);
+    logger.error('Trading scan error:', err);
     res.status(500).json({ error: 'Scan failed' });
   }
 });
@@ -2952,7 +2962,7 @@ app.get('/api/trading/character-orders', security.apiLimiter, security.verifyEve
 
     res.json({ orders, meta: tradingMeta() });
   } catch (err) {
-    console.error('Character orders error:', err);
+    logger.error('Character orders error:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -2986,7 +2996,7 @@ app.get('/api/can-dock-keepstar', security.apiLimiter, security.verifyEveToken, 
 app.get('/api/jita-prices', security.apiLimiter, async (req, res) => {
   try {
     if (jitaPricesCache && Date.now() < jitaPricesCacheExpiry) {
-      console.log(`✓ Jita prices (cached) — ${Object.keys(jitaPricesCache).length} items`);
+      logger.info(`✓ Jita prices (cached) — ${Object.keys(jitaPricesCache).length} items`);
       return res.json({ prices: jitaPricesCache });
     }
 
@@ -2996,7 +3006,7 @@ app.get('/api/jita-prices', security.apiLimiter, async (req, res) => {
     res.json({ prices });
 
   } catch (err) {
-    console.error('Jita prices error:', err.message);
+    logger.error('Jita prices error:', err.message);
     if (jitaPricesCache) {
       return res.json({ prices: jitaPricesCache, stale: true });
     }
@@ -3104,13 +3114,13 @@ async function getOrRefreshStructureToken() {
       return freshToken;
     }
   } catch (err) {
-    console.warn('[KS token] DB refresh failed:', err.message);
+    logger.warn('[KS token] DB refresh failed:', err.message);
   }
 
   // No DB token at all — fall back to session pool (any logged-in user).
   const poolToken = getStructureToken();
   if (poolToken) {
-    console.warn('[KS token] No DB token — using session pool token (may 403 if character lacks Keepstar access)');
+    logger.warn('[KS token] No DB token — using session pool token (may 403 if character lacks Keepstar access)');
   }
   return poolToken || null;
 }
@@ -3128,7 +3138,7 @@ async function getOrRefreshStructureToken() {
 const _ksAuthStates = new Map(); // state → expiry; short-lived CSRF nonce store
 
 function isAdminKeyValid(provided) {
-  const adminKey = process.env.FORGE_ADMIN_KEY;
+  const adminKey = config.adminKey;
   if (!adminKey || !provided) return false;
   const a = Buffer.from(String(provided));
   const b = Buffer.from(adminKey);
@@ -3139,7 +3149,7 @@ function isAdminKeyValid(provided) {
 app.get('/api/ks-test-auth', (req, res) => {
   if (!isAdminKeyValid(req.query.key)) return res.status(403).send('Forbidden — bad or missing ?key=');
   if (!CORP_ENCRYPTION_KEY) return res.status(500).send('FORGE_CORP_KEY not configured on server');
-  if (!process.env.EVE_CLIENT_ID) return res.status(500).send('EVE_CLIENT_ID not configured on server');
+  if (!config.eve.clientId) return res.status(500).send('EVE_CLIENT_ID not configured on server');
 
   const state = crypto.randomBytes(16).toString('hex');
   _ksAuthStates.set(state, Date.now() + 10 * 60 * 1000); // 10 min to complete login
@@ -3148,7 +3158,7 @@ app.get('/api/ks-test-auth', (req, res) => {
   const authorizeUrl = 'https://login.eveonline.com/v2/oauth/authorize?' + new URLSearchParams({
     response_type: 'code',
     redirect_uri:  redirectUri,
-    client_id:     process.env.EVE_CLIENT_ID,
+    client_id:     config.eve.clientId,
     scope:         'esi-markets.structure_markets.v1',
     state,
   });
@@ -3163,7 +3173,7 @@ app.get('/api/ks-test-callback', async (req, res) => {
     _ksAuthStates.delete(state);
     if (!code) return res.status(400).send('Missing code');
 
-    const authHdr = 'Basic ' + Buffer.from(`${process.env.EVE_CLIENT_ID}:${process.env.EVE_CLIENT_SECRET}`).toString('base64');
+    const authHdr = 'Basic ' + Buffer.from(`${config.eve.clientId}:${config.eve.clientSecret}`).toString('base64');
     const redirectUri = `${req.protocol}://${req.get('host')}/api/ks-test-callback`;
     const tokenRes = await fetch('https://login.eveonline.com/v2/oauth/token', {
       method:  'POST',
@@ -3202,13 +3212,13 @@ app.get('/api/ks-test-callback', async (req, res) => {
     _ksTkPool.expiry = 0;
     _ksTkPool.fromDb = false;
 
-    console.log(`✓ [KS auth] Structure token re-authorised by ${charName}`);
+    logger.info(`✓ [KS auth] Structure token re-authorised by ${charName}`);
     res.send(`<html><body style="font-family:sans-serif;padding:40px">
       <h2 style="color:#2a2">✓ Keepstar structure token refreshed</h2>
       <p>Authorised by <strong>${charName}</strong>. The stored refresh token has been updated — Keepstar market polling will use it on the next fetch.</p>
     </body></html>`);
   } catch (err) {
-    console.error('[KS auth] Callback failed:', err.message);
+    logger.error('[KS auth] Callback failed:', err.message);
     res.status(500).send(`Error: ${err.message}`);
   }
 });
@@ -3341,7 +3351,7 @@ async function getJumpCountStrict(originId, destId) {
       const url = `https://esi.evetech.net/latest/route/${Number(originId)}/${Number(destId)}/?datasource=tranquility`;
       const resp = await esiFetch(url);
       if (!resp.ok) {
-        console.warn(`Jump count API ${resp.status} for ${originId}→${destId}`);
+        logger.warn(`Jump count API ${resp.status} for ${originId}→${destId}`);
         // 404 = no such route (stays true for a long time); anything else may be transient
         jumpCountFailUntil.set(key, Date.now() + (resp.status === 404 ? 6 * 3600_000 : 5 * 60_000));
         return null;
@@ -3352,7 +3362,7 @@ async function getJumpCountStrict(originId, destId) {
       jumpCountCache.set(key, jumps);
       return jumps;
     } catch (err) {
-      console.warn(`Jump count fetch failed ${originId}→${destId}:`, err.message);
+      logger.warn(`Jump count fetch failed ${originId}→${destId}:`, err.message);
       jumpCountFailUntil.set(key, Date.now() + 5 * 60_000);
       return null;
     } finally {
@@ -3392,7 +3402,7 @@ async function fetchAdjustedPrices() {
     }
     adjustedPriceCache.data   = map;
     adjustedPriceCache.expiry = Date.now() + CACHE_TTL_ADJ_MS;
-    console.log(`✓ ESI adjusted prices cached — ${Object.keys(map).length} types`);
+    logger.info(`✓ ESI adjusted prices cached — ${Object.keys(map).length} types`);
     return map;
   } finally {
     clearTimeout(t);
@@ -3471,7 +3481,7 @@ async function fetchCostIndices() {
   costIndexCache.sciMap  = sciMap;
   costIndexCache.nameMap = nameMap;
   costIndexCache.expiry  = Date.now() + CACHE_TTL_MS;
-  console.log(`✓ ESI cost indices + names cached — ${systemIds.length} systems`);
+  logger.info(`✓ ESI cost indices + names cached — ${systemIds.length} systems`);
   return sciMap;
 }
 
@@ -3508,7 +3518,7 @@ async function getItemPricesAllRegions(typeId) {
         });
       }
     } catch (err) {
-      console.warn(`⚠ compare_markets: skipping region ${regionId} — ${err.message}`);
+      logger.warn(`⚠ compare_markets: skipping region ${regionId} — ${err.message}`);
     }
   }
 
@@ -3525,17 +3535,17 @@ app.get('/api/prices/:regionId', security.apiLimiter, async (req, res) => {
 
     const entry = regionPriceCache.get(regionId);
     if (entry && Date.now() < entry.expiry) {
-      console.log(`✓ Region ${regionId} prices (cached) — ${Object.keys(entry.prices).length} items`);
+      logger.info(`✓ Region ${regionId} prices (cached) — ${Object.keys(entry.prices).length} items`);
       return res.json({ regionId, prices: entry.prices });
     }
 
-    console.log(`⟳ Fetching region ${regionId} prices from ESI...`);
+    logger.info(`⟳ Fetching region ${regionId} prices from ESI...`);
     const prices = await fetchRegionPrices(regionId);
     setRegionPriceCache(regionId, prices);
     res.json({ regionId, prices });
 
   } catch (err) {
-    console.error(`Region ${req.params.regionId} prices error:`, err.message);
+    logger.error(`Region ${req.params.regionId} prices error:`, err.message);
     res.status(500).json({ error: clientErrMsg(err) });
   }
 });
@@ -3545,11 +3555,11 @@ app.get('/api/item-names', security.apiLimiter, async (req, res) => {
   try {
     const cached = getCached('item_names');
     if (cached) {
-      console.log(`✓ Item names (cached) — ${Object.keys(cached).length} items`);
+      logger.info(`✓ Item names (cached) — ${Object.keys(cached).length} items`);
       return res.json({ items: cached });
     }
 
-    console.log('⟳ Loading item names from database...');
+    logger.info('⟳ Loading item names from database...');
     // Load ALL items regardless of published flag — assets can contain containers,
     // mission items and legacy types that have published = 0 in the SDE.
     const rows = await dbAll('SELECT type_id, name FROM items WHERE name IS NOT NULL AND name != \'\'');
@@ -3560,11 +3570,11 @@ app.get('/api/item-names', security.apiLimiter, async (req, res) => {
     });
 
     setCached('item_names', items, 86400000); // 24h
-    console.log(`✓ Item names loaded — ${Object.keys(items).length} items`);
+    logger.info(`✓ Item names loaded — ${Object.keys(items).length} items`);
     res.json({ items });
 
   } catch (err) {
-    console.error('Item names error:', err.message);
+    logger.error('Item names error:', err.message);
     res.status(500).json({ error: clientErrMsg(err), items: {} });
   }
 });
@@ -3630,7 +3640,7 @@ app.post('/api/resolve-type-names', security.apiLimiter, async (req, res) => {
           if (missingIds.length > 0) cache.delete('item_names');
         }
       } catch (esiErr) {
-        console.warn('ESI name resolve fallback failed:', esiErr.message);
+        logger.warn('ESI name resolve fallback failed:', esiErr.message);
       }
     }
 
@@ -3645,11 +3655,11 @@ app.get('/api/blueprint-database', security.apiLimiter, async (req, res) => {
   try {
     const cached = getCached('blueprint_db');
     if (cached) {
-      console.log(`✓ Blueprint database (cached) — ${Object.keys(cached).length} blueprints`);
+      logger.info(`✓ Blueprint database (cached) — ${Object.keys(cached).length} blueprints`);
       return res.json({ blueprints: cached });
     }
 
-    console.log('⟳ Loading blueprints from database...');
+    logger.info('⟳ Loading blueprints from database...');
     
     // Get all blueprints (no JOINs - names resolved client-side)
     const bpRows = await dbAll(`
@@ -3679,11 +3689,11 @@ app.get('/api/blueprint-database', security.apiLimiter, async (req, res) => {
     }
 
     setCached('blueprint_db', blueprints, 86400000); // 24h
-    console.log(`✓ Blueprint database loaded — ${Object.keys(blueprints).length} blueprints`);
+    logger.info(`✓ Blueprint database loaded — ${Object.keys(blueprints).length} blueprints`);
     res.json({ blueprints });
 
   } catch (err) {
-    console.error('Blueprint database error:', err.message);
+    logger.error('Blueprint database error:', err.message);
     res.status(500).json({ error: clientErrMsg(err), blueprints: {} });
   }
 });
@@ -3698,13 +3708,13 @@ app.post('/api/calculate-profitability', security.apiLimiter, async (req, res) =
       return res.status(400).json({ error: "ownedBlueprints array required" });
     }
 
-    console.log(`⟳ Calculating profitability for ${ownedBlueprints.length} blueprints...`);
+    logger.info(`⟳ Calculating profitability for ${ownedBlueprints.length} blueprints...`);
 
     const regionId = req.body.regionId || 10000002;
     const blueprintIds = ownedBlueprints.map(bp => bp.type_id);
     const results = [];
     const prices = regionPriceCache.get(regionId)?.prices || {};
-    console.log(`  Using region ${regionId} prices`);
+    logger.info(`  Using region ${regionId} prices`);
 
     for (const bpId of blueprintIds) {
       const bp = await dbGet(`
@@ -3760,11 +3770,11 @@ app.post('/api/calculate-profitability', security.apiLimiter, async (req, res) =
     results.sort((a, b) => b.profit - a.profit);
     const topResults = results.slice(0, topN);
 
-    console.log(`✓ Top ${topResults.length} most profitable calculated`);
+    logger.info(`✓ Top ${topResults.length} most profitable calculated`);
     res.json({ profitable: topResults, total: results.length });
 
   } catch (err) {
-    console.error('Profitability error:', err.message);
+    logger.error('Profitability error:', err.message);
     res.status(500).json({ error: clientErrMsg(err) });
   }
 });
@@ -3805,7 +3815,7 @@ app.post('/api/production-chain', security.apiLimiter, async (req, res) => {
     // catastrophic backtracking on patterns like '%%%%...%%%%' (DoS via full-table scan).
     const safeItemName = itemName.slice(0, 100).replace(/[\x00-\x1f\x7f]/g, '').replace(/[%_\\]/g, '\\$&');
 
-    console.log(`⟳ Building production chain for: ${safeItemName}`);
+    logger.info(`⟳ Building production chain for: ${safeItemName}`);
 
     const item = await dbGet(
       "SELECT type_id, name FROM items WHERE name LIKE ? ESCAPE '\\' LIMIT 1",
@@ -3851,11 +3861,11 @@ app.post('/api/production-chain', security.apiLimiter, async (req, res) => {
     chain.batchRevenue = chain.sellPrice * chain.productQuantity;
     chain.profit = chain.batchRevenue - chain.totalCost;
 
-    console.log(`✓ Production chain built for ${item.name}`);
+    logger.info(`✓ Production chain built for ${item.name}`);
     res.json({ chain });
 
   } catch (err) {
-    console.error('Production chain error:', err.message);
+    logger.error('Production chain error:', err.message);
     res.status(500).json({ error: clientErrMsg(err) });
   }
 });
@@ -4048,7 +4058,7 @@ app.post('/api/material-breakdown', security.apiLimiter, async (req, res) => {
       materials,
     });
   } catch (err) {
-    console.error('Material breakdown error:', err.message);
+    logger.error('Material breakdown error:', err.message);
     res.status(500).json({ error: clientErrMsg(err) });
   }
 });
@@ -4193,7 +4203,7 @@ app.post('/api/me-research-roi', security.apiLimiter, async (req, res) => {
       region_id: regionId,
     });
   } catch (err) {
-    console.error('ME research ROI error:', err.message);
+    logger.error('ME research ROI error:', err.message);
     res.status(500).json({ error: clientErrMsg(err) });
   }
 });
@@ -4238,7 +4248,7 @@ app.post('/api/get-price', security.apiLimiter, async (req, res) => {
       });
     }
     
-    console.log(`✓ Price lookup: ${itemName || targetTypeId} → ${priceData.sell} ISK`);
+    logger.info(`✓ Price lookup: ${itemName || targetTypeId} → ${priceData.sell} ISK`);
     
     res.json({
       itemName: itemName,
@@ -4249,7 +4259,7 @@ app.post('/api/get-price', security.apiLimiter, async (req, res) => {
     });
     
   } catch (err) {
-    console.error('Price lookup error:', err.message);
+    logger.error('Price lookup error:', err.message);
     res.status(500).json({ error: clientErrMsg(err) });
   }
 });
@@ -4350,7 +4360,7 @@ app.post('/api/get-blueprint', security.apiLimiter, async (req, res) => {
     const batchRevenue = sellPrice * productQuantity;
     const profit = batchRevenue - totalCost;
 
-    console.log(`✓ Blueprint lookup: ${itemName || targetProductId} → ${materials.length} materials`);
+    logger.info(`✓ Blueprint lookup: ${itemName || targetProductId} → ${materials.length} materials`);
 
     res.json({
       blueprintId: blueprint.blueprint_id,
@@ -4365,7 +4375,7 @@ app.post('/api/get-blueprint', security.apiLimiter, async (req, res) => {
     });
     
   } catch (err) {
-    console.error('Blueprint lookup error:', err.message);
+    logger.error('Blueprint lookup error:', err.message);
     res.json({ error: clientErrMsg(err), blueprint: null });
   }
 });
@@ -4778,11 +4788,11 @@ app.post('/api/item-details', security.apiLimiter, async (req, res) => {
       }
     } catch (_) { /* contract pricing is best-effort — never block item details */ }
 
-    console.log(`✓ Item details fetched — ${itemDetails.name || typeId}${itemDetails.buildInfo ? ' (with build analysis)' : ''}`);
+    logger.info(`✓ Item details fetched — ${itemDetails.name || typeId}${itemDetails.buildInfo ? ' (with build analysis)' : ''}`);
     res.json(itemDetails);
 
   } catch (err) {
-    console.error("Item details error:", err.message);
+    logger.error("Item details error:", err.message);
     res.status(500).json({ error: clientErrMsg(err) });
   }
 });
@@ -4940,17 +4950,17 @@ app.post('/api/analyze-blueprints', security.apiLimiter, async (req, res) => {
     // WAIT FOR PRICE CACHE TO LOAD (if not already loaded)
     // This ensures we always return real prices, never 0 ISK
     if (!jitaPricesCache || Date.now() >= jitaPricesCacheExpiry) {
-      console.log('⟳ Loading Jita prices for analysis...');
+      logger.info('⟳ Loading Jita prices for analysis...');
       try {
         const prices = await fetchRegionPrices(10000002); // The Forge (Jita)
         jitaPricesCache = prices;
         jitaPricesCacheExpiry = Date.now() + CACHE_TTL_MS;
       } catch (err) {
-        console.error('⚠ Failed to load prices, proceeding with cached/zero prices:', err.message);
+        logger.error('⚠ Failed to load prices, proceeding with cached/zero prices:', err.message);
       }
     }
 
-    console.log(`⟳ Analyzing ${ownedBlueprints.length} blueprints...`);
+    logger.info(`⟳ Analyzing ${ownedBlueprints.length} blueprints...`);
 
     // Group assets by type_id for quick lookup
     const assetQuantities = {};
@@ -4973,9 +4983,9 @@ app.post('/api/analyze-blueprints', security.apiLimiter, async (req, res) => {
     // Return top N results
     const topResults = filtered.slice(0, limit);
 
-    console.log(`✓ Blueprint analysis complete — ${results.length} found, ${skipped.length} skipped, Top ${topResults.length} results (sorted by ${sortBy})`);
+    logger.info(`✓ Blueprint analysis complete — ${results.length} found, ${skipped.length} skipped, Top ${topResults.length} results (sorted by ${sortBy})`);
     if (skipped.length > 0) {
-      console.log(`  ⚠ Skipped (not in blueprints DB): ${skipped.map(s => s.name).join(', ')}`);
+      logger.info(`  ⚠ Skipped (not in blueprints DB): ${skipped.map(s => s.name).join(', ')}`);
     }
 
     res.json({
@@ -4987,8 +4997,8 @@ app.post('/api/analyze-blueprints', security.apiLimiter, async (req, res) => {
     });
     
   } catch (err) {
-    console.error('❌ Blueprint analysis error:', err.message);
-    console.error('Stack:', err.stack);
+    logger.error('❌ Blueprint analysis error:', err.message);
+    logger.error('Stack:', err.stack);
     // Return proper error response with 500 status
     return res.status(500).json({
       error: `Analysis failed: ${err.message}`,
@@ -5048,10 +5058,10 @@ app.get('/api/diagnose-t2/:characterId', security.apiLimiter, security.verifyEve
     }
 
     report.summary = `${report.inDb.length}/${report.total} blueprints found in DB. T2: ${report.t2InDb.length} found, ${report.t2NotInDb.length} missing.`;
-    console.log(`🔍 T2 Diagnose for ${characterId}: ${report.summary}`);
+    logger.info(`🔍 T2 Diagnose for ${characterId}: ${report.summary}`);
     res.json(report);
   } catch (err) {
-    console.error('❌ T2 diagnose error:', err.message);
+    logger.error('❌ T2 diagnose error:', err.message);
     res.status(500).json({ error: clientErrMsg(err) });
   }
 });
@@ -5084,7 +5094,7 @@ app.post('/api/blueprint-metadata', security.apiLimiter, async (req, res) => {
 
     res.json(metadata);
   } catch (err) {
-    console.error('❌ Blueprint metadata error:', err.message);
+    logger.error('❌ Blueprint metadata error:', err.message);
     res.status(500).json({ error: clientErrMsg(err) });
   }
 });
@@ -5189,7 +5199,7 @@ app.post('/api/blueprint-profits', security.apiLimiter, async (req, res) => {
     if (checkBuildable) out._meta = { canBuildDataWarm: pricesAvailable };
     res.json(out);
   } catch (err) {
-    console.error('❌ Blueprint profits error:', err.message);
+    logger.error('❌ Blueprint profits error:', err.message);
     res.status(500).json({ error: clientErrMsg(err) });
   }
 });
@@ -5273,7 +5283,7 @@ app.post('/api/material-stock-check', security.apiLimiter, async (req, res) => {
 
     res.json({ verdict, totalCost, wallet, materials: results, pricesWarm: true });
   } catch (err) {
-    console.error('❌ Material stock check error:', err.message);
+    logger.error('❌ Material stock check error:', err.message);
     res.status(500).json({ error: clientErrMsg(err) });
   }
 });
@@ -5327,7 +5337,7 @@ app.post('/api/appraise', security.apiLimiter, (req, res) => {
 
     res.json({ items: result, totalSell, totalBuy, hubName: hub.name, hubId });
   } catch (err) {
-    console.error('❌ Appraise error:', err.message);
+    logger.error('❌ Appraise error:', err.message);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -5892,7 +5902,7 @@ app.post('/api/ai-chat',
 
     // Per-character rate limit (supplements the per-IP aiLimiter).
     if (!checkCharAiRateLimit(characterId)) {
-      console.warn(`⚠ AI guardrail: per-character rate limit hit for character ${characterId}`);
+      logger.warn(`⚠ AI guardrail: per-character rate limit hit for character ${characterId}`);
       return res.status(429).json({ error: 'AI rate limit reached for this character, please wait a moment' });
     }
 
@@ -5909,7 +5919,7 @@ app.post('/api/ai-chat',
     for (const m of sanitisedMessages) {
       if (!m) continue;
       if (looksLikeInjection(m.content, { critical: true, sensitive: false })) {
-        console.warn(`⚠ AI guardrail [critical-history] role=${m.role} char=${characterId}: "${m.content.slice(0, 80)}"`);
+        logger.warn(`⚠ AI guardrail [critical-history] role=${m.role} char=${characterId}: "${m.content.slice(0, 80)}"`);
         return res.json({ content: [{ type: "text", text: AI_REFUSAL }], guardrail: "blocked_history" });
       }
     }
@@ -5918,13 +5928,13 @@ app.post('/api/ai-chat',
     //   Sensitive patterns not run on history to avoid false-positives on old EVE phrases.
     const lastUserMsg = [...sanitisedMessages].reverse().find(m => m && m.role === 'user');
     if (lastUserMsg && looksLikeInjection(lastUserMsg.content)) {
-      console.warn(`⚠ AI guardrail [last-user] char=${characterId}: "${lastUserMsg.content.slice(0, 120)}"`);
+      logger.warn(`⚠ AI guardrail [last-user] char=${characterId}: "${lastUserMsg.content.slice(0, 120)}"`);
       return res.json({ content: [{ type: "text", text: AI_REFUSAL }], guardrail: "blocked" });
     }
 
     // Layer 3: Off-topic pre-filter on the latest user message.
     if (lastUserMsg && looksOffTopic(lastUserMsg.content)) {
-      console.warn(`⚠ AI guardrail [off-topic] char=${characterId}: "${lastUserMsg.content.slice(0, 120)}"`);
+      logger.warn(`⚠ AI guardrail [off-topic] char=${characterId}: "${lastUserMsg.content.slice(0, 120)}"`);
       return res.json({ content: [{ type: "text", text: AI_REFUSAL }], guardrail: "off_topic" });
     }
 
@@ -5932,21 +5942,21 @@ app.post('/api/ai-chat',
     const sessionKey = `session:${characterId}`;
     const sessionData = getCached(sessionKey);
     
-    console.log(`🔍 AI Chat - Character: ${characterId}, Session Key: ${sessionKey}, Cache Hit: ${!!sessionData}`);
+    logger.debug(`🔍 AI Chat - Character: ${characterId}, Session Key: ${sessionKey}, Cache Hit: ${!!sessionData}`);
     
     if (!sessionData) {
-      console.error(`❌ No session data found for character ${characterId}`);
+      logger.error(`❌ No session data found for character ${characterId}`);
       return res.status(400).json({ 
         error: "No session data found. Please refresh the page to reload your character data.",
         code: "SESSION_EXPIRED"
       });
     }
 
-    console.log(`✓ Session data loaded: ${sessionData.assets?.length || 0} assets, ${sessionData.blueprints?.length || 0} blueprints`);
+    logger.debug(`✓ Session data loaded: ${sessionData.assets?.length || 0} assets, ${sessionData.blueprints?.length || 0} blueprints`);
 
     const { assets, blueprints, prices, wallet, jobs, skills, total_sp, planets, implants } = sessionData;
 
-    const apiKey = process.env.ANTHROPIC_API_KEY;
+    const apiKey = config.anthropicApiKey;
     if (!apiKey) {
       return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
     }
@@ -5987,7 +5997,7 @@ app.post('/api/ai-chat',
         tools: tools
       };
 
-      console.log(`🤖 AI request (iteration ${iteration})`);
+      logger.debug(`🤖 AI request (iteration ${iteration})`);
 
       const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -6003,7 +6013,7 @@ app.post('/api/ai-chat',
       const data = await aiRes.json();
 
       if (!aiRes.ok) {
-        console.error("AI error:", data.error?.message);
+        logger.error("AI error:", data.error?.message);
         return res.json({ 
           content: [{ type: "text", text: `[API Error: ${data.error?.message || "AI request failed"}]` }],
           error: data.error?.message || "AI request failed"
@@ -6023,7 +6033,7 @@ app.post('/api/ai-chat',
 
       if (toolUses.length === 0) {
         // No tools used - final answer
-        console.log("✓ AI response generated (no tools)");
+        logger.debug("✓ AI response generated (no tools)");
 
         // Track cumulative AI usage (v0.9.0)
         trackAiUsage(characterId, requestBody.model, {
@@ -6037,12 +6047,12 @@ app.post('/api/ai-chat',
       }
 
       // AI used tools - execute them
-      console.log(`🔧 AI used ${toolUses.length} tool(s)`);
+      logger.debug(`🔧 AI used ${toolUses.length} tool(s)`);
 
       const toolResults = [];
 
       for (const toolUse of toolUses) {
-        console.log(`  → ${toolUse.name}(${JSON.stringify(toolUse.input).substring(0, 100)}...)`);
+        logger.info(`  → ${toolUse.name}(${JSON.stringify(toolUse.input).substring(0, 100)}...)`);
 
         const toolResult = await executeAiTool(toolUse, { characterId, req, jobs, blueprints, assets });
 
@@ -6068,7 +6078,7 @@ app.post('/api/ai-chat',
     }
 
     // If we hit max iterations, return what we have
-    console.warn("⚠ Max tool iterations reached");
+    logger.warn("⚠ Max tool iterations reached");
     trackAiUsage(characterId, 'claude-sonnet-4-6', {
       input_tokens: totalInputTokens,
       output_tokens: totalOutputTokens,
@@ -6080,7 +6090,7 @@ app.post('/api/ai-chat',
     });
 
   } catch (err) {
-    console.error("AI chat error:", err.message);
+    logger.error("AI chat error:", err.message);
     res.json({ 
       content: [{ type: "text", text: `[System Error: ${clientErrMsg(err)}]` }],
       error: clientErrMsg(err)
@@ -6143,7 +6153,7 @@ app.post('/api/ai-chat',
     }
     const pool = Array.from({ length: Math.min(CONCURRENCY, tasks.length) }, worker);
     await Promise.all(pool);
-    console.log(`[icon-warm] Warmed ${typeIds.length} blueprint types (${tasks.length} variants)`);
+    logger.info(`[icon-warm] Warmed ${typeIds.length} blueprint types (${tasks.length} variants)`);
   };
 }
 
@@ -6179,8 +6189,8 @@ app.post('/api/session-data',
       // Store in cache with 2-hour expiry
       const sessionKey = `session:${characterId}`;
 
-      console.log(`💾 Caching session data - Character: ${characterId}, Key: ${sessionKey}`);
-      console.log(`   Assets: ${assets.length}, Blueprints: ${blueprints.length}, Prices: ${Object.keys(prices || {}).length}, SP: ${(total_sp || 0).toLocaleString()}`);
+      logger.info(`💾 Caching session data - Character: ${characterId}, Key: ${sessionKey}`);
+      logger.info(`   Assets: ${assets.length}, Blueprints: ${blueprints.length}, Prices: ${Object.keys(prices || {}).length}, SP: ${(total_sp || 0).toLocaleString()}`);
 
       // v0.9.4: Discover player-owned structures from asset locations
       // Structure IDs are int64 (> 2^31-1), NPC stations are int32
@@ -6203,7 +6213,7 @@ app.post('/api/session-data',
         });
       }
 
-      console.log(`✓ Discovered ${structureIds.size} accessible structures`);
+      logger.info(`✓ Discovered ${structureIds.size} accessible structures`);
 
       setCached(sessionKey, {
         assets,
@@ -6223,14 +6233,14 @@ app.post('/api/session-data',
         cachedAt: new Date().toISOString()
       }, 7200000); // 2 hours
 
-      console.log(`✓ Session data cached successfully for character ${characterId}`);
+      logger.info(`✓ Session data cached successfully for character ${characterId}`);
       
       // Verify it was cached
       const verify = getCached(sessionKey);
       if (!verify) {
-        console.error(`❌ CACHE VERIFICATION FAILED - Data not retrievable immediately after caching!`);
+        logger.error(`❌ CACHE VERIFICATION FAILED - Data not retrievable immediately after caching!`);
       } else {
-        console.log(`✓ Cache verification passed - ${verify.assets.length} assets retrievable`);
+        logger.info(`✓ Cache verification passed - ${verify.assets.length} assets retrievable`);
       }
       
       res.json({ success: true, expiresIn: 7200 });
@@ -6242,12 +6252,12 @@ app.post('/api/session-data',
       // Persist skills so a later restart/expiry doesn't drop this character to level-0 fees/times.
       // own_skills present (even empty) = a current client: its own levels are what count, never the account-wide best list
       saveSkillSnapshot(characterId, Array.isArray(own_skills) ? own_skills : skills, standings, implants)
-        .catch(e => console.error('Skill snapshot save failed:', e.message));
+        .catch(e => logger.error('Skill snapshot save failed:', e.message));
       // Learn which structure this character builds in and what rigs it runs (throttled).
       learnStructureFit(characterId, rawToken, jobs).catch(() => {});
 
     } catch (error) {
-      console.error('Session data error:', error);
+      logger.error('Session data error:', error);
       res.status(500).json({ error: 'Failed to cache session data' });
     }
   }
@@ -6269,7 +6279,7 @@ app.post('/api/skill-snapshot',
       await saveSkillSnapshot(req.characterId, skills, standings, implants);
       res.json({ success: true });
     } catch (e) {
-      console.error('Skill snapshot error:', e.message);
+      logger.error('Skill snapshot error:', e.message);
       res.status(500).json({ error: clientErrMsg(e) });
     }
   }
@@ -6296,7 +6306,7 @@ app.get('/api/session-data/:characterId',
         blueprints: sessionData.blueprints?.length || 0
       });
     } catch (error) {
-      console.error('Get session error:', error);
+      logger.error('Get session error:', error);
       res.status(500).json({ error: 'Failed to retrieve session data' });
     }
   }
@@ -6380,7 +6390,7 @@ async function fetchPiPlanetList({ characterId, eveToken }) {
     return { planets: sessionData.planets, sessionBlueprints: sessionData.blueprints || [] };
   }
 
-  console.log(`🌍 PI colonies — char ${characterId} has no server session; fetching planet list from ESI`);
+  logger.info(`🌍 PI colonies — char ${characterId} has no server session; fetching planet list from ESI`);
   let planets;
   try {
     const r = await esiFetch(
@@ -6390,7 +6400,7 @@ async function fetchPiPlanetList({ characterId, eveToken }) {
     planets = r.ok ? await r.json() : [];
   } catch (e) {
     planets = [];
-    console.warn(`PI planet list ESI fetch failed for char ${characterId}:`, e.message);
+    logger.warn(`PI planet list ESI fetch failed for char ${characterId}:`, e.message);
   }
   // Blueprint cross-reference data lives in the primary's combined session and is not
   // available here — cross-ref simply won't show for characters without a session.
@@ -6554,11 +6564,11 @@ app.get('/api/pi/colonies', security.apiLimiter, security.verifyEveToken, async 
       piDetailCache.delete(piDetailCache.keys().next().value);
     }
     piDetailCache.set(characterId, { data, fetchedAt: Date.now() });
-    console.log(`🌍 PI loaded for ${characterId}: ${colonies.length} planets, ${Object.keys(bpCrossRef).length} PI materials in owned BPs`);
+    logger.info(`🌍 PI loaded for ${characterId}: ${colonies.length} planets, ${Object.keys(bpCrossRef).length} PI materials in owned BPs`);
     res.json(data);
   } catch (err) {
     // Log full error internally (includes stack trace) but return generic message to client.
-    console.error('PI colonies error:', err);
+    logger.error('PI colonies error:', err);
     res.status(500).json({ error: 'Failed to load PI data' });
   }
 });
@@ -6694,7 +6704,7 @@ app.get('/api/pi/market', security.apiLimiter, security.verifyEveToken, async (r
   } catch (err) {
     // Log full error on server but return a generic message to the client.
     // Returning err.message would leak internal DB schema details.
-    console.error('PI market error:', err);
+    logger.error('PI market error:', err);
     res.status(500).json({ error: 'Failed to load PI market data' });
   }
 });
@@ -7275,7 +7285,7 @@ app.post('/api/queue-planner', security.apiLimiter, security.verifyEveToken, asy
       importMaterials: aggregateMaterials.filter(m => m.importQty > 0).length,
     });
   } catch (err) {
-    console.error('Queue planner error:', err);
+    logger.error('Queue planner error:', err);
     res.status(500).json({ error: 'Failed to generate queue plan' });
   }
 });
@@ -7302,7 +7312,7 @@ app.post('/api/save-message',
       
       res.json({ success: true });
     } catch (error) {
-      console.error('Save message error:', error);
+      logger.error('Save message error:', error);
       res.status(500).json({ error: 'Failed to save message' });
     }
   }
@@ -7328,7 +7338,7 @@ app.get('/api/chat-history/:characterId',
       
       res.json(messages.reverse());
     } catch (error) {
-      console.error('Get history error:', error);
+      logger.error('Get history error:', error);
       res.status(500).json({ error: 'Failed to load history' });
     }
   }
@@ -7350,7 +7360,7 @@ app.delete('/api/chat-history/:characterId',
 
       res.json({ success: true, message: 'Chat history cleared' });
     } catch (error) {
-      console.error('Clear history error:', error);
+      logger.error('Clear history error:', error);
       res.status(500).json({ error: 'Failed to clear history' });
     }
   }
@@ -7386,7 +7396,7 @@ app.get('/api/ticker-config',
       const pins   = (stored.pins || []).map(p => ({ ...p, groupId: p.groupId || 'default' }));
       res.json({ pins, groups, activeGroupId: stored.activeGroupId || 'default', dualRow: stored.dualRow === true });
     } catch (err) {
-      console.error('ticker-config GET error:', err.message);
+      logger.error('ticker-config GET error:', err.message);
       res.status(500).json({ error: 'Failed to load ticker config' });
     }
   }
@@ -7433,7 +7443,7 @@ app.post('/api/ticker-config',
       );
       res.json({ ok: true });
     } catch (err) {
-      console.error('ticker-config POST error:', err.message);
+      logger.error('ticker-config POST error:', err.message);
       res.status(500).json({ error: 'Failed to save ticker config' });
     }
   }
@@ -7500,13 +7510,13 @@ app.post('/api/ticker-prices',
             results.push({ pinId }); // character-state pins handled client-side
           }
         } catch (innerErr) {
-          console.error(`ticker-prices inner error pin ${pinId}:`, innerErr.message);
+          logger.error(`ticker-prices inner error pin ${pinId}:`, innerErr.message);
           results.push({ pinId, error: 'fetch failed' });
         }
       }
       res.json({ results });
     } catch (err) {
-      console.error('ticker-prices error:', err.message);
+      logger.error('ticker-prices error:', err.message);
       res.status(500).json({ error: 'Failed to fetch ticker prices' });
     }
   }
@@ -7589,13 +7599,13 @@ app.get('/api/location-names',
             }
           } else {
             const errText = await r.text().catch(() => '');
-            console.error(`[location-names] ESI /universe/names/ ${r.status}: ${errText} — ids: ${JSON.stringify(npcIds)}`);
+            logger.error(`[location-names] ESI /universe/names/ ${r.status}: ${errText} — ids: ${JSON.stringify(npcIds)}`);
           }
           for (const id of npcIds) {
             if (!resolved.has(id)) afterBulk.push(id);
           }
         } catch (esiErr) {
-          console.error('[location-names] ESI fetch error:', esiErr.message);
+          logger.error('[location-names] ESI fetch error:', esiErr.message);
           afterBulk.push(...npcIds);
         }
       }
@@ -7626,7 +7636,7 @@ app.get('/api/location-names',
 
       res.json(result);
     } catch (err) {
-      console.error('location-names error:', err.message);
+      logger.error('location-names error:', err.message);
       res.status(500).json({ error: err.message });
     }
   }
@@ -7751,14 +7761,14 @@ app.post('/api/invalidate-session',
       const sessionKey = `session:${characterId}`;
       
       cache.delete(sessionKey);
-      console.log(`✓ Session cache invalidated for character ${characterId}`);
+      logger.info(`✓ Session cache invalidated for character ${characterId}`);
       
       res.json({ 
         success: true, 
         message: 'Session cache cleared - will reload on next AI request' 
       });
     } catch (error) {
-      console.error('Invalidate session error:', error);
+      logger.error('Invalidate session error:', error);
       res.status(500).json({ error: 'Failed to invalidate session' });
     }
   }
@@ -7860,7 +7870,7 @@ async function ingestRegionContracts(regionId = CONTRACT_INGEST_REGION) {
       await new Promise(r => setTimeout(r, 60));
     } while (page <= pages);
 
-    console.log(`⟳ Contract ingest ${regionId}: ${contracts.length} item_exchange sells across ${pages} pages`);
+    logger.info(`⟳ Contract ingest ${regionId}: ${contracts.length} item_exchange sells across ${pages} pages`);
 
     // 2. Fetch items per contract (bounded concurrency). Keep single-item, non-BPC,
     //    no-swap sells; record unit price = contract price / quantity.
@@ -7924,10 +7934,10 @@ async function ingestRegionContracts(regionId = CONTRACT_INGEST_REGION) {
     }
 
     const secs = ((Date.now() - start) / 1000).toFixed(0);
-    console.log(`✓ Contract ingest ${regionId}: ${written} items priced from ${singles} single-item contracts (${processed} fetched) in ${secs}s`);
+    logger.info(`✓ Contract ingest ${regionId}: ${written} items priced from ${singles} single-item contracts (${processed} fetched) in ${secs}s`);
     return { status: 'completed', region_id: regionId, items_priced: written, single_contracts: singles, contracts_fetched: processed };
   } catch (err) {
-    console.error('Contract ingest error:', err.message);
+    logger.error('Contract ingest error:', err.message);
     return { status: 'error', error: err.message };
   } finally {
     contractIngestRunning = false;
@@ -7936,7 +7946,7 @@ async function ingestRegionContracts(regionId = CONTRACT_INGEST_REGION) {
 
 async function runPreCompute() {
   if (preComputeRunning) {
-    console.log('⚠ Pre-compute already running, skipping');
+    logger.info('⚠ Pre-compute already running, skipping');
     return { status: 'skipped', reason: 'already_running' };
   }
 
@@ -7950,9 +7960,9 @@ async function runPreCompute() {
       `INSERT INTO precompute_runs (started_at, status) VALUES (datetime('now'), 'running')`
     );
     runId = run.lastID;
-    console.log('═══════════════════════════════════════════');
-    console.log('⟳ PRE-COMPUTE JOB STARTING');
-    console.log('═══════════════════════════════════════════');
+    logger.info('═══════════════════════════════════════════');
+    logger.info('⟳ PRE-COMPUTE JOB STARTING');
+    logger.info('═══════════════════════════════════════════');
 
     // Step 1: Load all blueprints and materials into memory once (shared across all regions)
     const allBlueprints = await dbAll(`
@@ -7980,14 +7990,14 @@ async function runPreCompute() {
       bpByProduct[bp.product_id] = bp.blueprint_id;
     }
 
-    console.log(`⟳ Processing ${allBlueprints.length} blueprints × ${VALID_REGIONS.length} regions...`);
+    logger.info(`⟳ Processing ${allBlueprints.length} blueprints × ${VALID_REGIONS.length} regions...`);
 
     // Step 2: For each market region, fetch prices and compute profitability
     let totalProcessed = 0;
     const computedAt = new Date().toISOString();
 
     for (const regionId of VALID_REGIONS) {
-      console.log(`⟳ Region ${regionId}: fetching prices...`);
+      logger.info(`⟳ Region ${regionId}: fetching prices...`);
 
       let prices;
       try {
@@ -8001,7 +8011,7 @@ async function runPreCompute() {
           prices = HP.withJitaFallback(prices, getRawJitaPrices());
         }
       } catch (err) {
-        console.error(`⚠ Region ${regionId}: price fetch failed, skipping — ${err.message}`);
+        logger.error(`⚠ Region ${regionId}: price fetch failed, skipping — ${err.message}`);
         continue;
       }
 
@@ -8080,7 +8090,7 @@ async function runPreCompute() {
         dbTxMutex.unlock();
       }
       totalProcessed += regionProcessed;
-      console.log(`✓ Region ${regionId}: ${regionProcessed} blueprints processed`);
+      logger.info(`✓ Region ${regionId}: ${regionProcessed} blueprints processed`);
     }
 
     // Build cross-hub strategy table — but only if Jita data was successfully written.
@@ -8093,11 +8103,11 @@ async function runPreCompute() {
     if (!jitaCount || jitaCount.cnt === 0) {
       // No Jita data: clean stale profits (standalone — no strategies write to stay consistent with)
       await dbRun(`DELETE FROM precomputed_profits WHERE run_id IS NULL OR run_id != ?`, [runId]);
-      console.warn('⚠ Skipping strategies build — no Jita data this run (Jita ESI fetch may have failed). Existing strategies preserved.');
+      logger.warn('⚠ Skipping strategies build — no Jita data this run (Jita ESI fetch may have failed). Existing strategies preserved.');
     } else {
     // Jita data OK: clean profits + rebuild strategies in one transaction so both tables
     // stay consistent — if the strategies INSERT throws, the profits DELETE rolls back too.
-    console.log('⟳ Building cross-hub strategy table...');
+    logger.info('⟳ Building cross-hub strategy table...');
     await dbTxMutex.lock();
     try {
     await dbRun('BEGIN TRANSACTION');
@@ -8171,13 +8181,13 @@ async function runPreCompute() {
     } finally {
       dbTxMutex.unlock();
     }
-    console.log('✓ Cross-hub strategy table built');
+    logger.info('✓ Cross-hub strategy table built');
     } // end Jita-guard block
 
     // Volume / liquidity labels follow each row's current price source, so refresh them whenever the rows were rewritten
     // (the scheduled run also chains the Jita volume enrichment afterwards, which does the same).
     try { await applyRegionVolumeAndLiquidity(); }
-    catch (e) { console.error('⚠ Hub volume/liquidity pass failed:', e.message); }
+    catch (e) { logger.error('⚠ Hub volume/liquidity pass failed:', e.message); }
 
     const durationSec = (Date.now() - startTime) / 1000;
 
@@ -8191,11 +8201,11 @@ async function runPreCompute() {
       WHERE id = ?
     `, [totalProcessed, durationSec, runId]);
 
-    console.log('═══════════════════════════════════════════');
-    console.log(`✓ PRE-COMPUTE COMPLETE`);
-    console.log(`  Blueprints × Regions: ${totalProcessed}`);
-    console.log(`  Duration: ${durationSec.toFixed(1)}s`);
-    console.log('═══════════════════════════════════════════');
+    logger.info('═══════════════════════════════════════════');
+    logger.info(`✓ PRE-COMPUTE COMPLETE`);
+    logger.info(`  Blueprints × Regions: ${totalProcessed}`);
+    logger.info(`  Duration: ${durationSec.toFixed(1)}s`);
+    logger.info('═══════════════════════════════════════════');
 
     return { status: 'completed', processed: totalProcessed, durationSec };
 
@@ -8213,7 +8223,7 @@ async function runPreCompute() {
       `, [err.message, runId]);
     }
 
-    console.error('❌ Pre-compute failed:', err.message);
+    logger.error('❌ Pre-compute failed:', err.message);
     return { status: 'failed', error: err.message };
   } finally {
     preComputeRunning = false;
@@ -8367,7 +8377,7 @@ async function applyRegionVolumeAndLiquidity() {
 
 async function runVolumeEnrichment() {
   if (volumeEnrichmentRunning) {
-    console.log('⚠ Volume enrichment already running, skipping');
+    logger.info('⚠ Volume enrichment already running, skipping');
     return { status: 'skipped', reason: 'already_running' };
   }
 
@@ -8375,9 +8385,9 @@ async function runVolumeEnrichment() {
   const startTime = Date.now();
 
   try {
-    console.log('═══════════════════════════════════════════');
-    console.log('⟳ VOLUME ENRICHMENT STARTING');
-    console.log('═══════════════════════════════════════════');
+    logger.info('═══════════════════════════════════════════');
+    logger.info('⟳ VOLUME ENRICHMENT STARTING');
+    logger.info('═══════════════════════════════════════════');
 
     const JITA_REGION = 10000002;
     
@@ -8394,14 +8404,14 @@ async function runVolumeEnrichment() {
     `);
 
     if (itemsToEnrich.length === 0) {
-      console.log('✓ No items need enrichment');
+      logger.info('✓ No items need enrichment');
       // Prices moved since the last run, so every hub's own volume/liquidity labels are refreshed anyway.
-      try { await applyRegionVolumeAndLiquidity(); } catch (e) { console.error('⚠ Hub volume/liquidity pass failed:', e.message); }
+      try { await applyRegionVolumeAndLiquidity(); } catch (e) { logger.error('⚠ Hub volume/liquidity pass failed:', e.message); }
       volumeEnrichmentRunning = false;
       return { status: 'completed', enriched: 0, message: 'All items already enriched' };
     }
 
-    console.log(`⟳ Enriching ${itemsToEnrich.length} items...`);
+    logger.info(`⟳ Enriching ${itemsToEnrich.length} items...`);
 
     let enriched = 0;
     let errors = 0;
@@ -8496,7 +8506,7 @@ async function runVolumeEnrichment() {
         await new Promise(r => setTimeout(r, 100));
 
       } catch (err) {
-        console.error(`  ✗ Error enriching ${item.product_name}:`, err.message);
+        logger.error(`  ✗ Error enriching ${item.product_name}:`, err.message);
         errors++;
       }
     }
@@ -8516,7 +8526,7 @@ async function runVolumeEnrichment() {
     `);
 
     if (zeroSellItems.length > 0) {
-      console.log(`⟳ Fetching history for ${zeroSellItems.length} zero-sell-price items...`);
+      logger.info(`⟳ Fetching history for ${zeroSellItems.length} zero-sell-price items...`);
       for (const item of zeroSellItems) {
         try {
           const histRes = await esiFetch(
@@ -8569,10 +8579,10 @@ async function runVolumeEnrichment() {
           }
           await new Promise(r => setTimeout(r, 100));
         } catch (err) {
-          console.error(`  ✗ Zero-sell history fetch failed for ${item.product_name}:`, err.message);
+          logger.error(`  ✗ Zero-sell history fetch failed for ${item.product_name}:`, err.message);
         }
       }
-      console.log('✓ Zero-sell-price history pass complete');
+      logger.info('✓ Zero-sell-price history pass complete');
     }
 
     // Reload the in-memory map so the next precompute run benefits immediately
@@ -8581,31 +8591,31 @@ async function runVolumeEnrichment() {
     // Per-hub volume + liquidity (own data first, Jita's only where a hub has none — tagged).
     try {
       const n = await applyRegionVolumeAndLiquidity();
-      console.log(`✓ Hub volume/liquidity applied to ${n} rows`);
+      logger.info(`✓ Hub volume/liquidity applied to ${n} rows`);
     } catch (e) {
-      console.error('⚠ Hub volume/liquidity pass failed:', e.message);
+      logger.error('⚠ Hub volume/liquidity pass failed:', e.message);
     }
 
     const durationSec = (Date.now() - startTime) / 1000;
 
-    console.log('═══════════════════════════════════════════');
-    console.log(`✓ VOLUME ENRICHMENT COMPLETE`);
-    console.log(`  Enriched: ${enriched} items`);
-    console.log(`  Errors: ${errors}`);
-    console.log(`  Filtered: ${contractOnlyCount + extremeMarginCount + lowVolumeCount + suspiciousSpreadCount + noBuyOrdersCount} total`);
-    console.log(`    - Contract-only: ${contractOnlyCount}`);
-    console.log(`    - Extreme margin (>500%): ${extremeMarginCount}`);
-    console.log(`    - Low volume: ${lowVolumeCount}`);
-    console.log(`    - No buy orders: ${noBuyOrdersCount}`);
-    console.log(`    - Suspicious spread: ${suspiciousSpreadCount}`);
-    console.log(`  Duration: ${durationSec.toFixed(1)}s`);
-    console.log('═══════════════════════════════════════════');
+    logger.info('═══════════════════════════════════════════');
+    logger.info(`✓ VOLUME ENRICHMENT COMPLETE`);
+    logger.info(`  Enriched: ${enriched} items`);
+    logger.info(`  Errors: ${errors}`);
+    logger.info(`  Filtered: ${contractOnlyCount + extremeMarginCount + lowVolumeCount + suspiciousSpreadCount + noBuyOrdersCount} total`);
+    logger.info(`    - Contract-only: ${contractOnlyCount}`);
+    logger.info(`    - Extreme margin (>500%): ${extremeMarginCount}`);
+    logger.info(`    - Low volume: ${lowVolumeCount}`);
+    logger.info(`    - No buy orders: ${noBuyOrdersCount}`);
+    logger.info(`    - Suspicious spread: ${suspiciousSpreadCount}`);
+    logger.info(`  Duration: ${durationSec.toFixed(1)}s`);
+    logger.info('═══════════════════════════════════════════');
 
     volumeEnrichmentRunning = false;
     return { status: 'completed', enriched, errors, durationSec };
 
   } catch (err) {
-    console.error('❌ Volume enrichment failed:', err.message);
+    logger.error('❌ Volume enrichment failed:', err.message);
     volumeEnrichmentRunning = false;
     return { status: 'failed', error: err.message };
   }
@@ -8692,7 +8702,7 @@ app.get('/api/top-profitable', security.apiLimiter, async (req, res) => {
     });
 
   } catch (err) {
-    console.error('Top profitable error:', err.message);
+    logger.error('Top profitable error:', err.message);
     res.status(500).json({ error: clientErrMsg(err), results: [] });
   }
 });
@@ -8844,7 +8854,7 @@ app.get('/api/top-profitable-by-skills', security.apiLimiter, security.verifyEve
     const sessionData = getCached(sessionKey);
 
     if (!sessionData || !sessionData.skills || sessionData.skills.length === 0) {
-      console.warn(`⚠ Skills not in session for character ${characterId} — returning unfiltered top-profitable`);
+      logger.warn(`⚠ Skills not in session for character ${characterId} — returning unfiltered top-profitable`);
       const payload = await fetchUnfilteredTopProfitable({ isCrossHub, regionId, sourceRegionId, minProfit, limit, sort });
       return res.json(payload);
     }
@@ -8875,7 +8885,7 @@ app.get('/api/top-profitable-by-skills', security.apiLimiter, security.verifyEve
 
     await applyHaulCostPerUnit({ results, characterId, regionId });
 
-    console.log(`✓ Top ${results.length} profitable items (filtered by skills for character ${characterId})`);
+    logger.debug(`✓ Top ${results.length} profitable items (filtered by skills for character ${characterId})`);
 
     // Get last run info
     const lastRun = await dbGet(`
@@ -8906,7 +8916,7 @@ app.get('/api/top-profitable-by-skills', security.apiLimiter, security.verifyEve
     });
 
   } catch (err) {
-    console.error('Top profitable by skills error:', err.message);
+    logger.error('Top profitable by skills error:', err.message);
     res.status(500).json({ error: clientErrMsg(err), results: [] });
   }
 });
@@ -8955,7 +8965,7 @@ app.get('/api/search-profitable', security.apiLimiter, async (req, res) => {
     res.json({ results, query: sanitised, regionId, includeRisky });
 
   } catch (err) {
-    console.error('Search profitable error:', err.message);
+    logger.error('Search profitable error:', err.message);
     res.status(500).json({ error: clientErrMsg(err), results: [] });
   }
 });
@@ -9069,7 +9079,7 @@ app.get('/api/inter-hub-arb', security.apiLimiter, async (req, res) => {
       sort_by:    rawSort,
     });
   } catch (err) {
-    console.error('Inter-hub arb error:', err.message);
+    logger.error('Inter-hub arb error:', err.message);
     res.status(500).json({ error: clientErrMsg(err), results: [] });
   }
 });
@@ -9134,7 +9144,7 @@ app.get('/api/inter-hub-item-profitable', security.apiLimiter, async (req, res) 
       source: 'live',
     });
   } catch (err) {
-    console.error('❌ inter-hub-item-profitable error:', err.message);
+    logger.error('❌ inter-hub-item-profitable error:', err.message);
     res.status(500).json({ error: 'ESI fetch failed' });
   }
 });
@@ -9215,7 +9225,7 @@ app.get('/api/inter-hub-haul', security.apiLimiter, security.verifyEveToken, asy
       ...feeFields,
     });
   } catch (err) {
-    console.error('Inter-hub haul error:', err.message);
+    logger.error('Inter-hub haul error:', err.message);
     res.status(500).json({ error: clientErrMsg(err) });
   }
 });
@@ -9223,7 +9233,7 @@ app.get('/api/inter-hub-haul', security.apiLimiter, security.verifyEveToken, asy
 // Admin: Manually trigger pre-compute
 app.post('/api/admin/precompute', security.adminLimiter, async (req, res) => {
   // Simple API key auth for admin endpoints
-  const adminKey = process.env.FORGE_ADMIN_KEY;
+  const adminKey = config.adminKey;
   const providedKey = req.headers['x-admin-key'];
 
   if (!adminKey || providedKey !== adminKey) {
@@ -9243,19 +9253,19 @@ app.post('/api/admin/precompute', security.adminLimiter, async (req, res) => {
 
 // Admin: Manually trigger contract price ingest (v1.12.0). Runs in background.
 app.post('/api/admin/contract-ingest', security.adminLimiter, async (req, res) => {
-  const adminKey = process.env.FORGE_ADMIN_KEY;
+  const adminKey = config.adminKey;
   if (!adminKey || req.headers['x-admin-key'] !== adminKey) {
     return res.status(403).json({ error: 'Unauthorized' });
   }
   const raw = parseInt(req.body?.regionId, 10);
   const regionId = VALID_REGIONS.includes(raw) ? raw : CONTRACT_INGEST_REGION;
-  ingestRegionContracts(regionId).then(r => console.log('Contract ingest result:', r));
+  ingestRegionContracts(regionId).then(r => logger.info('Contract ingest result:', r));
   res.json({ status: 'started', region_id: regionId });
 });
 
 // Admin: View pre-compute run history
 app.get('/api/admin/precompute-status', security.adminLimiter, async (req, res) => {
-  const adminKey = process.env.FORGE_ADMIN_KEY;
+  const adminKey = config.adminKey;
   const providedKey = req.headers['x-admin-key'];
 
   if (!adminKey || providedKey !== adminKey) {
@@ -9301,7 +9311,7 @@ app.get('/api/admin/precompute-status', security.adminLimiter, async (req, res) 
 
 // Admin: Manually trigger volume enrichment (v0.9.1)
 app.post('/api/admin/volume-enrichment', security.adminLimiter, async (req, res) => {
-  const adminKey = process.env.FORGE_ADMIN_KEY;
+  const adminKey = config.adminKey;
   const providedKey = req.headers['x-admin-key'];
 
   if (!adminKey || providedKey !== adminKey) {
@@ -9911,14 +9921,14 @@ async function trackAiUsage(characterId, model, usage) {
       VALUES (?, ?, ?, ?, ?)
     `, [characterId, model, totalInputTokens, usage.output_tokens || 0, estimatedCost]);
   } catch (err) {
-    console.error('AI usage tracking error:', err.message);
+    logger.error('AI usage tracking error:', err.message);
     // Non-fatal — don't break the response
   }
 }
 
 // Admin: View AI costs
 app.get('/api/admin/ai-costs', security.adminLimiter, async (req, res) => {
-  const adminKey = process.env.FORGE_ADMIN_KEY;
+  const adminKey = config.adminKey;
   const providedKey = req.headers['x-admin-key'];
 
   if (!adminKey || providedKey !== adminKey) {
@@ -10065,7 +10075,7 @@ app.get('/api/industry-settings', security.apiLimiter, security.verifyEveToken, 
       invention_system_name: null,
     });
   } catch (err) {
-    console.error('Industry settings GET error:', err.message);
+    logger.error('Industry settings GET error:', err.message);
     res.status(500).json({ error: clientErrMsg(err) });
   }
 });
@@ -10351,7 +10361,7 @@ app.get('/api/structure-fit-suggestions', security.apiLimiter, security.verifyEv
 
     res.json({ suggestions: suggestions.slice(0, 5).map(({ _last, ...pub }) => pub) });
   } catch (err) {
-    console.error('structure-fit-suggestions error:', err.message);
+    logger.error('structure-fit-suggestions error:', err.message);
     res.status(500).json({ error: clientErrMsg(err) });
   }
 });
@@ -10408,7 +10418,7 @@ app.get('/api/job-cost-check', security.apiLimiter, security.verifyEveToken, asy
       } : null,
     });
   } catch (err) {
-    console.error('job-cost-check error:', err.message);
+    logger.error('job-cost-check error:', err.message);
     res.status(500).json({ error: clientErrMsg(err) });
   }
 });
@@ -10439,7 +10449,7 @@ async function loadSkillSnapshots() {
       });
     } catch (_) { /* corrupt row — ignore, next session post rewrites it */ }
   }
-  console.log(`✓ Skill snapshots loaded: ${skillSnapshots.size} characters`);
+  logger.info(`✓ Skill snapshots loaded: ${skillSnapshots.size} characters`);
 }
 
 async function saveSkillSnapshot(characterId, skills, standings, implants) {
@@ -10595,7 +10605,7 @@ app.get('/api/character-fee-rates', security.apiLimiter, security.verifyEveToken
     });
 
   } catch (err) {
-    console.error('Character fee rates error:', err.message);
+    logger.error('Character fee rates error:', err.message);
     res.status(500).json({ error: clientErrMsg(err) });
   }
 });
@@ -10813,9 +10823,9 @@ app.post('/api/industry-settings', security.apiLimiter, security.verifyEveToken,
     // character's own jobs when possible). Best effort — never affects the save.
     const liveToken = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
     learnStructureFit(characterId, liveToken, getCached(`session:${characterId}`)?.jobs, { force: true })
-      .catch(e => console.error('structure-fit learn failed:', e.message));
+      .catch(e => logger.error('structure-fit learn failed:', e.message));
   } catch (err) {
-    console.error('Industry settings POST error:', err.message);
+    logger.error('Industry settings POST error:', err.message);
     res.status(500).json({ error: clientErrMsg(err) });
   }
 });
@@ -10865,7 +10875,7 @@ app.get('/api/system-search', security.apiLimiter, security.verifyEveToken, asyn
     }
     res.json(results);
   } catch (err) {
-    console.error('System search error:', err.message);
+    logger.error('System search error:', err.message);
     res.json([]);
   }
 });
@@ -11630,7 +11640,7 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
     });
 
   } catch (err) {
-    console.error('True cost error:', err.message, err.stack?.split('\n')[1]);
+    logger.error('True cost error:', err.message, err.stack?.split('\n')[1]);
     res.status(500).json({ error: clientErrMsg(err) });
   }
 });
@@ -11656,7 +11666,7 @@ app.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, async (
  * Returns true if the key matches FORGE_ADMIN_KEY.
  */
 function isAdminRequest(req) {
-  const adminKey = process.env.FORGE_ADMIN_KEY;
+  const adminKey = config.adminKey;
   if (!adminKey) return false;
   const provided = req.headers['x-admin-key'] || '';
   if (provided.length !== adminKey.length) return false;
@@ -11716,8 +11726,8 @@ app.post('/api/corp/setup', security.adminLimiter, async (req, res) => {
 
   try {
     // 1. Exchange auth code for EVE tokens
-    const clientId     = process.env.EVE_CLIENT_ID;
-    const clientSecret = process.env.EVE_CLIENT_SECRET;
+    const clientId     = config.eve.clientId;
+    const clientSecret = config.eve.clientSecret;
     const authHeader   = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
 
     const tokenRes = await fetch('https://login.eveonline.com/v2/oauth/token', {
@@ -11810,11 +11820,11 @@ app.post('/api/corp/setup', security.adminLimiter, async (req, res) => {
       ]
     );
 
-    console.log(`✓ Corp ${corpId} (${corpName}) configured by ${characterName} (${characterId})`);
+    logger.info(`✓ Corp ${corpId} (${corpName}) configured by ${characterName} (${characterId})`);
 
     // 8. Trigger initial ESI data refresh in background (non-blocking)
     refreshCorpData(corpId).catch(err =>
-      console.error(`⚠ Initial corp data refresh failed: ${err.message}`)
+      logger.error(`⚠ Initial corp data refresh failed: ${err.message}`)
     );
 
     res.json({
@@ -11826,7 +11836,7 @@ app.post('/api/corp/setup', security.adminLimiter, async (req, res) => {
     });
 
   } catch (err) {
-    console.error('Corp setup error:', err.message);
+    logger.error('Corp setup error:', err.message);
     res.status(500).json({ error: clientErrMsg(err) });
   }
 });
@@ -11974,7 +11984,7 @@ app.get('/api/corp/blueprints',
         },
       });
     } catch (err) {
-      console.error('Corp blueprints error:', err.message);
+      logger.error('Corp blueprints error:', err.message);
       res.status(500).json({ error: clientErrMsg(err) });
     }
   }
@@ -12047,7 +12057,7 @@ app.get('/api/corp/assets',
         },
       });
     } catch (err) {
-      console.error('Corp assets error:', err.message);
+      logger.error('Corp assets error:', err.message);
       res.status(500).json({ error: clientErrMsg(err) });
     }
   }
@@ -12090,7 +12100,7 @@ app.get('/api/corp/jobs',
         meta: { count: jobs.length, corp_name: req.corpName, last_refresh_at: corpLastRefreshIso(corpId) },
       });
     } catch (err) {
-      console.error('Corp jobs error:', err.message);
+      logger.error('Corp jobs error:', err.message);
       res.status(500).json({ error: clientErrMsg(err) });
     }
   }
@@ -12106,8 +12116,8 @@ app.post('/api/corp/refresh',
     try {
       // Force a live re-pull using the viewing Director's own token.
       refreshCorpData(req.corpId, req.corpAccessToken)
-        .then(result => console.log(`✓ Manual corp refresh complete:`, result))
-        .catch(err    => console.error(`⚠ Manual corp refresh failed: ${err.message}`));
+        .then(result => logger.info(`✓ Manual corp refresh complete:`, result))
+        .catch(err    => logger.error(`⚠ Manual corp refresh failed: ${err.message}`));
 
       res.json({ ok: true, message: 'Corp data refresh started in background' });
     } catch (err) {
@@ -12147,7 +12157,7 @@ app.post('/api/corp/admin/whitelist', security.adminLimiter, async (req, res) =>
        ON CONFLICT(character_id) DO UPDATE SET corp_id = excluded.corp_id, note = excluded.note`,
       [parseInt(character_id), config?.corp_id ?? null, note || null]
     );
-    console.log(`✓ Corp admin whitelist: added character ${character_id} (${note || 'no note'})`);
+    logger.info(`✓ Corp admin whitelist: added character ${character_id} (${note || 'no note'})`);
     res.json({ ok: true, character_id: parseInt(character_id) });
   } catch (err) {
     res.status(500).json({ error: clientErrMsg(err) });
@@ -12163,7 +12173,7 @@ app.delete('/api/corp/admin/whitelist/:characterId', security.adminLimiter, asyn
 
   try {
     await dbRun('DELETE FROM corp_admin_access WHERE character_id = ?', [characterId]);
-    console.log(`✓ Corp admin whitelist: removed character ${characterId}`);
+    logger.info(`✓ Corp admin whitelist: removed character ${characterId}`);
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: clientErrMsg(err) });
@@ -12178,7 +12188,7 @@ app.delete('/api/corp/admin/config', security.adminLimiter, async (req, res) => 
     await dbRun('DELETE FROM corp_blueprints');
     await dbRun('DELETE FROM corp_assets');
     await dbRun('DELETE FROM corp_jobs');
-    console.log('✓ Corp config and all cached corp data deleted');
+    logger.info('✓ Corp config and all cached corp data deleted');
     res.json({ ok: true, message: 'Corp config deleted. Re-run corp setup to reconfigure.' });
   } catch (err) {
     res.status(500).json({ error: clientErrMsg(err) });
@@ -12195,15 +12205,15 @@ setInterval(async () => {
     configs.forEach((cfg, i) => {
       setTimeout(async () => {
         try {
-          console.log(`⟳ Scheduled corp data refresh for corp ${cfg.corp_id}...`);
+          logger.info(`⟳ Scheduled corp data refresh for corp ${cfg.corp_id}...`);
           await refreshCorpData(cfg.corp_id);
         } catch (err) {
-          console.error(`⚠ Scheduled corp refresh failed for corp ${cfg.corp_id}: ${err.message}`);
+          logger.error(`⚠ Scheduled corp refresh failed for corp ${cfg.corp_id}: ${err.message}`);
         }
       }, i * 500);
     });
   } catch (err) {
-    console.error(`⚠ Scheduled corp refresh failed: ${err.message}`);
+    logger.error(`⚠ Scheduled corp refresh failed: ${err.message}`);
   }
 }, 4 * 60 * 60 * 1000); // every 4 hours
 
@@ -12233,7 +12243,7 @@ async function refreshStructureToken(structureId) {
   if (!row) return null;
 
   const refreshToken = decryptToken(row.enc_refresh_token, row.token_iv, row.token_tag);
-  const authHdr      = 'Basic ' + Buffer.from(`${process.env.EVE_CLIENT_ID}:${process.env.EVE_CLIENT_SECRET}`).toString('base64');
+  const authHdr      = 'Basic ' + Buffer.from(`${config.eve.clientId}:${config.eve.clientSecret}`).toString('base64');
 
   const res  = await fetch('https://login.eveonline.com/v2/oauth/token', {
     method:  'POST',
@@ -12242,7 +12252,7 @@ async function refreshStructureToken(structureId) {
   });
   const data = await res.json();
   if (!res.ok || !data.access_token) {
-    console.error(`[KS poll] Token refresh failed (${res.status}):`, data.error_description || data.error);
+    logger.error(`[KS poll] Token refresh failed (${res.status}):`, data.error_description || data.error);
     return null;
   }
 
@@ -12260,12 +12270,12 @@ async function refreshStructureToken(structureId) {
 async function pollKeepstarHistory() {
   if (ksPollRunning) return;
   ksPollRunning = true;
-  console.log('[KS poll] Starting Keepstar market snapshot...');
+  logger.info('[KS poll] Starting Keepstar market snapshot...');
 
   try {
     const accessToken = await getOrRefreshStructureToken();
     if (!accessToken) {
-      console.warn('[KS poll] No valid token — skipping. Run /api/ks-test-auth to re-authorise.');
+      logger.warn('[KS poll] No valid token — skipping. Run /api/ks-test-auth to re-authorise.');
       return;
     }
 
@@ -12276,7 +12286,7 @@ async function pollKeepstarHistory() {
         `https://esi.evetech.net/latest/markets/structures/${KEEPSTAR_STRUCTURE_ID}/?page=${page}&datasource=tranquility`,
         { headers: { 'Authorization': `Bearer ${accessToken}` } }
       );
-      if (!res.ok) { console.error(`[KS poll] ESI ${res.status} on page ${page}`); break; }
+      if (!res.ok) { logger.error(`[KS poll] ESI ${res.status} on page ${page}`); break; }
       const orders = await res.json();
       if (!Array.isArray(orders) || orders.length === 0) break;
       sellOrders.push(...orders.filter(o => !o.is_buy_order));
@@ -12285,7 +12295,7 @@ async function pollKeepstarHistory() {
       page++;
     }
 
-    if (sellOrders.length === 0) { console.warn('[KS poll] No sell orders returned'); return; }
+    if (sellOrders.length === 0) { logger.warn('[KS poll] No sell orders returned'); return; }
 
     // Group by type_id — track prices AND total available quantity
     const byType = {};
@@ -12360,9 +12370,9 @@ async function pollKeepstarHistory() {
       [KEEPSTAR_STRUCTURE_ID]
     );
 
-    console.log(`[KS poll] ✓ Wrote ${written} type snapshots for ${today} (${sellOrders.length} sell orders, ${volEstimates} vol estimates)`);
+    logger.info(`[KS poll] ✓ Wrote ${written} type snapshots for ${today} (${sellOrders.length} sell orders, ${volEstimates} vol estimates)`);
   } catch (err) {
-    console.error('[KS poll] Error:', err.message);
+    logger.error('[KS poll] Error:', err.message);
   } finally {
     ksPollRunning = false;
   }
@@ -12583,7 +12593,7 @@ app.get('/api/lp-store', security.apiLimiter, async (req, res) => {
 
     res.json({ offers: results.slice(offset, offset + limit), total: results.length, prices_live: pricesLive, hub_name: hubName, transaction_tax_rate: transactionTaxRate, session_cached: sessionCached });
   } catch (err) {
-    console.error('LP store error:', err.message);
+    logger.error('LP store error:', err.message);
     res.status(500).json({ error: clientErrMsg(err), offers: [] });
   }
 });
@@ -12610,7 +12620,7 @@ initDatabase().then(async () => {
       const key = Object.keys(DECRYPTORS).find(k => DECRYPTORS[k].name === row.name);
       if (key) decryptorTypeIds[key] = row.type_id;
     }
-    console.log(`✓ Decryptor type IDs resolved: ${Object.keys(decryptorTypeIds).join(', ')}`);
+    logger.info(`✓ Decryptor type IDs resolved: ${Object.keys(decryptorTypeIds).join(', ')}`);
   }
 
   // Load hub book snapshots so the trading scanner has instant data before the first live poll.
@@ -12618,9 +12628,9 @@ initDatabase().then(async () => {
 
   // Pre-warm all manufacturing region price caches so the first user request after restart
   // never hits prices_warm=false. Re-warm every 55 min to stay ahead of the 1-hour TTL.
-  warmAllRegions().catch(err => console.warn('⚠ Initial region price warm failed:', err.message));
+  warmAllRegions().catch(err => logger.warn('⚠ Initial region price warm failed:', err.message));
   setInterval(() => {
-    warmAllRegions().catch(err => console.warn('⚠ Region price refresh failed:', err.message));
+    warmAllRegions().catch(err => logger.warn('⚠ Region price refresh failed:', err.message));
   }, 55 * 60 * 1000);
 
   // prevent idle-stop from firing before any real user request arrives.
@@ -12631,8 +12641,10 @@ initDatabase().then(async () => {
   pollKeepstarHistory();
   setInterval(pollKeepstarHistory, KS_POLL_INTERVAL_MS);
 
+  app.use(createErrorHandler({ logger, clientErrMsg })); // must stay after every route
+
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`
+    logger.info(`
 ╔════════════════════════════════════════════╗
 ║      F.O.R.G.E. Server v1.0.0.0 Running      ║
 ║     http://localhost:${PORT}               ║
@@ -12646,23 +12658,23 @@ initDatabase().then(async () => {
 
     // Run pre-compute on startup (delayed 10s to let ESI warm up)
     setTimeout(() => {
-      console.log('⟳ Running initial pre-compute...');
+      logger.info('⟳ Running initial pre-compute...');
       runPreCompute().then(result => {
-        console.log('✓ Initial pre-compute:', result.status);
+        logger.info('✓ Initial pre-compute:', result.status);
         
         // After pre-compute completes, run volume enrichment
         if (result.status === 'completed') {
           setTimeout(() => {
-            console.log('⟳ Running volume enrichment...');
+            logger.info('⟳ Running volume enrichment...');
             runVolumeEnrichment().then(enrichResult => {
-              console.log('✓ Volume enrichment:', enrichResult.status);
+              logger.info('✓ Volume enrichment:', enrichResult.status);
             }).catch(err => {
-              console.error('⚠ Volume enrichment failed:', err.message);
+              logger.error('⚠ Volume enrichment failed:', err.message);
             });
           }, 5000); // 5 second delay after pre-compute
         }
       }).catch(err => {
-        console.error('⚠ Initial pre-compute failed:', err.message);
+        logger.error('⚠ Initial pre-compute failed:', err.message);
       });
     }, 10000);
 
@@ -12670,23 +12682,23 @@ initDatabase().then(async () => {
     // (Daily would be fine, but 6-hourly keeps prices fresher without ESI abuse)
     const SIX_HOURS = 6 * 60 * 60 * 1000;
     setInterval(() => {
-      console.log('⟳ Scheduled pre-compute starting...');
+      logger.info('⟳ Scheduled pre-compute starting...');
       runPreCompute().then(result => {
-        console.log('✓ Scheduled pre-compute:', result.status);
+        logger.info('✓ Scheduled pre-compute:', result.status);
         
         // After scheduled pre-compute, run volume enrichment
         if (result.status === 'completed') {
           setTimeout(() => {
-            console.log('⟳ Running volume enrichment...');
+            logger.info('⟳ Running volume enrichment...');
             runVolumeEnrichment().then(enrichResult => {
-              console.log('✓ Volume enrichment:', enrichResult.status);
+              logger.info('✓ Volume enrichment:', enrichResult.status);
             }).catch(err => {
-              console.error('⚠ Volume enrichment failed:', err.message);
+              logger.error('⚠ Volume enrichment failed:', err.message);
             });
           }, 5000);
         }
       }).catch(err => {
-        console.error('⚠ Scheduled pre-compute failed:', err.message);
+        logger.error('⚠ Scheduled pre-compute failed:', err.message);
       });
     }, SIX_HOURS);
 
@@ -12698,29 +12710,29 @@ initDatabase().then(async () => {
         const row  = await dbGet('SELECT MAX(computed_at) AS last FROM contract_prices WHERE region_id = ?', [CONTRACT_INGEST_REGION]);
         const last = row?.last ? Date.parse(row.last) : 0;
         if (!last || (Date.now() - last) > ONE_WEEK) {
-          console.log('⟳ Running initial contract ingest...');
-          ingestRegionContracts().then(r => console.log('✓ Initial contract ingest:', r.status));
+          logger.info('⟳ Running initial contract ingest...');
+          ingestRegionContracts().then(r => logger.info('✓ Initial contract ingest:', r.status));
         } else {
-          console.log(`✓ Contract prices fresh (computed ${row.last}) — skipping initial ingest`);
+          logger.info(`✓ Contract prices fresh (computed ${row.last}) — skipping initial ingest`);
         }
       } catch (err) {
-        console.error('⚠ Contract ingest startup check failed:', err.message);
+        logger.error('⚠ Contract ingest startup check failed:', err.message);
       }
     }, 30000);
     setInterval(() => {
-      console.log('⟳ Scheduled weekly contract ingest...');
+      logger.info('⟳ Scheduled weekly contract ingest...');
       ingestRegionContracts()
-        .then(r => console.log('✓ Weekly contract ingest:', r.status))
-        .catch(err => console.error('⚠ Weekly contract ingest failed:', err.message));
+        .then(r => logger.info('✓ Weekly contract ingest:', r.status))
+        .catch(err => logger.error('⚠ Weekly contract ingest failed:', err.message));
     }, ONE_WEEK).unref();
 
     // Push job completion checker — polls every 5 minutes for finished industry jobs
     if (webpush) {
       setInterval(() => {
         pushRoutes.checkJobCompletions({ dbRun, dbAll, webpush })
-          .catch(err => console.error('⚠ Push job check failed:', err.message));
+          .catch(err => logger.error('⚠ Push job check failed:', err.message));
       }, 5 * 60 * 1000).unref();
-      console.log('✓ Push notification job checker: running every 5 minutes');
+      logger.info('✓ Push notification job checker: running every 5 minutes');
     }
   });
 
@@ -12728,6 +12740,6 @@ initDatabase().then(async () => {
   app.use(security.errorHandler);
   
 }).catch(err => {
-  console.error('Failed to start server:', err.message);
+  logger.error('Failed to start server:', err.message);
   process.exit(1);
 });

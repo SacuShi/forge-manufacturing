@@ -1,6 +1,8 @@
 'use strict';
 // Admin endpoints: precompute triggers, AI cost report, health check.
 
+const logger = require('../lib/logger');
+const config = require('../lib/config');
 const router = require('express').Router();
 
 module.exports = function adminRoutes({
@@ -13,7 +15,7 @@ module.exports = function adminRoutes({
 
   // Admin: Manually trigger pre-compute
   router.post('/api/admin/precompute', security.adminLimiter, async (req, res) => {
-    const adminKey    = process.env.FORGE_ADMIN_KEY;
+    const adminKey    = config.adminKey;
     const providedKey = req.headers['x-admin-key'];
     if (!adminKey || providedKey !== adminKey) return res.status(403).json({ error: 'Unauthorized' });
 
@@ -27,17 +29,17 @@ module.exports = function adminRoutes({
 
   // Admin: Manually trigger contract price ingest (v1.12.0)
   router.post('/api/admin/contract-ingest', security.adminLimiter, async (req, res) => {
-    const adminKey = process.env.FORGE_ADMIN_KEY;
+    const adminKey = config.adminKey;
     if (!adminKey || req.headers['x-admin-key'] !== adminKey) return res.status(403).json({ error: 'Unauthorized' });
     const raw      = parseInt(req.body?.regionId, 10);
     const regionId = VALID_REGIONS.includes(raw) ? raw : CONTRACT_INGEST_REGION;
-    ingestRegionContracts(regionId).then(r => console.log('Contract ingest result:', r));
+    ingestRegionContracts(regionId).then(r => logger.info('Contract ingest result:', r));
     res.json({ status: 'started', region_id: regionId });
   });
 
   // Admin: View pre-compute run history
   router.get('/api/admin/precompute-status', security.adminLimiter, async (req, res) => {
-    const adminKey    = process.env.FORGE_ADMIN_KEY;
+    const adminKey    = config.adminKey;
     const providedKey = req.headers['x-admin-key'];
     if (!adminKey || providedKey !== adminKey) return res.status(403).json({ error: 'Unauthorized' });
     try {
@@ -63,7 +65,7 @@ module.exports = function adminRoutes({
 
   // Admin: Manually trigger volume enrichment (v0.9.1)
   router.post('/api/admin/volume-enrichment', security.adminLimiter, async (req, res) => {
-    const adminKey    = process.env.FORGE_ADMIN_KEY;
+    const adminKey    = config.adminKey;
     const providedKey = req.headers['x-admin-key'];
     if (!adminKey || providedKey !== adminKey) return res.status(403).json({ error: 'Unauthorized' });
     const result = runVolumeEnrichment();
@@ -76,7 +78,7 @@ module.exports = function adminRoutes({
 
   // Admin: View AI costs
   router.get('/api/admin/ai-costs', security.adminLimiter, async (req, res) => {
-    const adminKey    = process.env.FORGE_ADMIN_KEY;
+    const adminKey    = config.adminKey;
     const providedKey = req.headers['x-admin-key'];
     if (!adminKey || providedKey !== adminKey) return res.status(403).json({ error: 'Unauthorized' });
     try {

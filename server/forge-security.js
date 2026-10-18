@@ -33,6 +33,7 @@
 
 'use strict';
 
+const logger = require('./lib/logger');
 const rateLimit = require('express-rate-limit');
 
 // ── Rate limiters ─────────────────────────────────────────────────────────────
@@ -206,7 +207,7 @@ async function extractCharacterFromToken(authHeader) {
       verifyErr.name === 'AbortError' ||
       verifyErr.message === 'fetch failed';  // generic Node fetch network error
     if (isNetworkFailure) {
-      console.warn('⚠ JWKS network failure — using decode-only fallback:', verifyErr.message);
+      logger.warn('⚠ JWKS network failure — using decode-only fallback:', verifyErr.message);
       payload = _decodeJwtUnsafe(token);
     } else {
       throw Object.assign(new Error('Invalid or expired token'), { status: 401 });
@@ -348,7 +349,7 @@ function errorHandler(err, req, res, next) {
   // Not a server bug — log nothing, nothing to send back.
   if (err.code === 'ECONNABORTED' || err.type === 'request.aborted') return;
 
-  console.error('Unhandled server error:', err);
+  logger.error('Unhandled server error:', err);
   const status = typeof err.status === 'number' ? err.status :
                  typeof err.statusCode === 'number' ? err.statusCode : 500;
   const message = (err.message || 'Internal server error')

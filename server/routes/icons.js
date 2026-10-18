@@ -21,6 +21,7 @@
  * Typical icon: 1–4 KB. 10,000 unique icons ≈ 10–40 MB total disk use.
  */
 
+const logger = require('../lib/logger');
 const router   = require('express').Router();
 const path     = require('path');
 const fs       = require('fs');
@@ -81,7 +82,7 @@ module.exports = function iconRoutes() {
 
       // Write to disk asynchronously — don't block the response on disk I/O
       fs.writeFile(cachePath, buffer, (err) => {
-        if (err) console.error(`Icon cache write failed (${filename}):`, err.message);
+        if (err) logger.error(`Icon cache write failed (${filename}):`, err.message);
       });
 
       res.set('Cache-Control', 'public, max-age=31536000, immutable');
@@ -90,7 +91,7 @@ module.exports = function iconRoutes() {
 
     } catch (err) {
       // Timeout or network error — degrade gracefully (browser shows onError fallback)
-      console.error(`Icon fetch failed typeId=${typeId} size=${size}:`, err.message);
+      logger.error(`Icon fetch failed typeId=${typeId} size=${size}:`, err.message);
       res.status(502).end();
     }
   });

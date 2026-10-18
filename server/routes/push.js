@@ -1,16 +1,18 @@
 'use strict';
 // Push notification endpoints + background job-completion checker.
 
+const logger = require('../lib/logger');
+const config = require('../lib/config');
 const router = require('express').Router();
 
 module.exports = function pushRoutes({ security, dbRun, dbAll, webpush }) {
 
   // Return VAPID public key so clients can subscribe
   router.get('/api/push/vapid-public-key', (req, res) => {
-    if (!webpush || !process.env.VAPID_PUBLIC_KEY) {
+    if (!webpush || !config.vapid.publicKey) {
       return res.status(503).json({ error: 'Push notifications not configured on this server' });
     }
-    res.json({ publicKey: process.env.VAPID_PUBLIC_KEY });
+    res.json({ publicKey: config.vapid.publicKey });
   });
 
   // Save a push subscription for a character
@@ -106,7 +108,7 @@ module.exports.checkJobCompletions = async function checkJobCompletions({ dbRun,
         notified.push(job.id);
       } catch (e) {
         if (e.statusCode === 410 || e.statusCode === 404) expired.push(job.endpoint);
-        else console.error('Push send error:', e.message);
+        else logger.error('Push send error:', e.message);
       }
     }
 
@@ -116,11 +118,11 @@ module.exports.checkJobCompletions = async function checkJobCompletions({ dbRun,
     if (expired.length) {
       for (const ep of expired) await dbRun('DELETE FROM push_subscriptions WHERE endpoint=?', [ep]);
     }
-    if (notified.length) console.log(`🔔 Push: sent ${notified.length} job completion notification(s)`);
+    if (notified.length) logger.info(`🔔 Push: sent ${notified.length} job completion notification(s)`);
 
     await dbRun(`DELETE FROM push_job_watch WHERE notified=1 AND end_date < datetime('now','-2 days')`);
   } catch (err) {
-    console.error('Push job check error:', err.message);
+    logger.error('Push job check error:', err.message);
   } finally {
     _checkRunning = false;
   }

@@ -37,6 +37,7 @@
  *   POST /api/pi-planner/plan
  */
 
+const logger = require('../lib/logger');
 const router = require('express').Router();
 
 const CHUNK = 500;
@@ -505,7 +506,7 @@ module.exports = function piPlannerRoutes({ dbAll, dbGet, security }) {
       const regions = await dbAll(`SELECT region_id, name FROM sde_regions WHERE region_id < 11000000 ORDER BY name`);
       res.json({ regions });
     } catch (err) {
-      console.error('PI planner /regions error:', err);
+      logger.error('PI planner /regions error:', err);
       res.status(500).json({ error: 'Failed to load regions' });
     }
   });
@@ -546,7 +547,7 @@ module.exports = function piPlannerRoutes({ dbAll, dbGet, security }) {
       rows.sort((a, b) => a.name.localeCompare(b.name));
       res.json({ targets: rows.slice(0, 50) });
     } catch (err) {
-      console.error('PI planner /targets error:', err);
+      logger.error('PI planner /targets error:', err);
       res.status(500).json({ error: 'Failed to search targets' });
     }
   });
@@ -656,7 +657,7 @@ module.exports = function piPlannerRoutes({ dbAll, dbGet, security }) {
           : 'Volume / Max ISK/hr: every PI product on its own dedicated planet — no co-location, no tier-sharing. Maximum CPU/Power per schematic = maximum throughput = maximum ISK/hr potential. Uses the most colony slots. P4 requires Barren or Temperate. Factory preference: Barren > Lava > Plasma/Storm/Ice/Oceanic > Temperate > Gas. CPU/Power and extractor yield not modeled — verify in-game.',
       });
     } catch (err) {
-      console.error('PI planner /plan error:', err);
+      logger.error('PI planner /plan error:', err);
       res.status(500).json({ error: 'Failed to compute PI plan' });
     }
   });
