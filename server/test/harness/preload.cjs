@@ -3,7 +3,9 @@
 // testable without touching the outside world:
 //   - node-fetch is replaced by a stub serving the ESI fixtures and a scripted Anthropic reply;
 //   - the global fetch is sealed (anything unexpected is blocked and logged);
-//   - forge-security's verifyEveToken is replaced so the character id comes from an `x-test-char` header.
+//   - forge-security's verifyEveToken is replaced so the character id comes from an `x-test-char` header;
+//   - express-rate-limit is a pass-through (the matrix test makes hundreds of calls from one address);
+//   - every route / middleware registration is written, in order, to FORGE_TEST_ROUTE_DUMP (route-table test).
 const Module = require('module');
 const fs = require('fs');
 
@@ -68,10 +70,39 @@ function routeResp(a, b) {
 }
 fakeFetch.default = fakeFetch;
 
+// Records each registration as it happens: { kind, method, path, handlers } per line. Express 4 routes all end up
+// in Route.prototype[method] (app.get and router.get both go through it) and layers in Router.use.
+const ROUTE_DUMP = process.env.FORGE_TEST_ROUTE_DUMP;
+const handlerName = (fn) => (typeof fn === 'function' ? fn.name || '<anonymous>' : '<?>');
+function recordRoutes(express) {
+  if (!ROUTE_DUMP || express.__routesRecorded) return;
+  express.__routesRecorded = true;
+  const note = (entry) => { try { fs.appendFileSync(ROUTE_DUMP, JSON.stringify(entry) + '\n'); } catch (_) { /* best-effort */ } };
+  const Route = require('express/lib/router/route');
+  for (const method of require('methods')) {
+    const original = Route.prototype[method];
+    Route.prototype[method] = function recordedRoute(...handlers) {
+      note({ kind: 'route', method: method.toUpperCase(), path: String(this.path), handlers: handlers.flat(Infinity).map(handlerName) });
+      return original.apply(this, handlers);
+    };
+  }
+  const originalUse = express.Router.use;
+  express.Router.use = function recordedUse(...args) {
+    const hasPath = typeof args[0] !== 'function' && !Array.isArray(args[0]);
+    note({ kind: 'use', path: hasPath ? String(args[0]) : '(all)', handlers: args.slice(hasPath ? 1 : 0).flat(Infinity).map(handlerName) });
+    return originalUse.apply(this, args);
+  };
+}
+
+const passThroughLimiter = () => (req, res, next) => next();
+
 const realLoad = Module._load;
 Module._load = function patchedLoad(request) {
   if (request === 'node-fetch') return fakeFetch;
+  // The route-matrix test calls every route within seconds, far past what the limiters allow a real client.
+  if (request === 'express-rate-limit') return Object.assign(passThroughLimiter, { rateLimit: passThroughLimiter, default: passThroughLimiter });
   const exported = realLoad.apply(this, arguments);
+  if (request === 'express') recordRoutes(exported);
   if (request === './forge-security' && exported && !exported.__testPatched) {
     exported.verifyEveToken = (req, res, next) => {
       const cid = Number(req.headers['x-test-char']);

@@ -43,6 +43,7 @@ async function bootServer({ seed = true } = {}) {
 
   const fixturesPath = path.join(base, 'fixtures.json');
   const callLog = path.join(base, 'calls.log');
+  const routeDump = path.join(base, 'routes.jsonl');
   fs.writeFileSync(fixturesPath, JSON.stringify(universe.esiFixtures()));
   fs.writeFileSync(callLog, '');
   const dbFile = path.join(base, 'forge-db', 'forge.db');
@@ -54,8 +55,9 @@ async function bootServer({ seed = true } = {}) {
     cwd: appDir,
     env: {
       ...process.env, PORT: String(port), NODE_ENV: 'test',
-      FORGE_TEST_FIXTURES: fixturesPath, FORGE_TEST_CALL_LOG: callLog,
-      ANTHROPIC_API_KEY: 'sk-ant-test-not-real', EVE_CLIENT_ID: 'test', EVE_CLIENT_SECRET: 'test',
+      FORGE_TEST_FIXTURES: fixturesPath, FORGE_TEST_CALL_LOG: callLog, FORGE_TEST_ROUTE_DUMP: routeDump,
+      ANTHROPIC_API_KEY: 'sk-ant-test-not-real', FORGE_ADMIN_KEY: 'test-admin-key',
+      FORGE_CORP_KEY: 'test-corp-key', FORGE_REMEMBER_KEY: 'test-remember-key', EVE_CLIENT_ID: 'test', EVE_CLIENT_SECRET: 'test',
     },
   });
   child.stdout.on('data', (d) => { output += d; });
@@ -75,6 +77,7 @@ async function bootServer({ seed = true } = {}) {
   return {
     baseUrl,
     callLogFile: callLog,
+    routeDumpFile: routeDump,
     dbFile,
     output: () => output,
     async stop() {

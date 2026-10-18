@@ -97,7 +97,7 @@ describe('profit lists', () => {
 
   it('lists the product with its hub prices once the pre-compute has run', async () => {
     const res = await untilWarm(
-      () => as(PILOT).get(`/api/top-profitable-by-skills?regionId=${U.JITA_REGION}&limit=10&minVolume=0`),
+      () => as(PILOT).get(`/api/top-profitable-by-skills?regionId=${U.JITA_REGION}&limit=10&minVolume=0&includeRisky=true`), // risky: once the volume enrichment has run the thin test market is hidden by default, and this test is about prices
       (b) => Array.isArray(b?.results) && b.results.some((r) => r.product_id === U.PRODUCT),
       80,
     );
