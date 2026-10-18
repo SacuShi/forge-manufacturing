@@ -1,0 +1,5065 @@
+{
+ "GET /health": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "database": "string",
+    "precompute": {
+     "blueprintsProcessed": "number",
+     "isRunning": "boolean",
+     "lastRun": "string",
+     "lastStatus": "string"
+    },
+    "priceCache": {
+     "items": "number",
+     "loaded": "boolean"
+    },
+    "status": "string",
+    "uptime": "number",
+    "version": "string",
+    "volumeEnrichment": {
+     "enriched": "number",
+     "isRunning": "boolean",
+     "risky": "number",
+     "total": "number"
+    }
+   }
+  },
+  "signedOut": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "database": "string",
+    "precompute": {
+     "blueprintsProcessed": "number",
+     "isRunning": "boolean",
+     "lastRun": "string",
+     "lastStatus": "string"
+    },
+    "priceCache": {
+     "items": "number",
+     "loaded": "boolean"
+    },
+    "status": "string",
+    "uptime": "number",
+    "version": "string",
+    "volumeEnrichment": {
+     "enriched": "number",
+     "isRunning": "boolean",
+     "risky": "number",
+     "total": "number"
+    }
+   }
+  }
+ },
+ "GET /api/jita-prices": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "prices": {
+     "34": {
+      "buy": "number",
+      "buyScope": "string",
+      "median": "number",
+      "regionSell": "number",
+      "sell": "number",
+      "sellScope": "string"
+     },
+     "35": {
+      "buy": "number",
+      "buyScope": "string",
+      "median": "number",
+      "regionSell": "number",
+      "sell": "number",
+      "sellScope": "string"
+     },
+     "36": {
+      "buy": "number",
+      "buyScope": "string",
+      "median": "number",
+      "regionSell": "number",
+      "sell": "number",
+      "sellScope": "string"
+     },
+     "900001": {
+      "buy": "number",
+      "buyScope": "string",
+      "median": "number",
+      "regionSell": "number",
+      "sell": "number",
+      "sellScope": "string"
+     }
+    }
+   }
+  },
+  "signedOut": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "prices": {
+     "34": {
+      "buy": "number",
+      "buyScope": "string",
+      "median": "number",
+      "regionSell": "number",
+      "sell": "number",
+      "sellScope": "string"
+     },
+     "35": {
+      "buy": "number",
+      "buyScope": "string",
+      "median": "number",
+      "regionSell": "number",
+      "sell": "number",
+      "sellScope": "string"
+     },
+     "36": {
+      "buy": "number",
+      "buyScope": "string",
+      "median": "number",
+      "regionSell": "number",
+      "sell": "number",
+      "sellScope": "string"
+     },
+     "900001": {
+      "buy": "number",
+      "buyScope": "string",
+      "median": "number",
+      "regionSell": "number",
+      "sell": "number",
+      "sellScope": "string"
+     }
+    }
+   }
+  }
+ },
+ "GET /api/prices/:regionId": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "prices": {
+     "34": {
+      "buy": "number",
+      "buyScope": "string",
+      "median": "number",
+      "regionSell": "number",
+      "sell": "number",
+      "sellScope": "string"
+     },
+     "35": {
+      "buy": "number",
+      "buyScope": "string",
+      "median": "number",
+      "regionSell": "number",
+      "sell": "number",
+      "sellScope": "string"
+     },
+     "36": {
+      "buy": "number",
+      "buyScope": "string",
+      "median": "number",
+      "regionSell": "number",
+      "sell": "number",
+      "sellScope": "string"
+     },
+     "900001": {
+      "buy": "number",
+      "buyScope": "string",
+      "median": "number",
+      "regionSell": "number",
+      "sell": "number",
+      "sellScope": "string"
+     }
+    },
+    "regionId": "number"
+   }
+  },
+  "signedOut": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "prices": {
+     "34": {
+      "buy": "number",
+      "buyScope": "string",
+      "median": "number",
+      "regionSell": "number",
+      "sell": "number",
+      "sellScope": "string"
+     },
+     "35": {
+      "buy": "number",
+      "buyScope": "string",
+      "median": "number",
+      "regionSell": "number",
+      "sell": "number",
+      "sellScope": "string"
+     },
+     "36": {
+      "buy": "number",
+      "buyScope": "string",
+      "median": "number",
+      "regionSell": "number",
+      "sell": "number",
+      "sellScope": "string"
+     },
+     "900001": {
+      "buy": "number",
+      "buyScope": "string",
+      "median": "number",
+      "regionSell": "number",
+      "sell": "number",
+      "sellScope": "string"
+     }
+    },
+    "regionId": "number"
+   }
+  }
+ },
+ "GET /api/item-names": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "items": {
+     "34": "string",
+     "35": "string",
+     "36": "string",
+     "900001": "string",
+     "900101": "string"
+    }
+   }
+  },
+  "signedOut": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "items": {
+     "34": "string",
+     "35": "string",
+     "36": "string",
+     "900001": "string",
+     "900101": "string"
+    }
+   }
+  }
+ },
+ "POST /api/resolve-type-names": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "names": {
+     "34": "string",
+     "900001": "string"
+    }
+   },
+   "values": {
+    "names": {
+     "34": "Tritanium",
+     "900001": "Test Frigate"
+    }
+   }
+  },
+  "signedOut": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "names": {
+     "34": "string",
+     "900001": "string"
+    }
+   }
+  }
+ },
+ "GET /api/blueprint-database": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "blueprints": {
+     "900101": {
+      "blueprintId": "number",
+      "buildTime": "number",
+      "materials": {
+       "array": [
+        {
+         "quantity": "number",
+         "typeId": "number"
+        }
+       ]
+      },
+      "productId": "number"
+     }
+    }
+   }
+  },
+  "signedOut": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "blueprints": {
+     "900101": {
+      "blueprintId": "number",
+      "buildTime": "number",
+      "materials": {
+       "array": [
+        {
+         "quantity": "number",
+         "typeId": "number"
+        }
+       ]
+      },
+      "productId": "number"
+     }
+    }
+   }
+  }
+ },
+ "GET /api/system-search": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "array": [
+     {
+      "security": "number",
+      "system_id": "number",
+      "system_name": "string"
+     }
+    ]
+   },
+   "values": [
+    {
+     "security": 0.9459,
+     "system_id": 30000142,
+     "system_name": "Jita"
+    }
+   ]
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/industry-rigs": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "rigs": {
+     "37146": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": "array(empty)",
+      "timePct": "number"
+     },
+     "37147": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": "array(empty)",
+      "timePct": "number"
+     },
+     "37148": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": "array(empty)",
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "37149": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": "array(empty)",
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "37150": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": "array(empty)",
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "37151": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": "array(empty)",
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "37152": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": "array(empty)",
+      "timePct": "number"
+     },
+     "37153": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": "array(empty)",
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "37154": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": "array(empty)",
+      "timePct": "number"
+     },
+     "37155": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": "array(empty)",
+      "timePct": "number"
+     },
+     "37156": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": "array(empty)",
+      "timePct": "number"
+     },
+     "37157": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": "array(empty)",
+      "timePct": "number"
+     },
+     "37158": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": "array(empty)",
+      "timePct": "number"
+     },
+     "37159": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": "array(empty)",
+      "timePct": "number"
+     },
+     "37160": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": "array(empty)",
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "37161": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": "array(empty)",
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "37162": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": "array(empty)",
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "37163": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": "array(empty)",
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "37164": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "37165": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "37166": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "37167": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "37168": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "37169": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "37170": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "37171": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "37172": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "37173": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "37174": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "37175": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "37178": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "37179": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "37180": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "37181": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "43704": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "43705": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "43707": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "43708": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "43709": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "43711": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "43712": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "43713": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "43714": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "43715": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "43716": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "43717": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "43718": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "43719": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "43720": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "43721": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "43732": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": "array(empty)",
+      "timePct": "number"
+     },
+     "43733": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": "array(empty)",
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "43734": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": "array(empty)",
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "43854": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": "array(empty)",
+      "timePct": "number"
+     },
+     "43855": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": "array(empty)",
+      "timePct": "number"
+     },
+     "43856": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": "array(empty)",
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "43857": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": "array(empty)",
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "43858": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": "array(empty)",
+      "timePct": "number"
+     },
+     "43859": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": "array(empty)",
+      "timePct": "number"
+     },
+     "43860": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": "array(empty)",
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "43861": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": "array(empty)",
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "43862": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": "array(empty)",
+      "timePct": "number"
+     },
+     "43863": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": "array(empty)",
+      "timePct": "number"
+     },
+     "43864": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": "array(empty)",
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "43865": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": "array(empty)",
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "43866": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": "array(empty)",
+      "timePct": "number"
+     },
+     "43867": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": "array(empty)",
+      "timePct": "number"
+     },
+     "43868": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": "array(empty)",
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "43869": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": "array(empty)",
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "43870": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": "array(empty)",
+      "timePct": "number"
+     },
+     "43871": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": "array(empty)",
+      "timePct": "number"
+     },
+     "43872": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": "array(empty)",
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "43873": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": "array(empty)",
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "43874": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": "array(empty)",
+      "timePct": "number"
+     },
+     "43875": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": "array(empty)",
+      "timePct": "number"
+     },
+     "43876": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": "array(empty)",
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "43877": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": "array(empty)",
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "43919": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": "array(empty)",
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "43920": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": "array(empty)",
+      "timePct": "number"
+     },
+     "43921": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": "array(empty)",
+      "timePct": "number"
+     },
+     "45544": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": "array(empty)",
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "thukkerMatPct": "number",
+      "timeCovers": "array(empty)",
+      "timePct": "number"
+     },
+     "45546": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": "array(empty)",
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "45548": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "45640": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "thukkerMatPct": "number",
+      "timeCovers": "array(empty)",
+      "timePct": "number"
+     },
+     "45641": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     }
+    },
+    "structures": {
+     "35825": {
+      "costMult": "number",
+      "matMult": "number",
+      "name": "string",
+      "timeMult": "number"
+     },
+     "35826": {
+      "costMult": "number",
+      "matMult": "number",
+      "name": "string",
+      "timeMult": "number"
+     },
+     "35827": {
+      "costMult": "number",
+      "matMult": "number",
+      "name": "string",
+      "timeMult": "number"
+     }
+    }
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/icon/:typeId": {
+  "skipped": "fetches the CCP image server (tests keep the real internet sealed)"
+ },
+ "POST /api/eve-token": {
+  "signedIn": {
+   "status": 400,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  },
+  "signedOut": {
+   "status": 400,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "POST /api/eve-token  (missing code)": {
+  "signedIn": {
+   "status": 400,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  },
+  "signedOut": {
+   "status": 400,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/remember/status": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "configured": "boolean",
+    "enabled": "boolean"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "POST /api/remember/status": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "enabled": "boolean"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/remember/list": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "characters": "array(empty)"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "POST /api/remember/restore": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "results": "array(empty)"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "POST /api/remember/forget": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "ok": "boolean"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/industry-settings": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "character_id": "number",
+    "facility_tax": "number",
+    "haul_enabled": "number",
+    "ignored_rig_ids": "array(empty)",
+    "interhub_collateral": "number",
+    "interhub_flat_total": "number",
+    "interhub_haul_enabled": "number",
+    "interhub_haul_rate": "number",
+    "interhub_isk_per_jump": "number",
+    "interhub_method": "string",
+    "interhub_self_char_id": "null",
+    "interhub_self_fuel": "number",
+    "interhub_self_ship": "null",
+    "interhub_service_label": "null",
+    "invalid_rig_ids": "array(empty)",
+    "invention_rig_ids": "string",
+    "invention_system_id": "null",
+    "invention_system_name": "null",
+    "leg1_collateral": "number",
+    "leg1_flat_total": "number",
+    "leg1_haul_rate": "number",
+    "leg1_isk_per_jump": "number",
+    "leg1_method": "string",
+    "leg1_self_char_id": "null",
+    "leg1_self_fuel": "number",
+    "leg1_self_ship": "null",
+    "leg1_service_label": "null",
+    "leg2_collateral": "number",
+    "leg2_flat_total": "number",
+    "leg2_haul_rate": "number",
+    "leg2_isk_per_jump": "number",
+    "leg2_method": "string",
+    "leg2_self_char_id": "null",
+    "leg2_self_fuel": "number",
+    "leg2_self_ship": "null",
+    "leg2_service_label": "null",
+    "material_region_id": "number",
+    "material_region_name": "string",
+    "rig_ids": "string",
+    "security_class": "string",
+    "structure_id": "null",
+    "structure_name": "null",
+    "structure_type_id": "null",
+    "system_id": "number",
+    "system_name": "string",
+    "system_security": "number",
+    "updated_at": "string"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "POST /api/industry-settings": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "ok": "boolean"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "POST /api/industry-settings  (invalid system)": {
+  "signedIn": {
+   "status": 400,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/structure-fit-suggestions": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "suggestions": "array(empty)"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/job-cost-check": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "configured": "boolean",
+    "jobs": "array(empty)",
+    "skipped": {
+     "no_cost": "number",
+     "no_recipe": "number",
+     "not_manufacturing": "number",
+     "other_facility": "number"
+    },
+    "summary": "null"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/character-fee-rates": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "broker_fee_rate": "number",
+    "facility_tax": "number",
+    "scc_rate": "number",
+    "sci": "number",
+    "setup_configured": "boolean",
+    "transaction_tax_rate": "number"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "POST /api/session-data": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "expiresIn": "number",
+    "success": "boolean"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "POST /api/session-data  (missing data)": {
+  "signedIn": {
+   "status": 400,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/session-data/:characterId": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "assets": "number",
+    "blueprints": "number",
+    "cached": "boolean",
+    "cachedAt": "string"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/session-data/:characterId  (someone else)": {
+  "signedIn": {
+   "status": 403,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "POST /api/skill-snapshot": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "success": "boolean"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "POST /api/warm-blueprint-icons": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "ok": "boolean"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "POST /api/true-cost": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "haul_cost": {
+     "haul_enabled": "boolean",
+     "import_leg_cost": "number",
+     "import_leg_jumps": "number",
+     "import_leg_route_known": "boolean",
+     "import_leg_volume_m3": "number",
+     "leg1_collateral": "number",
+     "leg1_configured": "boolean",
+     "leg1_contracts": "number",
+     "leg1_cost": "number",
+     "leg1_isk_per_m3_effective": "number",
+     "leg1_jumps": "number",
+     "leg1_method": "string",
+     "leg1_rate": "number",
+     "leg1_route_known": "boolean",
+     "leg1_self_ship": "null",
+     "leg1_service_label": "null",
+     "leg1_volume_m3": "number",
+     "leg2_collateral": "number",
+     "leg2_configured": "boolean",
+     "leg2_contracts": "number",
+     "leg2_cost": "number",
+     "leg2_isk_per_m3_effective": "number",
+     "leg2_jumps": "number",
+     "leg2_method": "string",
+     "leg2_rate": "number",
+     "leg2_route_known": "boolean",
+     "leg2_self_ship": "null",
+     "leg2_service_label": "null",
+     "leg2_volume_m3": "number",
+     "provider_rates_as_of": "null",
+     "total": "number"
+    },
+    "invention_cost": "null",
+    "manufacturing_setup": {
+     "blueprint_me": "number",
+     "decryptor_me_bonus": "null",
+     "effective_me": "number",
+     "facility_tax_pct": "number",
+     "ignored_rig_ids": "array(empty)",
+     "invalid_rig_ids": "array(empty)",
+     "is_t2": "boolean",
+     "material_multiplier": "number",
+     "product_family": "string",
+     "product_family_known": "boolean",
+     "rig_ids": "array(empty)",
+     "rig_me_bonus": "number",
+     "rigs": "array(empty)",
+     "sci_raw": "number",
+     "security_class": "string",
+     "security_known": "boolean",
+     "structure_cost_mult": "number",
+     "structure_label": "string",
+     "structure_me_bonus": "number",
+     "structure_type_id": "null",
+     "system_id": "number",
+     "system_name": "string",
+     "system_security": "number",
+     "t2_base_me": "null"
+    },
+    "material_price_scope": {
+     "hub": "number",
+     "region": "number"
+    },
+    "material_sourcing": {
+     "import_cost": "number",
+     "jita_lines": "number",
+     "jita_unavailable": "boolean",
+     "lines": {
+      "array": [
+       {
+        "approx": "boolean",
+        "cost": "number",
+        "hub_cost": "number",
+        "hub_qty": "number",
+        "import_cost": "number",
+        "jita_qty": "number",
+        "material_id": "number",
+        "qty": "number",
+        "scope": "string",
+        "short_stock": "boolean",
+        "unfilled_qty": "number",
+        "unit_cost": "number"
+       }
+      ]
+     },
+     "mixed_lines": "number",
+     "short_lines": "number"
+    },
+    "mfg_fees": {
+     "alpha_clone_tax": "number",
+     "effective_me_pct": "number",
+     "estimated_item_value": "number",
+     "facility_tax": "number",
+     "scc_surcharge": "number",
+     "system_cost_bonuses": "number",
+     "system_cost_index": "number",
+     "total": "number"
+    },
+    "prices_warm": "boolean",
+    "product_id": "number",
+    "region_id": "number",
+    "runs": "number",
+    "sales_tax": {
+     "accounting_level": "number",
+     "broker_fee": "number",
+     "broker_fee_rate": "number",
+     "broker_relations_level": "number",
+     "corp_standing": "number",
+     "faction_standing": "number",
+     "total": "number",
+     "transaction_tax": "number",
+     "transaction_tax_rate": "number"
+    },
+    "sell_hub_id": "number",
+    "sell_listing": {
+     "hub_highest_buy": "number",
+     "spread_ratio": "number",
+     "units_listed": "number"
+    },
+    "sell_price": "number",
+    "sell_price_scope": "string",
+    "setup_configured": "boolean",
+    "skills_source": "string",
+    "skills_updated_at": "string",
+    "time": {
+     "advanced_industry_level": "number",
+     "base_build_seconds": "number",
+     "effective_build_seconds": "number",
+     "industry_level": "number",
+     "isk_per_hour": "number",
+     "mfg_implant": "null",
+     "reproc_implant": "null",
+     "structure_te_bonus_pct": "number",
+     "te_pct": "number",
+     "time_multiplier": "number"
+    },
+    "total_material_cost": "number",
+    "true_margin": "number",
+    "true_profit": "number"
+   },
+   "values": {
+    "haul_cost": {
+     "haul_enabled": false,
+     "import_leg_cost": 0,
+     "import_leg_jumps": 0,
+     "import_leg_route_known": true,
+     "import_leg_volume_m3": 0,
+     "leg1_collateral": 0,
+     "leg1_configured": false,
+     "leg1_contracts": 1,
+     "leg1_cost": 0,
+     "leg1_isk_per_m3_effective": 0,
+     "leg1_jumps": 0,
+     "leg1_method": "user_defined",
+     "leg1_rate": 0,
+     "leg1_route_known": true,
+     "leg1_self_ship": null,
+     "leg1_service_label": null,
+     "leg1_volume_m3": 0,
+     "leg2_collateral": 0,
+     "leg2_configured": false,
+     "leg2_contracts": 1,
+     "leg2_cost": 0,
+     "leg2_isk_per_m3_effective": 0,
+     "leg2_jumps": 0,
+     "leg2_method": "user_defined",
+     "leg2_rate": 0,
+     "leg2_route_known": true,
+     "leg2_self_ship": null,
+     "leg2_service_label": null,
+     "leg2_volume_m3": 0,
+     "provider_rates_as_of": null,
+     "total": 0
+    },
+    "invention_cost": null,
+    "manufacturing_setup": {
+     "blueprint_me": 10,
+     "decryptor_me_bonus": null,
+     "effective_me": 9.999999999999998,
+     "facility_tax_pct": 0,
+     "ignored_rig_ids": [],
+     "invalid_rig_ids": [],
+     "is_t2": false,
+     "material_multiplier": 0.9,
+     "product_family": "basic_small_ship",
+     "product_family_known": true,
+     "rig_ids": [],
+     "rig_me_bonus": 0,
+     "rigs": [],
+     "sci_raw": 0.05,
+     "security_class": "hi",
+     "security_known": true,
+     "structure_cost_mult": 1,
+     "structure_label": "NPC Station",
+     "structure_me_bonus": 0,
+     "structure_type_id": null,
+     "system_id": 30000142,
+     "system_name": "Jita",
+     "system_security": 0.9459,
+     "t2_base_me": null
+    },
+    "material_price_scope": {
+     "hub": 3,
+     "region": 0
+    },
+    "material_sourcing": {
+     "import_cost": 0,
+     "jita_lines": 0,
+     "jita_unavailable": false,
+     "lines": [
+      {
+       "approx": false,
+       "cost": 3600,
+       "hub_cost": 3600,
+       "hub_qty": 900,
+       "import_cost": 0,
+       "jita_qty": 0,
+       "material_id": 34,
+       "qty": 900,
+       "scope": "hub",
+       "short_stock": false,
+       "unfilled_qty": 0,
+       "unit_cost": 4
+      },
+      {
+       "approx": false,
+       "cost": 7425,
+       "hub_cost": 7425,
+       "hub_qty": 450,
+       "import_cost": 0,
+       "jita_qty": 0,
+       "material_id": 35,
+       "qty": 450,
+       "scope": "hub",
+       "short_stock": false,
+       "unfilled_qty": 0,
+       "unit_cost": 16.5
+      },
+      {
+       "approx": false,
+       "cost": 4680,
+       "hub_cost": 4680,
+       "hub_qty": 90,
+       "import_cost": 0,
+       "jita_qty": 0,
+       "material_id": 36,
+       "qty": 90,
+       "scope": "hub",
+       "short_stock": false,
+       "unfilled_qty": 0,
+       "unit_cost": 52
+      }
+     ],
+     "mixed_lines": 0,
+     "short_lines": 0
+    },
+    "mfg_fees": {
+     "alpha_clone_tax": 0,
+     "effective_me_pct": 9.999999999999998,
+     "estimated_item_value": 17710,
+     "facility_tax": 0,
+     "scc_surcharge": 708.4,
+     "system_cost_bonuses": 0,
+     "system_cost_index": 885.5,
+     "total": 1593.9
+    },
+    "prices_warm": true,
+    "product_id": 900001,
+    "region_id": 10000002,
+    "runs": 1,
+    "sales_tax": {
+     "accounting_level": 0,
+     "broker_fee": 150000,
+     "broker_fee_rate": 0.03,
+     "broker_relations_level": 0,
+     "corp_standing": 0,
+     "faction_standing": 0,
+     "total": 525000,
+     "transaction_tax": 375000,
+     "transaction_tax_rate": 0.075
+    },
+    "sell_hub_id": 10000002,
+    "sell_listing": {
+     "hub_highest_buy": 4000000,
+     "spread_ratio": 1.25,
+     "units_listed": 1000000000
+    },
+    "sell_price": 5000000,
+    "sell_price_scope": "hub",
+    "setup_configured": true,
+    "skills_source": "snapshot",
+    "skills_updated_at": "<date>",
+    "time": {
+     "advanced_industry_level": 0,
+     "base_build_seconds": 600,
+     "effective_build_seconds": 384,
+     "industry_level": 5,
+     "isk_per_hour": 41790947.812499985,
+     "mfg_implant": null,
+     "reproc_implant": null,
+     "structure_te_bonus_pct": 0,
+     "te_pct": 20,
+     "time_multiplier": 0.6400000000000001
+    },
+    "total_material_cost": 15705,
+    "true_margin": 89.15402199999998,
+    "true_profit": 4457701.1
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "POST /api/true-cost  (missing product)": {
+  "signedIn": {
+   "status": 400,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "POST /api/calculate-profitability": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "profitable": {
+     "array": [
+      {
+       "blueprintId": "number",
+       "buildTime": "number",
+       "materialCost": "number",
+       "materials": {
+        "array": [
+         {
+          "cost": "number",
+          "name": "string",
+          "quantity": "number"
+         }
+        ]
+       },
+       "productId": "number",
+       "productName": "string",
+       "profit": "number",
+       "profitMargin": "number",
+       "sellPrice": "number"
+      }
+     ]
+    },
+    "total": "number"
+   }
+  },
+  "signedOut": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "profitable": {
+     "array": [
+      {
+       "blueprintId": "number",
+       "buildTime": "number",
+       "materialCost": "number",
+       "materials": {
+        "array": [
+         {
+          "cost": "number",
+          "name": "string",
+          "quantity": "number"
+         }
+        ]
+       },
+       "productId": "number",
+       "productName": "string",
+       "profit": "number",
+       "profitMargin": "number",
+       "sellPrice": "number"
+      }
+     ]
+    },
+    "total": "number"
+   }
+  }
+ },
+ "POST /api/production-chain": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "chain": {
+     "batchRevenue": "number",
+     "blueprintId": "number",
+     "buildTime": "number",
+     "item": "string",
+     "itemId": "number",
+     "materials": {
+      "array": [
+       {
+        "buyCost": "number",
+        "canManufacture": "boolean",
+        "cost": "number",
+        "materialId": "number",
+        "name": "string",
+        "quantity": "number"
+       }
+      ]
+     },
+     "owned": "boolean",
+     "productQuantity": "number",
+     "profit": "number",
+     "sellPrice": "number",
+     "totalCost": "number"
+    }
+   }
+  },
+  "signedOut": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "chain": {
+     "batchRevenue": "number",
+     "blueprintId": "number",
+     "buildTime": "number",
+     "item": "string",
+     "itemId": "number",
+     "materials": {
+      "array": [
+       {
+        "buyCost": "number",
+        "canManufacture": "boolean",
+        "cost": "number",
+        "materialId": "number",
+        "name": "string",
+        "quantity": "number"
+       }
+      ]
+     },
+     "owned": "boolean",
+     "productQuantity": "number",
+     "profit": "number",
+     "sellPrice": "number",
+     "totalCost": "number"
+    }
+   }
+  }
+ },
+ "POST /api/material-breakdown": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "activityId": "number",
+    "buildTime": "number",
+    "manufacturable": "boolean",
+    "materials": {
+     "array": [
+      {
+       "activityId": "null",
+       "blueprintOwned": "boolean",
+       "buyPricePerUnit": "number",
+       "canManufacture": "boolean",
+       "materialId": "number",
+       "mfgCostPerUnit": "null",
+       "name": "string",
+       "piTier": "null",
+       "priceScope": "string",
+       "quantity": "number",
+       "recommendation": "string",
+       "unitCost": "number"
+      }
+     ]
+    },
+    "productQuantity": "number",
+    "typeId": "number"
+   }
+  },
+  "signedOut": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "activityId": "number",
+    "buildTime": "number",
+    "manufacturable": "boolean",
+    "materials": {
+     "array": [
+      {
+       "activityId": "null",
+       "blueprintOwned": "boolean",
+       "buyPricePerUnit": "number",
+       "canManufacture": "boolean",
+       "materialId": "number",
+       "mfgCostPerUnit": "null",
+       "name": "string",
+       "piTier": "null",
+       "priceScope": "string",
+       "quantity": "number",
+       "recommendation": "string",
+       "unitCost": "number"
+      }
+     ]
+    },
+    "productQuantity": "number",
+    "typeId": "number"
+   }
+  }
+ },
+ "POST /api/me-research-roi": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "items": "array(empty)",
+    "region_id": "number",
+    "research_time_available": "boolean",
+    "target_me": "number"
+   }
+  },
+  "signedOut": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "items": "array(empty)",
+    "region_id": "number",
+    "research_time_available": "boolean",
+    "target_me": "number"
+   }
+  }
+ },
+ "POST /api/get-price": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "error": "string",
+    "price": "null",
+    "typeId": "number"
+   }
+  },
+  "signedOut": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "error": "string",
+    "price": "null",
+    "typeId": "number"
+   }
+  }
+ },
+ "POST /api/get-blueprint": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "blueprintId": "number",
+    "buildTime": "number",
+    "materials": {
+     "array": [
+      {
+       "materialId": "number",
+       "name": "string",
+       "quantity": "number",
+       "totalCost": "number",
+       "unitCost": "number"
+      }
+     ]
+    },
+    "productId": "number",
+    "productQuantity": "number",
+    "profit": "number",
+    "profitMargin": "number",
+    "sellPrice": "number",
+    "totalCost": "number"
+   }
+  },
+  "signedOut": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "blueprintId": "number",
+    "buildTime": "number",
+    "materials": {
+     "array": [
+      {
+       "materialId": "number",
+       "name": "string",
+       "quantity": "number",
+       "totalCost": "number",
+       "unitCost": "number"
+      }
+     ]
+    },
+    "productId": "number",
+    "productQuantity": "number",
+    "profit": "number",
+    "profitMargin": "number",
+    "sellPrice": "number",
+    "totalCost": "number"
+   }
+  }
+ },
+ "POST /api/item-details": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "buildInfo": {
+     "blueprintId": "number",
+     "blueprintOwned": "boolean",
+     "buildTime": "number",
+     "canBuild": "boolean",
+     "materials": {
+      "array": [
+       {
+        "canManufacture": "boolean",
+        "have": "number",
+        "materialId": "number",
+        "name": "string",
+        "needed": "number",
+        "piTier": "null",
+        "shortage": "number",
+        "shortfallCost": "number",
+        "supply": {
+         "history": "number",
+         "hub": {
+          "levels": {
+           "array": [
+            {
+             "array": [
+              "number"
+             ]
+            }
+           ]
+          },
+          "total": "number"
+         },
+         "hubIsJita": "boolean",
+         "jita": "null"
+        },
+        "totalCost": "number",
+        "unitCost": "number",
+        "unitScope": "string"
+       }
+      ]
+     },
+     "pricesWarm": "boolean",
+     "productQuantity": "number",
+     "profit": "number",
+     "profitMargin": "number",
+     "sellPrice": "number",
+     "sellPriceSource": "string",
+     "totalCost": "number"
+    },
+    "currentPrice": {
+     "avg30d": "number",
+     "buy": "number",
+     "median": "number",
+     "sell": "number",
+     "sellScope": "string"
+    },
+    "description": "null",
+    "iconUrl": "null",
+    "mass": "null",
+    "name": "string",
+    "pricesWarm": "boolean",
+    "volume": "null"
+   }
+  },
+  "signedOut": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "buildInfo": {
+     "blueprintId": "number",
+     "blueprintOwned": "boolean",
+     "buildTime": "number",
+     "canBuild": "boolean",
+     "materials": {
+      "array": [
+       {
+        "canManufacture": "boolean",
+        "have": "number",
+        "materialId": "number",
+        "name": "string",
+        "needed": "number",
+        "piTier": "null",
+        "shortage": "number",
+        "shortfallCost": "number",
+        "supply": {
+         "history": "number",
+         "hub": {
+          "levels": {
+           "array": [
+            {
+             "array": [
+              "number"
+             ]
+            }
+           ]
+          },
+          "total": "number"
+         },
+         "hubIsJita": "boolean",
+         "jita": "null"
+        },
+        "totalCost": "number",
+        "unitCost": "number",
+        "unitScope": "string"
+       }
+      ]
+     },
+     "pricesWarm": "boolean",
+     "productQuantity": "number",
+     "profit": "number",
+     "profitMargin": "number",
+     "sellPrice": "number",
+     "sellPriceSource": "string",
+     "totalCost": "number"
+    },
+    "currentPrice": {
+     "avg30d": "number",
+     "buy": "number",
+     "median": "number",
+     "sell": "number",
+     "sellScope": "string"
+    },
+    "description": "null",
+    "iconUrl": "null",
+    "mass": "null",
+    "name": "string",
+    "pricesWarm": "boolean",
+    "volume": "null"
+   }
+  }
+ },
+ "POST /api/analyze-blueprints": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "buildable": "number",
+    "results": {
+     "array": [
+      {
+       "blueprintId": "number",
+       "buildTime": "number",
+       "canBuild": "boolean",
+       "completionPct": "number",
+       "materialCount": "number",
+       "materials": {
+        "array": [
+         {
+          "have": "number",
+          "materialId": "number",
+          "needed": "number",
+          "shortage": "number"
+         }
+        ]
+       },
+       "metaLevel": "number",
+       "productId": "number",
+       "productName": "string",
+       "productQuantity": "number",
+       "profit": "number",
+       "profitMargin": "number",
+       "sellPrice": "number",
+       "techTier": "string",
+       "totalCost": "number"
+      }
+     ]
+    },
+    "skipped": "number",
+    "skippedNames": "array(empty)",
+    "total": "number"
+   }
+  },
+  "signedOut": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "buildable": "number",
+    "results": {
+     "array": [
+      {
+       "blueprintId": "number",
+       "buildTime": "number",
+       "canBuild": "boolean",
+       "completionPct": "number",
+       "materialCount": "number",
+       "materials": {
+        "array": [
+         {
+          "have": "number",
+          "materialId": "number",
+          "needed": "number",
+          "shortage": "number"
+         }
+        ]
+       },
+       "metaLevel": "number",
+       "productId": "number",
+       "productName": "string",
+       "productQuantity": "number",
+       "profit": "number",
+       "profitMargin": "number",
+       "sellPrice": "number",
+       "techTier": "string",
+       "totalCost": "number"
+      }
+     ]
+    },
+    "skipped": "number",
+    "skippedNames": "array(empty)",
+    "total": "number"
+   }
+  }
+ },
+ "GET /api/diagnose-t2/:characterId": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "bpc": "number",
+    "bpo": "number",
+    "inDb": {
+     "array": [
+      {
+       "found_via": "string",
+       "is_bpc": "boolean",
+       "is_t2": "boolean",
+       "name": "string",
+       "type_id": "number"
+      }
+     ]
+    },
+    "notInDb": "array(empty)",
+    "summary": "string",
+    "t2InDb": "array(empty)",
+    "t2NotInDb": "array(empty)",
+    "total": "number"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "POST /api/blueprint-metadata": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "900101": {
+     "metaLevel": "number",
+     "productTypeId": "number"
+    }
+   },
+   "values": {
+    "900101": {
+     "metaLevel": 0,
+     "productTypeId": 900001
+    }
+   }
+  },
+  "signedOut": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "900101": {
+     "metaLevel": "number",
+     "productTypeId": "number"
+    }
+   }
+  }
+ },
+ "POST /api/blueprint-profits": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "900101": {
+     "buildTime": "number",
+     "canBuildNow": "boolean",
+     "iskPerHour": "number",
+     "liquidityRisk": "null",
+     "margin": "number",
+     "materialCost": "number",
+     "profit": "number",
+     "sellPrice": "number"
+    },
+    "_meta": {
+     "canBuildDataWarm": "boolean"
+    }
+   }
+  },
+  "signedOut": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "900101": {
+     "buildTime": "number",
+     "canBuildNow": "boolean",
+     "iskPerHour": "number",
+     "liquidityRisk": "null",
+     "margin": "number",
+     "materialCost": "number",
+     "profit": "number",
+     "sellPrice": "number"
+    },
+    "_meta": {
+     "canBuildDataWarm": "boolean"
+    }
+   }
+  }
+ },
+ "POST /api/material-stock-check": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "materials": {
+     "array": [
+      {
+       "availableQty": "number",
+       "cost": "number",
+       "covered": "boolean",
+       "importCost": "number",
+       "importQty": "number",
+       "materialId": "null",
+       "needed": "number",
+       "orderCount": "number",
+       "scope": "string"
+      }
+     ]
+    },
+    "pricesWarm": "boolean",
+    "totalCost": "number",
+    "verdict": "string",
+    "wallet": "number"
+   }
+  },
+  "signedOut": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "materials": {
+     "array": [
+      {
+       "availableQty": "number",
+       "cost": "number",
+       "covered": "boolean",
+       "importCost": "number",
+       "importQty": "number",
+       "materialId": "null",
+       "needed": "number",
+       "orderCount": "number",
+       "scope": "string"
+      }
+     ]
+    },
+    "pricesWarm": "boolean",
+    "totalCost": "number",
+    "verdict": "string",
+    "wallet": "number"
+   }
+  }
+ },
+ "POST /api/appraise": {
+  "signedIn": {
+   "status": 503,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  },
+  "signedOut": {
+   "status": 503,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "POST /api/queue-planner": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "aggregateMaterials": {
+     "array": [
+      {
+       "have": "number",
+       "hubQty": "number",
+       "importQty": "number",
+       "jitaSell": "number",
+       "name": "string",
+       "needed": "number",
+       "priceScope": "string",
+       "shortStock": "boolean",
+       "shortage": "number",
+       "shortageISK": "number",
+       "typeId": "number"
+      }
+     ]
+    },
+    "effectiveBudget": "number",
+    "horizonHours": "number",
+    "importMaterials": "number",
+    "materialRegionId": "number",
+    "pricesWarm": "boolean",
+    "recommendations": {
+     "array": [
+      {
+       "activityId": "number",
+       "assignedCharacterId": "null",
+       "assignedCharacterName": "null",
+       "avgDailyVolume": "number",
+       "blueprintId": "number",
+       "buildTimePerRunSec": "number",
+       "buildTimeSec": "number",
+       "effectiveME": "number",
+       "estimatedProfit": "number",
+       "iskPerHour": "number",
+       "jobCost": "number",
+       "liquidityRisk": "null",
+       "materialCost": "number",
+       "materialMultiplier": "number",
+       "ownedBpME": "number",
+       "productId": "number",
+       "productName": "string",
+       "productUnits": "number",
+       "rigCoverageKnown": "boolean",
+       "rigsApplied": "number",
+       "runs": "number"
+      }
+     ]
+    },
+    "regionId": "number",
+    "summaryIskPerDay": "number",
+    "summaryProfit": "number",
+    "totalJobCost": "number",
+    "totalMatSpend": "number",
+    "totalShortageISK": "number",
+    "walletBalance": "number"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/top-profitable": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "meta": {
+     "count": "number",
+     "includeRisky": "boolean",
+     "lastComputed": "string",
+     "lastRunStatus": "string",
+     "minProfit": "number",
+     "minVolume": "number",
+     "riskBreakdown": {
+      "safe": "number",
+      "tier1_contract_only": "number",
+      "tier2_extreme_margin": "number",
+      "tier3_low_volume": "number",
+      "tier4_no_buy_orders": "number",
+      "tier4_suspicious_spread": "number"
+     },
+     "sort": "string"
+    },
+    "results": {
+     "array": [
+      {
+       "activity_id": "number",
+       "avg_30d_price": "null",
+       "avg_daily_volume": "null",
+       "blueprint_id": "number",
+       "build_time": "number",
+       "buy_price": "number",
+       "computed_at": "string",
+       "isk_per_hour": "number",
+       "liquidity_risk": "null",
+       "market_group_id": "null",
+       "material_cost": "number",
+       "material_count": "number",
+       "price_source": "string",
+       "product_id": "number",
+       "product_name": "string",
+       "profit": "number",
+       "profit_margin": "number",
+       "sell_price": "number",
+       "volume_source": "null"
+      }
+     ]
+    }
+   }
+  },
+  "signedOut": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "meta": {
+     "count": "number",
+     "includeRisky": "boolean",
+     "lastComputed": "string",
+     "lastRunStatus": "string",
+     "minProfit": "number",
+     "minVolume": "number",
+     "riskBreakdown": {
+      "safe": "number",
+      "tier1_contract_only": "number",
+      "tier2_extreme_margin": "number",
+      "tier3_low_volume": "number",
+      "tier4_no_buy_orders": "number",
+      "tier4_suspicious_spread": "number"
+     },
+     "sort": "string"
+    },
+    "results": {
+     "array": [
+      {
+       "activity_id": "number",
+       "avg_30d_price": "null",
+       "avg_daily_volume": "null",
+       "blueprint_id": "number",
+       "build_time": "number",
+       "buy_price": "number",
+       "computed_at": "string",
+       "isk_per_hour": "number",
+       "liquidity_risk": "null",
+       "market_group_id": "null",
+       "material_cost": "number",
+       "material_count": "number",
+       "price_source": "string",
+       "product_id": "number",
+       "product_name": "string",
+       "profit": "number",
+       "profit_margin": "number",
+       "sell_price": "number",
+       "volume_source": "null"
+      }
+     ]
+    }
+   }
+  }
+ },
+ "GET /api/top-profitable-by-skills": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "meta": {
+     "count": "number",
+     "filter": "string",
+     "lastComputed": "string",
+     "sellRegionId": "number",
+     "sort": "string",
+     "sourceRegionId": "number"
+    },
+    "results": {
+     "array": [
+      {
+       "activity_id": "number",
+       "avg_30d_price": "null",
+       "avg_daily_volume": "null",
+       "blueprint_id": "number",
+       "build_time": "number",
+       "buy_price": "number",
+       "computed_at": "string",
+       "isk_per_hour": "number",
+       "liquidity_risk": "null",
+       "market_group_id": "null",
+       "material_cost": "number",
+       "material_count": "number",
+       "price_source": "string",
+       "product_id": "number",
+       "product_name": "string",
+       "profit": "number",
+       "profit_margin": "number",
+       "sell_price": "number",
+       "volume_source": "null"
+      }
+     ]
+    }
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/search-profitable": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "includeRisky": "boolean",
+    "query": "string",
+    "regionId": "number",
+    "results": {
+     "array": [
+      {
+       "avg_daily_volume": "null",
+       "blueprint_id": "number",
+       "build_time": "number",
+       "buy_price": "number",
+       "computed_at": "string",
+       "isk_per_hour": "number",
+       "liquidity_risk": "null",
+       "market_group_id": "null",
+       "material_cost": "number",
+       "material_count": "number",
+       "price_source": "string",
+       "product_id": "number",
+       "product_name": "string",
+       "profit": "number",
+       "profit_margin": "number",
+       "sell_price": "number"
+      }
+     ]
+    }
+   }
+  },
+  "signedOut": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "includeRisky": "boolean",
+    "query": "string",
+    "regionId": "number",
+    "results": {
+     "array": [
+      {
+       "avg_daily_volume": "null",
+       "blueprint_id": "number",
+       "build_time": "number",
+       "buy_price": "number",
+       "computed_at": "string",
+       "isk_per_hour": "number",
+       "liquidity_risk": "null",
+       "market_group_id": "null",
+       "material_cost": "number",
+       "material_count": "number",
+       "price_source": "string",
+       "product_id": "number",
+       "product_name": "string",
+       "profit": "number",
+       "profit_margin": "number",
+       "sell_price": "number"
+      }
+     ]
+    }
+   }
+  }
+ },
+ "GET /api/inter-hub-arb": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "buy_hub": "string",
+    "count": "number",
+    "has_more": "boolean",
+    "min_margin": "number",
+    "offset": "number",
+    "results": "array(empty)",
+    "sell_hub": "string",
+    "sort_by": "string"
+   }
+  },
+  "signedOut": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "buy_hub": "string",
+    "count": "number",
+    "has_more": "boolean",
+    "min_margin": "number",
+    "offset": "number",
+    "results": "array(empty)",
+    "sell_hub": "string",
+    "sort_by": "string"
+   }
+  }
+ },
+ "GET /api/inter-hub-item-profitable": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "breakEven": "number",
+    "profitableOrderCount": "number",
+    "source": "string",
+    "totalAtStation": "number",
+    "totalVolumeRemain": "number"
+   }
+  },
+  "signedOut": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "breakEven": "number",
+    "profitableOrderCount": "number",
+    "source": "string",
+    "totalAtStation": "number",
+    "totalVolumeRemain": "number"
+   }
+  }
+ },
+ "GET /api/inter-hub-haul": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "accounting_level": "number",
+    "broker_fee_rate": "number",
+    "broker_relations": "number",
+    "contracts": "number",
+    "effective_isk_per_m3": "number",
+    "haul_cost": "number",
+    "haul_enabled": "boolean",
+    "jumps": "number",
+    "method": "string",
+    "method_label": "string",
+    "service_label": "null",
+    "transaction_tax_rate": "number",
+    "volume_m3": "number"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/trading/meta": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "ageSec": "null",
+    "expiresInSec": "null",
+    "hub": "string",
+    "lastError": "string",
+    "regionId": "number",
+    "station": "string",
+    "stationId": "number",
+    "stationLabel": "string",
+    "types": "number",
+    "updatedAt": "null",
+    "warming": "boolean"
+   }
+  },
+  "signedOut": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "ageSec": "null",
+    "expiresInSec": "null",
+    "hub": "string",
+    "lastError": "string",
+    "regionId": "number",
+    "station": "string",
+    "stationId": "number",
+    "stationLabel": "string",
+    "types": "number",
+    "updatedAt": "null",
+    "warming": "boolean"
+   }
+  }
+ },
+ "GET /api/trading/jita": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "count": "number",
+    "meta": {
+     "ageSec": "null",
+     "expiresInSec": "null",
+     "hub": "string",
+     "lastError": "string",
+     "regionId": "number",
+     "station": "string",
+     "stationId": "number",
+     "stationLabel": "string",
+     "types": "number",
+     "updatedAt": "null",
+     "warming": "boolean"
+    }
+   }
+  },
+  "signedOut": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "count": "number",
+    "meta": {
+     "ageSec": "null",
+     "expiresInSec": "null",
+     "hub": "string",
+     "lastError": "string",
+     "regionId": "number",
+     "station": "string",
+     "stationId": "number",
+     "stationLabel": "string",
+     "types": "number",
+     "updatedAt": "null",
+     "warming": "boolean"
+    }
+   }
+  }
+ },
+ "GET /api/trading/jita/:typeId": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "buy": "number",
+    "buyOrders": "number",
+    "buyQtyTop": "number",
+    "found": "boolean",
+    "meta": {
+     "ageSec": "null",
+     "expiresInSec": "null",
+     "hub": "string",
+     "lastError": "string",
+     "regionId": "number",
+     "station": "string",
+     "stationId": "number",
+     "stationLabel": "string",
+     "types": "number",
+     "updatedAt": "null",
+     "warming": "boolean"
+    },
+    "sell": "number",
+    "sellOrders": "number",
+    "sellQtyTop": "number",
+    "spread": "number",
+    "spreadPct": "number",
+    "typeId": "number"
+   }
+  },
+  "signedOut": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "buy": "number",
+    "buyOrders": "number",
+    "buyQtyTop": "number",
+    "found": "boolean",
+    "meta": {
+     "ageSec": "null",
+     "expiresInSec": "null",
+     "hub": "string",
+     "lastError": "string",
+     "regionId": "number",
+     "station": "string",
+     "stationId": "number",
+     "stationLabel": "string",
+     "types": "number",
+     "updatedAt": "null",
+     "warming": "boolean"
+    },
+    "sell": "number",
+    "sellOrders": "number",
+    "sellQtyTop": "number",
+    "spread": "number",
+    "spreadPct": "number",
+    "typeId": "number"
+   }
+  }
+ },
+ "POST /api/trading/scan": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "brokerFeeRate": "number",
+    "coveredWithVolume": "number",
+    "hubVolumeEnriched": "boolean",
+    "jitaBookSize": "number",
+    "meta": {
+     "ageSec": "null",
+     "expiresInSec": "null",
+     "hub": "string",
+     "lastError": "string",
+     "regionId": "number",
+     "station": "string",
+     "stationId": "number",
+     "stationLabel": "string",
+     "types": "number",
+     "updatedAt": "null",
+     "warming": "boolean"
+    },
+    "results": "array(empty)",
+    "sessionCached": "boolean",
+    "total": "number",
+    "totalMatched": "number",
+    "transactionTaxRate": "number"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/trading/character-orders": {
+  "signedIn": {
+   "status": 502,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/can-dock-keepstar": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "canDock": "boolean"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/location-names": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {}
+  },
+  "signedOut": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {}
+  }
+ },
+ "GET /api/find-structure": {
+  "signedIn": {
+   "status": 404,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/asset-location": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "matches": {
+     "array": [
+      {
+       "is_singleton": "boolean",
+       "item_id": "number",
+       "location_flag": "string",
+       "location_id": "number",
+       "quantity": "number",
+       "type_id": "number"
+      }
+     ]
+    },
+    "typeId": "number"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/resolve-structures": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "count": "number",
+    "structures": "array(empty)"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/ticker-config": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "activeGroupId": "string",
+    "dualRow": "boolean",
+    "groups": {
+     "array": [
+      {
+       "color": "string",
+       "id": "string",
+       "name": "string"
+      }
+     ]
+    },
+    "pins": "array(empty)"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "POST /api/ticker-config": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "ok": "boolean"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "POST /api/ticker-prices": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "results": {
+     "array": [
+      {}
+     ]
+    }
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "POST /api/save-message": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "success": "boolean"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/chat-history/:characterId": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "array": [
+     {
+      "content": "string",
+      "role": "string",
+      "timestamp": "string"
+     }
+    ]
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "DELETE /api/chat-history/:characterId": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "message": "string",
+    "success": "boolean"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "POST /api/ai-chat": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "content": {
+     "array": [
+      {
+       "text": "string",
+       "type": "string"
+      }
+     ]
+    },
+    "id": "string",
+    "role": "string",
+    "stop_reason": "string",
+    "type": "string",
+    "usage": {
+     "input_tokens": "number",
+     "output_tokens": "number"
+    }
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/pi/colonies": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "bpCrossRef": {},
+    "colonies": "array(empty)",
+    "factoryOutputs": {},
+    "prices": {},
+    "productNames": {},
+    "schematics": {},
+    "systemNames": {}
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/pi/market": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "bpPiReqs": "array(empty)",
+    "rankings": "array(empty)"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/pi-planner/regions": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "regions": "array(empty)"
+   }
+  },
+  "signedOut": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "regions": "array(empty)"
+   }
+  }
+ },
+ "GET /api/pi-planner/targets": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "targets": "array(empty)"
+   }
+  },
+  "signedOut": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "targets": "array(empty)"
+   }
+  }
+ },
+ "POST /api/pi-planner/plan": {
+  "signedIn": {
+   "status": 400,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  },
+  "signedOut": {
+   "status": 400,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/lp-balance": {
+  "signedIn": {
+   "status": 404,
+   "type": "application/json",
+   "shape": {
+    "balances": "array(empty)",
+    "error": "string"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/lp-store/factions": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "factions": "array(empty)"
+   }
+  },
+  "signedOut": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "factions": "array(empty)"
+   }
+  }
+ },
+ "GET /api/lp-store/corps": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "corps": "array(empty)"
+   }
+  },
+  "signedOut": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "corps": "array(empty)"
+   }
+  }
+ },
+ "GET /api/lp-store": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "offers": "array(empty)",
+    "prices_live": "boolean",
+    "total": "number"
+   }
+  },
+  "signedOut": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "offers": "array(empty)",
+    "prices_live": "boolean",
+    "total": "number"
+   }
+  }
+ },
+ "GET /api/push/vapid-public-key": {
+  "signedIn": {
+   "status": 503,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  },
+  "signedOut": {
+   "status": 503,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "POST /api/push/subscribe": {
+  "signedIn": {
+   "status": 503,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  },
+  "signedOut": {
+   "status": 503,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "DELETE /api/push/unsubscribe": {
+  "signedIn": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "POST /api/push/sync-jobs": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "ok": "boolean",
+    "skipped": "boolean"
+   }
+  },
+  "signedOut": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "ok": "boolean",
+    "skipped": "boolean"
+   }
+  }
+ },
+ "GET /api/corp/status": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "configured": "boolean"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "POST /api/corp/setup": {
+  "signedIn": {
+   "status": 403,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  },
+  "signedOut": {
+   "status": 403,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/corp/access-status": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "hasAccess": "boolean"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/corp/access-debug": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "characterCorpId": "null",
+    "characterId": "number",
+    "corpBlueprintsStatus": "null",
+    "isDirectorByRoles": "boolean",
+    "perCharRoles": "null",
+    "perCharRolesStatus": "number",
+    "verdict": "string"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/corp/blueprints": {
+  "signedIn": {
+   "status": 403,
+   "type": "application/json",
+   "shape": {
+    "code": "string",
+    "error": "string"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/corp/assets": {
+  "signedIn": {
+   "status": 403,
+   "type": "application/json",
+   "shape": {
+    "code": "string",
+    "error": "string"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/corp/jobs": {
+  "signedIn": {
+   "status": 403,
+   "type": "application/json",
+   "shape": {
+    "code": "string",
+    "error": "string"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "POST /api/corp/refresh": {
+  "signedIn": {
+   "status": 403,
+   "type": "application/json",
+   "shape": {
+    "code": "string",
+    "error": "string"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/corp/admin/whitelist": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "whitelist": "array(empty)"
+   }
+  },
+  "signedOut": {
+   "status": 403,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "POST /api/corp/admin/whitelist": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "character_id": "number",
+    "ok": "boolean"
+   }
+  },
+  "signedOut": {
+   "status": 403,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "DELETE /api/corp/admin/whitelist/:characterId": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "ok": "boolean"
+   }
+  },
+  "signedOut": {
+   "status": 403,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "DELETE /api/corp/admin/config": {
+  "signedIn": {
+   "skipped": "would wipe the corp configuration other cases read"
+  },
+  "signedOut": {
+   "status": 403,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "POST /api/admin/precompute": {
+  "signedIn": {
+   "skipped": "starts the heavy pre-compute job"
+  },
+  "signedOut": {
+   "status": 403,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "POST /api/admin/contract-ingest": {
+  "signedIn": {
+   "skipped": "starts a contract download"
+  },
+  "signedOut": {
+   "status": 403,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/admin/precompute-status": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "runs": {
+     "array": [
+      {
+       "blueprints_processed": "number",
+       "completed_at": "string",
+       "duration_seconds": "number",
+       "error": "null",
+       "id": "number",
+       "started_at": "string",
+       "status": "string"
+      }
+     ]
+    },
+    "summary": {
+     "enriched": "number",
+     "isRunning": "boolean",
+     "profitable": "number",
+     "risky": "number",
+     "totalPrecomputed": "number"
+    }
+   }
+  },
+  "signedOut": {
+   "status": 403,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "POST /api/admin/volume-enrichment": {
+  "signedIn": {
+   "skipped": "starts the volume enrichment job"
+  },
+  "signedOut": {
+   "status": 403,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/admin/ai-costs": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "daily": {
+     "array": [
+      {
+       "cost": "number",
+       "date": "string",
+       "requests": "number"
+      }
+     ]
+    },
+    "month": {
+     "input_tokens": "number",
+     "output_tokens": "number",
+     "requests": "number",
+     "total_cost": "number"
+    },
+    "today": {
+     "input_tokens": "number",
+     "output_tokens": "number",
+     "requests": "number",
+     "total_cost": "number"
+    },
+    "week": {
+     "input_tokens": "number",
+     "output_tokens": "number",
+     "requests": "number",
+     "total_cost": "number"
+    }
+   }
+  },
+  "signedOut": {
+   "status": 403,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/ks-test-auth": {
+  "signedIn": {
+   "status": 302,
+   "type": "text/plain",
+   "length": "text"
+  },
+  "signedOut": {
+   "status": 302,
+   "type": "text/plain",
+   "length": "text"
+  }
+ },
+ "GET /api/ks-test-callback": {
+  "signedIn": {
+   "status": 400,
+   "type": "text/html",
+   "length": "text"
+  },
+  "signedOut": {
+   "status": 400,
+   "type": "text/html",
+   "length": "text"
+  }
+ },
+ "POST /api/invalidate-session": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "message": "string",
+    "success": "boolean"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ }
+}
