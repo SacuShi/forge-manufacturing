@@ -66,8 +66,12 @@ async function addColumn(table, spec) {
   }
 }
 
+// Maximum number of SQL bind variables per query (SQLite default limit is 999).
+// We leave headroom for other parameters in the same query (e.g. piIds + bpIds).
+const SQL_VARIABLE_LIMIT = 950;
+
 module.exports = {
-  initDatabase, dbAll, dbGet, dbRun, addColumn,
+  initDatabase, dbAll, dbGet, dbRun, addColumn, SQL_VARIABLE_LIMIT,
   /** The open connection (undefined until initDatabase has finished). */
   get db() { return db; },
 };
