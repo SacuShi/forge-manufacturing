@@ -8944,8 +8944,8 @@ app.get('/api/search-profitable', security.apiLimiter, async (req, res) => {
     if (!includeRisky) {
       whereConditions.push(`(
         liquidity_risk IS NULL
-        OR liquidity_risk = ""
-        OR liquidity_risk = "low_volume"
+        OR liquidity_risk = ''
+        OR liquidity_risk = 'low_volume'
       )`);
     }
 
@@ -9291,7 +9291,7 @@ app.get('/api/admin/precompute-status', security.adminLimiter, async (req, res) 
     );
 
     const risky = await dbGet(
-      'SELECT COUNT(*) as count FROM precomputed_profits WHERE liquidity_risk IS NOT NULL AND liquidity_risk != ""'
+      `SELECT COUNT(*) as count FROM precomputed_profits WHERE liquidity_risk IS NOT NULL AND liquidity_risk != ''`
     );
 
     res.json({
@@ -10000,7 +10000,7 @@ app.get('/health', async (req, res) => {
       SELECT 
         COUNT(*) as total,
         COUNT(CASE WHEN avg_daily_volume IS NOT NULL THEN 1 END) as enriched,
-        COUNT(CASE WHEN liquidity_risk IS NOT NULL AND liquidity_risk != "" THEN 1 END) as risky
+        COUNT(CASE WHEN liquidity_risk IS NOT NULL AND liquidity_risk != '' THEN 1 END) as risky
       FROM precomputed_profits WHERE profit > 0
     `);
   } catch (_) { /* column may not exist yet */ }
@@ -11940,7 +11940,7 @@ app.get('/api/corp/blueprints',
       }
 
       if (search) {
-        whereClause += ' AND LOWER(COALESCE(i.name, "")) LIKE ?';
+        whereClause += " AND LOWER(COALESCE(i.name, '')) LIKE ?";
         params.push(`%${search.toLowerCase()}%`);
       }
 
@@ -12011,7 +12011,7 @@ app.get('/api/corp/assets',
       const params = [corpId];
 
       if (search) {
-        whereClause += ' AND LOWER(COALESCE(i.name, "")) LIKE ?';
+        whereClause += " AND LOWER(COALESCE(i.name, '')) LIKE ?";
         params.push(`%${search.toLowerCase()}%`);
       }
 

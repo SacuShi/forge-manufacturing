@@ -121,7 +121,7 @@ function createAiTools({ CORP_BP_USABLE_SQL, PORT, REGIONS, VALID_REGIONS, dbAll
           const cbParams = [access.corpId];
           if (cbType === 'BPO') cbWhere += ' AND cb.runs = -1';
           else if (cbType === 'BPC') cbWhere += ' AND cb.runs >= 0';
-          if (cbSearch) { cbWhere += ' AND LOWER(COALESCE(i.name, "")) LIKE ?'; cbParams.push(`%${cbSearch.toLowerCase()}%`); }
+          if (cbSearch) { cbWhere += " AND LOWER(COALESCE(i.name, '')) LIKE ?"; cbParams.push(`%${cbSearch.toLowerCase()}%`); }
           const cbRows = await dbAll(
             `SELECT COALESCE(i.name, 'Item #' || cb.type_id) AS name,
                     CASE WHEN cb.runs = -1 THEN 'BPO' ELSE 'BPC' END AS bp_type,

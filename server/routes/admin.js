@@ -47,7 +47,7 @@ module.exports = function adminRoutes({
       const totalBlueprints = await dbGet(`SELECT COUNT(*) as count FROM precomputed_profits`);
       const profitable      = await dbGet(`SELECT COUNT(*) as count FROM precomputed_profits WHERE profit > 0`);
       const enriched        = await dbGet(`SELECT COUNT(*) as count FROM precomputed_profits WHERE avg_daily_volume IS NOT NULL`);
-      const risky           = await dbGet(`SELECT COUNT(*) as count FROM precomputed_profits WHERE liquidity_risk IS NOT NULL AND liquidity_risk != ""`);
+      const risky           = await dbGet(`SELECT COUNT(*) as count FROM precomputed_profits WHERE liquidity_risk IS NOT NULL AND liquidity_risk != ''`);
       res.json({
         runs,
         summary: {
@@ -138,7 +138,7 @@ module.exports = function adminRoutes({
       enrichmentStats = await dbGet(`
         SELECT COUNT(*) as total,
                COUNT(CASE WHEN avg_daily_volume IS NOT NULL THEN 1 END) as enriched,
-               COUNT(CASE WHEN liquidity_risk IS NOT NULL AND liquidity_risk != "" THEN 1 END) as risky
+               COUNT(CASE WHEN liquidity_risk IS NOT NULL AND liquidity_risk != '' THEN 1 END) as risky
         FROM precomputed_profits WHERE profit > 0`);
     } catch (_) {}
     res.json({
