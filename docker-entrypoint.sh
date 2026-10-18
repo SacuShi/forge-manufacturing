@@ -31,9 +31,10 @@ if [ ! -f "$SDE_FLAG" ]; then
   node /app/server.js &
   SERVER_PID=$!
 
-  # Wait for server to be ready (polls /api/health)
+  # Wait for the server to be ready. Poll 127.0.0.1, not "localhost": inside Alpine "localhost" resolves to the IPv6
+  # address first, and the server listens on IPv4 only, so "localhost" is refused.
   TRIES=0
-  until wget -qO- http://localhost:3000/api/health >/dev/null 2>&1; do
+  until wget -qO- http://127.0.0.1:3000/health >/dev/null 2>&1; do
     TRIES=$((TRIES + 1))
     if [ $TRIES -ge 30 ]; then
       echo "[FORGE] ERROR: Server failed to start for schema creation"

@@ -39,13 +39,17 @@ RUN npm install --production
 COPY server/server.js        ./server.js
 COPY server/forge-security.js ./forge-security.js
 COPY server/sde-import.js    ./sde-import.js
+# server.js requires ./lib/* and ./routes/* (incl. lib/industry-data/*.json) — without these the container fails at boot
+COPY server/lib/             ./lib/
+COPY server/routes/          ./routes/
 
 # Copy built frontend into public/
 COPY --from=frontend-build /build/dist/ ./public/
 
 # Copy entrypoint
 COPY docker-entrypoint.sh /docker-entrypoint.sh
-RUN chmod +x /docker-entrypoint.sh
+# strip any Windows line endings the build context may carry, then make it executable
+RUN sed -i 's/\r$//' /docker-entrypoint.sh && chmod +x /docker-entrypoint.sh
 
 # Database lives outside the image (mounted volume)
 # DB_PATH in server.js = path.join(__dirname, '../forge-db/forge.db') = /forge-db/forge.db

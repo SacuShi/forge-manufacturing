@@ -85,6 +85,10 @@ Added (dev only, approved): `vitest`, `supertest` (server); `vitest`, `jsdom`, `
 | 18 | `server/server.js` | DB layer | Statements are not prepared once and reused; `sqlite3` re-prepares each call | Low | Performance |
 | 19 | frontend | — | 5 click handlers on non-interactive `div`/`span`; image `alt` coverage needs a multi-line check (a naive count over-reports) | Low | Accessibility |
 | 20 | `server/package.json` | — | Express 4.22: consider Express 5, which removes the need for the async wrapper | Low | Maintainability |
+| 21 | `docker-entrypoint.sh`, `docker-compose.yml` | 36, 15 | Polled `/api/health`, which does not exist (the route is `/health`): a first container start would stop with "Server failed to start", and the compose healthcheck would never pass — **fixed**, with a test that requests every URL the Docker files poll | High | Correctness |
+| 22 | `docker-entrypoint.sh` | — | On a Windows checkout the script has CRLF line endings, which makes the container fail ("bad interpreter") — **fixed** (`.gitattributes` `eol=lf` plus a strip step in the image) | High | Correctness |
+| 23 | `Dockerfile` | 39–41 | Did not copy `lib/` and `routes/`, which `server.js` requires at start-up — **fixed**, with a test that checks every start-up require is copied | High | Correctness |
+| 24 | `server/routes/admin.js` | — | Never loaded by `server.js` (which defines its own admin routes inline): 150 lines of dead, divergent duplicate code — **removed** | Medium | Maintainability |
 
 ### 6.8 Effect work (done)
 

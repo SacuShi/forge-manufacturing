@@ -1,2 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Shell scripts run inside Linux containers and servers: a CRLF checkout breaks them ("bad interpreter").
+*.sh text eol=lf
+docker-entrypoint.sh text eol=lf

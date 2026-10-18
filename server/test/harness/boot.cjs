@@ -31,7 +31,8 @@ function seedDatabase(dbFile) {
   });
 }
 
-async function bootServer() {
+/** @param {{ seed?: boolean }} [options] seed:false boots on a completely empty database (a fresh install). */
+async function bootServer({ seed = true } = {}) {
   // Scratch space stays inside the project (git-ignored), never in the system temp folder.
   const base = path.join(SERVER_ROOT, '.tmp-test', `run-${process.pid}-${Date.now()}`);
   const appDir = path.join(base, 'server');
@@ -44,7 +45,8 @@ async function bootServer() {
   const callLog = path.join(base, 'calls.log');
   fs.writeFileSync(fixturesPath, JSON.stringify(universe.esiFixtures()));
   fs.writeFileSync(callLog, '');
-  await seedDatabase(path.join(base, 'forge-db', 'forge.db'));
+  const dbFile = path.join(base, 'forge-db', 'forge.db');
+  if (seed) await seedDatabase(dbFile);
 
   const port = await freePort();
   let output = '';
@@ -73,6 +75,7 @@ async function bootServer() {
   return {
     baseUrl,
     callLogFile: callLog,
+    dbFile,
     output: () => output,
     async stop() {
       child.removeAllListeners('exit');

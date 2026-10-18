@@ -180,6 +180,36 @@ async function addColumn(table, spec) {
 }
 
 async function runMigrations() {
+  // Core reference tables. sde-import.js fills them but never creates them, and the server needs them to start, so a
+  // fresh install (e.g. a new Docker volume) could not boot. IF NOT EXISTS makes this a no-op on an existing database.
+  await dbRun(`CREATE TABLE IF NOT EXISTS items (
+    type_id         INTEGER PRIMARY KEY,
+    name            TEXT,
+    description     TEXT,
+    icon_url        TEXT,
+    volume          REAL,
+    mass            REAL,
+    meta_level      INTEGER DEFAULT 0,
+    packaged_volume REAL    DEFAULT NULL,
+    pi_tier         INTEGER DEFAULT NULL,
+    group_id        INTEGER,
+    category_name   TEXT
+  )`);
+  await dbRun(`CREATE TABLE IF NOT EXISTS blueprints (
+    blueprint_id     INTEGER PRIMARY KEY,
+    product_id       INTEGER,
+    product_quantity INTEGER DEFAULT 1,
+    build_time       INTEGER,
+    activity_id      INTEGER DEFAULT 1,
+    research_time    INTEGER DEFAULT NULL
+  )`);
+  await dbRun(`CREATE TABLE IF NOT EXISTS blueprint_materials (
+    blueprint_id INTEGER,
+    material_id  INTEGER,
+    quantity     INTEGER,
+    PRIMARY KEY (blueprint_id, material_id)
+  )`);
+
   logger.info('⟳ Running database migrations...');
 
   // Pre-computed profitability table
