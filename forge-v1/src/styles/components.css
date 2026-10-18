@@ -2599,14 +2599,6 @@ tr:hover .ticker-pin-btn,
   opacity: 0.55;
   line-height: 1.4;
 }
-.chat-support-link {
-  color: var(--color-text-tertiary);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-.chat-support-link:hover {
-  opacity: 0.85;
-}
 
 /* ══════════════════════════════════════════════════════════════════════════
    ITEM LINK  (icon + name, clickable — used in chat messages)
