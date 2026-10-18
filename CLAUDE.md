@@ -28,8 +28,9 @@ Give the user the exact commands to run themselves.**
 # Build frontend
 cd forge-v1 && npm run build && cd ..
 
-# Deploy backend
-scp server/server.js <server-user>@<server-ip>:/home/<server-user>/forge-server/server.js
+# Deploy backend (server.js is only the bootstrap: lib/ and routes/ must go with it)
+scp server/server.js server/forge-security.js <server-user>@<server-ip>:/home/<server-user>/forge-server/
+scp -r server/lib server/routes <server-user>@<server-ip>:/home/<server-user>/forge-server/
 
 # Deploy frontend (one command — copies all hashed assets)
 scp -r forge-v1/dist/* <server-user>@<server-ip>:/home/<server-user>/forge-server/public/
@@ -47,7 +48,7 @@ ssh <server-user>@<server-ip> "pm2 logs 0 --lines 50"
 | Repo root | `<local repo root>` |
 | Frontend source | `forge-v1\src\` |
 | Frontend build output | `forge-v1\dist\` |
-| Backend | `server\server.js` |
+| Backend | `server\server.js` (bootstrap), `server\routes\` (HTTP), `server\lib\` (logic and shared state) |
 | DB (local) | `forge-db\forge.db` |
 | This file | `FORGE_MEMORY.md` (full project context) |
 
@@ -80,6 +81,13 @@ Refactors are **no-behaviour-change**: same API routes, request/response shapes,
 - Data-fetching effects must guard against stale responses (an `ignore` flag or `AbortController`).
 - Do not bulk-remove existing `useMemo` / `useCallback` / `memo`; do not add them speculatively.
 - One responsibility per component; split anything over about 250-300 lines at clean seams; extract reusable logic into `useXxx` hooks. Never define a component inside another component. Stable, unique `key`s (not the array index for lists that reorder or filter). No direct DOM manipulation where state would do. Keep accessibility: flag missing `alt`, unlabelled inputs, and click handlers on non-interactive elements.
+
+### Server layout (`server/`)
+- `server.js` is the bootstrap only (~200 lines): environment, middleware, the list of mounted route modules, start-up sequence. Do not put routes, SQL or business logic back into it.
+- `routes/*.js` = HTTP only (one file per feature area; every file registers its own full `/api/...` paths on an `express.Router`). `lib/*.js` = logic and shared state: `db`, `migrations`, `cache`, `esi`, `token-crypto`, `hubs` (hub and region ids), `market-cache` (price caches; values that get replaced on reload are read as `market.historyPriceMap` etc., never copied into a variable at start-up), `hub-pollers`, `keepstar-token`, `corp`, `character-session`, `haul`, `invention`, `precompute`, `volume-enrichment`, `scheduler`, `job-state`, and the `ai-*` files.
+- A new module `require`s what it needs; it does not receive a long list of injected functions (only `routes/industry-settings`, `routes/session`, `routes/push` and `routes/pi-planner` still take a small dependency object).
+- Static checks used for the split live outside the repo; the route table and response matrix tests (`test/integration/route-matrix.test.js`, snapshots in `test/snapshots/`) are the safety net: after an intended API change run `npm run test:update-snapshots` and review the snapshot diff like code.
+- Beware relative `require()` paths inside lazily-required code (they only fail when that code runs).
 
 ### Express / Node (Express 4: the async wrapper already lives in `lib/http-errors.js`)
 - One central error handler, registered last, JSON `{ error }`, no stack traces. Read configuration only through `lib/config.js`; log only through `lib/logger.js` (never log secrets). New routes: thin handler, logic in a service, SQL in a data layer; do not add more SQL to `server.js`.
