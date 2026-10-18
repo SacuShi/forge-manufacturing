@@ -9,6 +9,7 @@ const { clientErrMsg } = require('../lib/http-errors');
 const { cache, getCached, setCached } = require('../lib/cache');
 const { sanitizeSkills, sanitizeStandings, saveSkillSnapshot } = require('../lib/character-session');
 const { learnStructureFit } = require('../lib/structures');
+const { warmBlueprintIcons } = require('../lib/icon-warmer');
 
 /** @param {{ cacheStructureToken: (token: string) => void }} deps */
 module.exports = function sessionRoutes({ cacheStructureToken }) {
@@ -94,7 +95,7 @@ module.exports = function sessionRoutes({ cacheStructureToken }) {
 
         // Fire-and-forget: warm the blueprint icon cache so the first
         // visit to the Blueprints tab serves icons from disk, not CCP CDN.
-        global.warmBlueprintIcons(blueprints).catch(() => {});
+        warmBlueprintIcons(blueprints).catch(() => {});
 
         // Persist skills so a later restart/expiry doesn't drop this character to level-0 fees/times.
         // own_skills present (even empty) = a current client: its own levels are what count, never the account-wide best list

@@ -22,6 +22,7 @@
  */
 
 const logger = require('../lib/logger');
+const { warmBlueprintIcons } = require('../lib/icon-warmer');
 const router   = require('express').Router();
 const path     = require('path');
 const fs       = require('fs');
@@ -33,7 +34,7 @@ const CCP_CDN      = 'https://images.evetech.net';
 // Ensure the cache directory exists when this module is first loaded.
 fs.mkdirSync(CACHE_DIR, { recursive: true });
 
-module.exports = function iconRoutes() {
+module.exports = function iconRoutes({ security }) {
 
   // No rate limiter — icons are public EVE CDN images, not user data.
   // Cached icons are plain disk reads so there is no meaningful resource to protect.
@@ -94,6 +95,15 @@ module.exports = function iconRoutes() {
       logger.error(`Icon fetch failed typeId=${typeId} size=${size}:`, err.message);
       res.status(502).end();
     }
+  });
+
+  // Lets the frontend kick off blueprint icon warming as soon as the ESI blueprints fetch resolves (early in login)
+  // instead of waiting for the full /api/session-data POST at the end of login. Responds immediately; warming
+  // continues fire-and-forget. This closes the race where a user opens the Blueprints tab before icons are cached.
+  router.post('/api/warm-blueprint-icons', security.apiLimiter, security.verifyEveToken, (req, res) => {
+    const { blueprints } = req.body;
+    res.json({ ok: true });
+    warmBlueprintIcons(blueprints).catch(() => {});
   });
 
   return router;
