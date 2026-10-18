@@ -15,6 +15,28 @@
  *   RESPONSIVE overrides
  */
 
+/* Strips a <button>'s browser styling so it renders exactly like the <div>/<span> it replaced, while keeping
+   real button behaviour (focusable, Enter/Space, announced as a button). Kept first in the file so every
+   component rule below still overrides it. Use .btn-reset-inline for buttons that replace a <span>. */
+.btn-reset {
+  -webkit-appearance: none;
+  appearance: none;
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
+.btn-reset-inline { display: inline; width: auto; }
+
 /* ══════════════════════════════════════════════════════════════════════════
    HEADER
    ══════════════════════════════════════════════════════════════════════════ */
@@ -3153,7 +3175,8 @@ tr:hover .ticker-pin-btn,
   gap: 6px;
   transition: background 0.1s;
 }
-.system-suggestion-item:hover { background: var(--color-bg-tertiary); }
+.system-suggestion-item:hover,
+.system-suggestion-item.active { background: var(--color-bg-tertiary); }
 
 .system-suggestion-id {
   font-size: 10px;

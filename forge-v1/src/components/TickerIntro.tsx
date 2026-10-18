@@ -1,5 +1,6 @@
 import { useState, type FC } from 'react';
 import { markTickerIntroSeen } from '../utils/tickerIntro';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 
 
 interface TickerIntroProps {
@@ -15,6 +16,7 @@ const TickerIntro: FC<TickerIntroProps> = ({ onClose }) => {
     if (dontShow) markTickerIntroSeen();
     onClose();
   };
+  useEscapeKey(handleClose); // same as the ✕ button
 
   return (
     <div className="ticker-intro-backdrop" role="dialog" aria-modal="true" aria-label="Ticker introduction">

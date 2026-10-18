@@ -1,6 +1,8 @@
 import { useState, useRef, type FC } from 'react';
 import type { TickerPin, TickerSlotData } from '../types';
 import type { GroupOps } from '../hooks/useTickerPins';
+import { useEscapeKey } from '../hooks/useEscapeKey';
+import { onActivateKey } from '../utils/a11y';
 
 interface TickerSetupProps {
   open:           boolean;
@@ -42,6 +44,8 @@ const TickerSetup: FC<TickerSetupProps> = ({
   const [dragIndex,     setDragIndex]     = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const dragCounterRef = useRef(0); // tracks nested dragenter/dragleave
+
+  useEscapeKey(onClose, open);
 
   if (!open) return null;
 
@@ -87,7 +91,7 @@ const TickerSetup: FC<TickerSetupProps> = ({
     setActiveGroup(id);
   };
 
-  const startRename = (e: React.MouseEvent, g: typeof groups[number]) => {
+  const startRename = (e: React.SyntheticEvent, g: typeof groups[number]) => {
     e.stopPropagation();
     setRenamingId(g.id);
     setRenameValue(g.name);
@@ -99,8 +103,13 @@ const TickerSetup: FC<TickerSetupProps> = ({
   };
 
   return (
-    <div className="ticker-setup-backdrop" onClick={onClose} role="dialog" aria-modal="true" aria-label="Ticker configuration">
-      <div className="ticker-setup" onClick={e => e.stopPropagation()}>
+    // Backdrop click closes; clicks inside the panel stop here as they always have (Escape is the keyboard way out).
+    <div
+      className="ticker-setup-backdrop"
+      role="presentation"
+      onClick={e => { if (e.target === e.currentTarget) onClose(); else e.stopPropagation(); }}
+    >
+      <div className="ticker-setup" role="dialog" aria-modal="true" aria-label="Ticker configuration">
 
         {/* ── Header ────────────────────────────────────────────────────────── */}
         <div className="ticker-setup-header">
@@ -121,12 +130,20 @@ const TickerSetup: FC<TickerSetupProps> = ({
         </div>
 
         {/* ── Group tabs ────────────────────────────────────────────────────── */}
-        <div className="ticker-setup-group-tabs">
+        <div className="ticker-setup-group-tabs" role="tablist" aria-label="Ticker layouts">
           {groups.map(g => (
             <div
               key={g.id}
               className={`ticker-setup-group-tab${g.id === activeGroupId ? ' active' : ''}`}
+              role="tab"
+              tabIndex={0}
+              aria-selected={g.id === activeGroupId}
+              aria-keyshortcuts="F2"
               onClick={() => handleTabClick(g.id)}
+              onKeyDown={e => {
+                if (e.key === 'F2' && e.target === e.currentTarget) { e.preventDefault(); startRename(e, g); return; }
+                onActivateKey(() => handleTabClick(g.id))(e);
+              }}
               style={g.id === activeGroupId ? { borderBottomColor: g.color } : undefined}
             >
               <span className="ticker-setup-group-dot" style={{ background: g.color }} />

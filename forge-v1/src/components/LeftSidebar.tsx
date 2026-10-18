@@ -24,6 +24,7 @@ import {
   IconQueue, IconPI, IconPIPlanner, IconCorp, IconTrading, IconInterhub, IconLPStore, IconHelp,
   IconAppraise,
 } from './NavIcons';
+import { onActivateKey } from '../utils/a11y';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -108,7 +109,7 @@ const AltCard: FC<AltCardProps> = ({ alt, isIsolated, onIsolate, onRemove }) => 
       tabIndex={0}
       title={alt.loading ? 'Loading…' : `Click to isolate ${alt.name}'s data`}
       onClick={onIsolate}
-      onKeyDown={(e) => e.key === 'Enter' && onIsolate()}
+      onKeyDown={onActivateKey(() => onIsolate())}
     >
       {/* Portrait */}
       <div className="char-portrait" style={{ width: 28, height: 28, flexShrink: 0 }}>

@@ -261,7 +261,10 @@ const LPStoreTab: FC<LPStoreTabProps> = ({ onSelectItem, selectedTypeId, lpPoint
             borderBottom: '2px solid var(--color-border-light)',
           }}>
             {/* Header row — always visible, click to collapse */}
-            <div
+            <button
+              type="button"
+              className="btn-reset"
+              aria-expanded={lpPanelOpen}
               onClick={togglePanel}
               style={{
                 display: 'flex', alignItems: 'center', gap: 10, padding: '7px 12px',
@@ -288,7 +291,7 @@ const LPStoreTab: FC<LPStoreTabProps> = ({ onSelectItem, selectedTypeId, lpPoint
               <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--color-text-muted)' }}>
                 {lpPanelOpen ? '▲ Hide' : '▼ Show'}
               </span>
-            </div>
+            </button>
 
             {/* Panel body */}
             {lpPanelOpen && (
@@ -329,7 +332,10 @@ const LPStoreTab: FC<LPStoreTabProps> = ({ onSelectItem, selectedTypeId, lpPoint
                             }}
                           >
                             {/* ── Collapsed header — always visible ── */}
-                            <div
+                            <button
+                              type="button"
+                              className="btn-reset"
+                              aria-expanded={isExpanded}
                               onClick={() => toggleFactionExpand(fName)}
                               style={{
                                 display: 'flex', alignItems: 'center', gap: 10,
@@ -361,7 +367,7 @@ const LPStoreTab: FC<LPStoreTabProps> = ({ onSelectItem, selectedTypeId, lpPoint
                               <span style={{ fontSize: 10, color: 'var(--color-text-muted)', flexShrink: 0 }}>
                                 {isExpanded ? '▲' : '▼'}
                               </span>
-                            </div>
+                            </button>
 
                             {/* ── Expanded: corp breakdown + filter button ── */}
                             {isExpanded && (

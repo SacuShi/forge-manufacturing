@@ -24,6 +24,7 @@ import { apiGet, apiPost } from '../api/client';
 import { formatISK, formatMargin, formatBuildTime } from '../utils/format';
 import { itemIconUrl } from '../utils/icons';
 import { useLatestRequest } from '../hooks/useLatestRequest';
+import { onActivateKey } from '../utils/a11y';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -263,13 +264,10 @@ const CorpBlueprintsView: FC<CorpBlueprintsProps> = ({ token, regionId, onSelect
             const p     = bpProfits[typeId];
 
             return (
-              <div
+              <button type="button"
                 key={typeId}
-                className="bp-card"
-                role="button"
-                tabIndex={0}
+                className="btn-reset bp-card"
                 onClick={() => onSelectItem(bp.product_id ?? typeId, pName)}
-                onKeyDown={e => e.key === 'Enter' && onSelectItem(bp.product_id ?? typeId, pName)}
               >
                 {/* Icon */}
                 <div className={`bp-icon ${isBpo ? 'bp-icon-bpo' : 'bp-icon-bpc'}`}>
@@ -327,7 +325,7 @@ const CorpBlueprintsView: FC<CorpBlueprintsProps> = ({ token, regionId, onSelect
                 ) : (
                   <div className="bp-metrics bp-metrics-empty">no market<br/>data</div>
                 )}
-              </div>
+              </button>
             );
           })}
         </div>
@@ -438,7 +436,7 @@ const CorpAssetsView: FC<CorpAssetsProps> = ({ token, onSelectItem }) => {
                 <tr key={a.type_id} className="corp-row corp-row-clickable"
                   onClick={() => onSelectItem(a.type_id, a.name)}
                   role="button" tabIndex={0}
-                  onKeyDown={e => e.key === 'Enter' && onSelectItem(a.type_id, a.name)}>
+                  onKeyDown={onActivateKey(() => onSelectItem(a.type_id, a.name))}>
                   <td className="corp-td corp-td-name">{a.name}</td>
                   <td className="corp-td corp-td-right">{a.total_quantity.toLocaleString()}</td>
                 </tr>

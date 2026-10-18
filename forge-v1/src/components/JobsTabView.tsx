@@ -26,13 +26,10 @@ const JobsTabView: FC<JobsTabViewProps> = ({ activeJobs, activeTab, activityLabe
                 const label = activityLabel(job.activityId);
                 const isJobSelected = job.typeId === selectedTypeId;
                 return (
-                <div
+                <button type="button" className="btn-reset"
                   key={`${job.name}-${job.remaining}-${job.activityId ?? 0}`}
-                  role="button"
-                  tabIndex={0}
                   aria-label={`View details for ${job.name}`}
                   onClick={() => onSelectItem(job.typeId, job.name)}
-                  onKeyDown={(e) => e.key === 'Enter' && onSelectItem(job.typeId, job.name)}
                   style={{
                     background: isJobSelected ? 'rgba(212, 150, 14, 0.20)' : 'var(--color-bg-tertiary)',
                     border: '0.5px solid',
@@ -47,10 +44,10 @@ const JobsTabView: FC<JobsTabViewProps> = ({ activeJobs, activeTab, activityLabe
                     transition: 'border-color 0.1s, box-shadow 0.1s',
                   }}
                   onMouseEnter={(e) => {
-                    if (!isJobSelected) (e.currentTarget as HTMLDivElement).style.boxShadow = 'inset 0 0 0 1px rgba(212, 150, 14, 0.55)';
+                    if (!isJobSelected) (e.currentTarget as HTMLElement).style.boxShadow = 'inset 0 0 0 1px rgba(212, 150, 14, 0.55)';
                   }}
                   onMouseLeave={(e) => {
-                    if (!isJobSelected) (e.currentTarget as HTMLDivElement).style.boxShadow = '';
+                    if (!isJobSelected) (e.currentTarget as HTMLElement).style.boxShadow = '';
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 }}>
@@ -83,7 +80,7 @@ const JobsTabView: FC<JobsTabViewProps> = ({ activeJobs, activeTab, activityLabe
                   }}>
                     {job.remaining}
                   </span>
-                </div>
+                </button>
                 );
               })}
             </div>

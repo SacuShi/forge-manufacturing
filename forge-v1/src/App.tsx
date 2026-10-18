@@ -84,6 +84,7 @@ import { useCharacterAggregates } from './hooks/useCharacterAggregates';
 import { useMarketData } from './hooks/useMarketData';
 import { usePanelLayout } from './hooks/usePanelLayout';
 import { useCanBuildNow } from './hooks/useCanBuildNow';
+import { useEscapeKey } from './hooks/useEscapeKey';
 
 /**
  * Maps raw precomputed results to MarketItem display rows.
@@ -708,6 +709,16 @@ const AppShell: FC = () => {
     setPanelHistory([]);   // clear back-stack on explicit close
   }, []);
 
+  // Escape = clicking the dimmed backdrop: closes the mobile drawer, or the detail panel while the tablet
+  // overlay is showing. Modals and menus handle their own Escape, so do nothing while one is open.
+  const detailOverlayRef = useRef<HTMLDivElement>(null);
+  useEscapeKey(() => {
+    if (document.querySelector('[aria-modal="true"], [role="menu"]')) return;
+    if (drawerOpen) { setDrawerOpen(false); return; }
+    const overlay = detailOverlayRef.current;
+    if (overlay && getComputedStyle(overlay).display !== 'none') handleCloseDetail();
+  }, drawerOpen || detailOpen);
+
 
 
 
@@ -948,6 +959,7 @@ const AppShell: FC = () => {
           // so content never renders behind the taller dual-row ticker bar.
           paddingBottom: (ticker.dualRow && ticker.groupOps.groups.length >= 2) ? '68px' : '38px',
         } as React.CSSProperties}
+        role="presentation" // click-outside closes the auto-opened chat; the chat has its own close button
         onClick={(e) => {
           if (!chatAutoOpened) return;
           if (!(e.target as HTMLElement).closest('.chat-panel')) {
@@ -960,6 +972,7 @@ const AppShell: FC = () => {
         {drawerOpen && (
           <div
             className="sidebar-overlay"
+            role="presentation"
             onClick={() => setDrawerOpen(false)}
             style={{ display: 'block' }}
           />
@@ -1079,7 +1092,9 @@ const AppShell: FC = () => {
 
         {/* Tablet overlay (dims background when detail panel is open) */}
         <div
+          ref={detailOverlayRef}
           className={`sidebar-overlay${detailOpen ? ' detail-open' : ''}`}
+          role="presentation"
           onClick={handleCloseDetail}
         />
 

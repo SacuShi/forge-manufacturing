@@ -20,6 +20,7 @@ import type {
 import { apiGet, apiPost } from '../api/client';
 
 import HaulMethodFields from './HaulMethodFields';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 import { fmtISK, type CharacterSkillData } from '../data/haulProviders';
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -210,6 +211,8 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
   open, token, initial, sourceMarket, sellMarket, onClose, onSaved,
   characters = [], focusSection = null,
 }) => {
+  useEscapeKey(onClose, open);
+
   // Scroll straight to the haulage section when opened from a haulage notice.
   useEffect(() => {
     if (!open || focusSection !== 'haulage') return;
@@ -267,6 +270,7 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
   const [suggestions,    setSuggestions]    = useState<SystemSearchResult[]>([]);
   const [suggestLoading, setSuggestLoading] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [activeSuggestion, setActiveSuggestion] = useState(-1); // keyboard-highlighted row, -1 = none
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Save state ─────────────────────────────────────────────────────────────
@@ -383,6 +387,7 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
     setSystemName(null);
     setSystemSecurity(null);
     setShowSuggestions(true);
+    setActiveSuggestion(-1);
 
     if (debounceRef.current) clearTimeout(debounceRef.current);
     if (value.trim().length < 2) {
@@ -398,6 +403,7 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
           token ?? ''
         );
         setSuggestions(results);
+        setActiveSuggestion(-1);
       } catch {
         setSuggestions([]);
       } finally {
@@ -413,6 +419,7 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
     setSystemQuery(result.system_name);
     setSuggestions([]);
     setShowSuggestions(false);
+    setActiveSuggestion(-1);
   }, []);
 
   // ── Rig toggle ─────────────────────────────────────────────────────────────
@@ -561,8 +568,8 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
   if (!open) return null;
 
   return (
-    <div className="modal-overlay" role="dialog" aria-modal="true" aria-label="Manufacturing Setup">
-      <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-overlay" role="presentation" onClick={(e) => { if (e.target !== e.currentTarget) e.stopPropagation(); }}>
+      <div className="modal-panel" role="dialog" aria-modal="true" aria-label="Manufacturing Setup">
 
         {/* ── Header ────────────────────────────────────────────────────── */}
         <div className="modal-header">
@@ -587,6 +594,26 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
                 onChange={(e) => handleSystemInput(e.target.value)}
                 onFocus={() => setShowSuggestions(true)}
                 onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+                onKeyDown={(e) => {
+                  const listOpen = showSuggestions && suggestions.length > 0;
+                  if (!listOpen) return;
+                  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    const step = e.key === 'ArrowDown' ? 1 : -1;
+                    setActiveSuggestion((i) => (i + step + suggestions.length) % suggestions.length);
+                  } else if (e.key === 'Enter' && activeSuggestion >= 0) {
+                    e.preventDefault();
+                    handlePickSystem(suggestions[activeSuggestion]);
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault(); // close the list, not the whole modal
+                    setShowSuggestions(false);
+                  }
+                }}
+                role="combobox"
+                aria-expanded={showSuggestions && suggestions.length > 0}
+                aria-controls="mfg-system-suggestions"
+                aria-autocomplete="list"
+                aria-activedescendant={showSuggestions && activeSuggestion >= 0 ? `mfg-system-opt-${activeSuggestion}` : undefined}
                 aria-label="Manufacturing system name"
                 autoComplete="off"
               />
@@ -594,11 +621,14 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
                 <span className="system-search-loading">…</span>
               )}
               {showSuggestions && suggestions.length > 0 && (
-                <ul className="system-suggestions">
-                  {suggestions.map((s) => (
+                <ul className="system-suggestions" id="mfg-system-suggestions" role="listbox" aria-label="Matching systems">
+                  {suggestions.map((s, i) => (
                     <li
                       key={s.system_id}
-                      className="system-suggestion-item"
+                      id={`mfg-system-opt-${i}`}
+                      className={`system-suggestion-item${i === activeSuggestion ? ' active' : ''}`}
+                      role="option"
+                      aria-selected={i === activeSuggestion}
                       onMouseDown={() => handlePickSystem(s)}
                     >
                       {s.system_name}
