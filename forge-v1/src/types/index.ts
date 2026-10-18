@@ -728,26 +728,6 @@ export interface IndustrySettings {
   interhub_self_ship?:     string | null;
 }
 
-// ══════════════════════════════════════════════════════════════════════════
-// 6. v1.5.1 — FEE RATES (used to align Market Opportunities with True Profit)
-// ══════════════════════════════════════════════════════════════════════════
-
-/** Response from GET /api/character-fee-rates */
-export interface FeeRates {
-  /** Broker fee as a decimal fraction (e.g. 0.025 = 2.5%) */
-  broker_fee_rate:      number;
-  /** Transaction tax as a decimal fraction (e.g. 0.0375 = 3.75%) */
-  transaction_tax_rate: number;
-  /** System Cost Index for the character's configured manufacturing system */
-  sci:                  number;
-  /** SCC surcharge — always 0.04 for manufacturing/invention jobs (the 2% rate applies only to ME/TE research, which this app doesn't charge job-install cost for) */
-  scc_rate:             number;
-  /** Facility tax as a decimal fraction */
-  facility_tax:         number;
-  /** True if the character has configured a manufacturing system */
-  setup_configured:     boolean;
-}
-
 /** One Standup manufacturing rig as published by CCP (GET /api/industry-rigs) */
 export interface IndustryRigStat {
   name:    string;
@@ -848,16 +828,19 @@ export interface CorpJob {
   fetched_at:          string;
 }
 
+/** Paging/refresh info on the corp blueprint and asset lists; safety_hidden counts rows locked in Asset Safety wraps. */
+export interface CorpListMeta { total: number; safety_hidden?: number; last_refresh_at: string | null }
+
 /** Response from GET /api/corp/blueprints */
 export interface CorpBlueprintsResponse {
   blueprints: CorpBlueprint[];
-  meta: { total: number; limit: number; offset: number; last_refresh_at: string | null };
+  meta: CorpListMeta;
 }
 
 /** Response from GET /api/corp/assets */
 export interface CorpAssetsResponse {
   assets: CorpAsset[];
-  meta: { total: number; limit: number; offset: number; last_refresh_at: string | null };
+  meta: CorpListMeta;
 }
 
 /** Response from GET /api/corp/jobs */

@@ -136,7 +136,7 @@ function walkDepth(depth, qty) {
   if (remaining > 0 && depth.total > seen) {
     // more units exist than the stored levels show; price them at the last stored level
     const take = Math.min(remaining, depth.total - seen);
-    cost += take * lastPrice; filled += take; remaining -= take; approx = true;
+    cost += take * lastPrice; filled += take; approx = true;
   }
   return { filled, cost, approx, lastPrice };
 }

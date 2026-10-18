@@ -1,7 +1,7 @@
 import type { AuthState } from './useAuth';
 import { useState, useRef, useCallback } from 'react';
 import { type TopProfitableResponse, type Market } from '../types';
-import { MARKETS } from '../components/MarketSelector';
+import { MARKETS } from '../data/markets';
 import { apiGet } from '../api/client';
 
 interface UseMarketDataParams {

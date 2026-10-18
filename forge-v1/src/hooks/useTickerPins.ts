@@ -9,7 +9,7 @@
 
 import {
   useState, useEffect, useRef, useCallback, useContext, useMemo,
-  createContext, type Dispatch, type SetStateAction,
+  createContext,
 } from 'react';
 import { apiGet, apiPost } from '../api/client';
 import type {
@@ -263,7 +263,6 @@ export function useTickerPins(input: UseTickerPinsInput): UseTickerPinsOutput {
       setActiveGroupId(data.activeGroupId || 'default');
       setDualRow(data.dualRow === true);
     }).catch(() => {});
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, characterId]);
 
   // ── Auto-save (debounced 1s) whenever config changes ────────────────────────
@@ -321,7 +320,6 @@ export function useTickerPins(input: UseTickerPinsInput): UseTickerPinsOutput {
       }
       return next;
     });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pinsToSlot, walletISK, activeJobs, freeSlots, now]);
 
   // ── Broadcast active-group payload to pop-out ────────────────────────────────
@@ -733,4 +731,3 @@ function buildCharSlot(
 }
 
 // ── Dummy setter export so TickerContext can be provided without the full hook ──
-export type SetPins = Dispatch<SetStateAction<TickerPin[]>>;

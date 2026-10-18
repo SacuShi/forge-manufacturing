@@ -4,7 +4,7 @@
 
 import { useState, useEffect, useCallback, useRef, type FC } from 'react';
 import type { InterHubArbRow, InterHubArbResponse } from '../types';
-import { MARKETS } from './MarketSelector';
+import { MARKETS } from '../data/markets';
 import ForgeWait from './ForgeWait';
 import { itemIconUrl } from '../utils/icons';
 import InterHubHaulConfig from './InterHubHaulConfig';

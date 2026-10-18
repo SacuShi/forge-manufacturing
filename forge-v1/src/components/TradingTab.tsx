@@ -21,6 +21,22 @@ import type {
 
 import { itemIconUrl } from '../utils/icons';
 
+type TradeSortCol = 'iskPerDay' | 'netMarginPct' | 'avgDailyVol' | 'sellOrders';
+
+interface SortBtnProps { col: TradeSortCol; label: string; sortCol: TradeSortCol; sortDir: 1 | -1; onSort: (col: TradeSortCol) => void }
+
+/** Sort pill; defined at module level so the buttons are not remounted on every render. */
+const SortBtn: FC<SortBtnProps> = ({ col, label, sortCol, sortDir, onSort }) => (
+  <button
+    type="button"
+    className={`pill-filter${sortCol === col ? ' active' : ''}`}
+    onClick={() => onSort(col)}
+    aria-pressed={sortCol === col}
+  >
+    {label}{sortCol === col ? <span className="sort-arrow">{sortDir === -1 ? '↓' : '↑'}</span> : ''}
+  </button>
+);
+
 const TRADE_HUBS: TradeHub[] = [
   { id: 'jita',     name: 'Jita IV-4',      label: 'Jita IV - Moon 4 - Caldari Navy Assembly Plant' },
   { id: 'amarr',    name: 'Amarr VIII (Oris)', label: 'Amarr VIII (Oris) - Emperor Family Academy' },
@@ -414,7 +430,7 @@ const TradingTab: FC<TradingTabProps> = ({ token, canDockKeestar = true }) => {
   const [minVol,       setMinVol]       = useState(50);
   const [capital,      setCapital]      = useState('');
   const [maxOrders,    setMaxOrders]    = useState('');
-  const [sortCol,      setSortCol]      = useState<'iskPerDay' | 'netMarginPct' | 'avgDailyVol' | 'sellOrders'>('iskPerDay');
+  const [sortCol,      setSortCol]      = useState<TradeSortCol>('iskPerDay');
   const [sortDir,      setSortDir]      = useState<1 | -1>(-1);
   const [visibleCount, setVisibleCount] = useState(200);
 
@@ -455,7 +471,7 @@ const TradingTab: FC<TradingTabProps> = ({ token, canDockKeestar = true }) => {
 
   const visibleResults = sortedResults.slice(0, visibleCount);
 
-  const handleSort = (col: typeof sortCol) => {
+  const handleSort = (col: TradeSortCol) => {
     if (sortCol === col) setSortDir(d => (d === -1 ? 1 : -1));
     else { setSortCol(col); setSortDir(-1); }
   };
@@ -516,17 +532,6 @@ const TradingTab: FC<TradingTabProps> = ({ token, canDockKeestar = true }) => {
         </span>
       </span>
     </div>
-  );
-
-  const SortBtn: FC<{ col: typeof sortCol; label: string }> = ({ col, label }) => (
-    <button
-      type="button"
-      className={`pill-filter${sortCol === col ? ' active' : ''}`}
-      onClick={() => handleSort(col)}
-      aria-pressed={sortCol === col}
-    >
-      {label}{sortCol === col ? <span className="sort-arrow">{sortDir === -1 ? '↓' : '↑'}</span> : ''}
-    </button>
   );
 
   // ── Meta bar ───────────────────────────────────────────────────────────────
@@ -668,10 +673,10 @@ const TradingTab: FC<TradingTabProps> = ({ token, canDockKeestar = true }) => {
             {/* Sort control bar — above the table, same pattern as My Blueprints */}
             <div className="td-sort-bar">
               <span className="td-sort-label">SORT</span>
-              <SortBtn col="netMarginPct" label="Spread profit" />
-              <SortBtn col="iskPerDay"    label="ISK/day est." />
-              <SortBtn col="avgDailyVol"  label="Vol/day" />
-              <SortBtn col="sellOrders"   label="Competition" />
+              <SortBtn sortCol={sortCol} sortDir={sortDir} onSort={handleSort} col="netMarginPct" label="Spread profit" />
+              <SortBtn sortCol={sortCol} sortDir={sortDir} onSort={handleSort} col="iskPerDay"    label="ISK/day est." />
+              <SortBtn sortCol={sortCol} sortDir={sortDir} onSort={handleSort} col="avgDailyVol"  label="Vol/day" />
+              <SortBtn sortCol={sortCol} sortDir={sortDir} onSort={handleSort} col="sellOrders"   label="Competition" />
             </div>
 
           <div className="td-results-wrap">

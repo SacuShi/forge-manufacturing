@@ -13,7 +13,7 @@
  * Negative values are prefixed with a minus sign.
  *
  * @example formatISK(47200000)      → "47.2M"
- * @example formatISK(-800000)       → "−0.8M"
+ * @example formatISK(-800000)       → "−800K"
  * @example formatISK(4827300000)    → "4.8B"
  * @example formatISK(4800000000000) → "4.8T"
  * @example formatISK(null)          → "—"

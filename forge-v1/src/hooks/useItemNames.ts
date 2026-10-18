@@ -105,7 +105,7 @@ export function useItemNames(): UseItemNamesReturn {
           const obj = cached ? JSON.parse(cached) as Record<string, string> : {};
           Object.assign(obj, data.names);
           localStorage.setItem(STORAGE_KEY, JSON.stringify(obj));
-        } catch {}
+        } catch { /* localStorage unavailable or full: the in-memory map still works */ }
         return next;
       });
     } catch (e) {

@@ -297,7 +297,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
         document.execCommand('copy');
         document.body.removeChild(ta);
         apply();
-      } catch (_) { /* silent — clipboard unavailable */ }
+      } catch { /* silent — clipboard unavailable */ }
     });
   }, [apiDetail, trueCostData, runsInputVal, meFactor]);
 

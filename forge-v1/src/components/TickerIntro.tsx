@@ -1,6 +1,6 @@
 import { useState, type FC } from 'react';
+import { markTickerIntroSeen } from '../utils/tickerIntro';
 
-const STORAGE_KEY = 'forge-ticker-intro-v1';
 
 interface TickerIntroProps {
   onClose: () => void;
@@ -12,7 +12,7 @@ const TickerIntro: FC<TickerIntroProps> = ({ onClose }) => {
   const [dontShow, setDontShow] = useState(true);
 
   const handleClose = () => {
-    if (dontShow) localStorage.setItem(STORAGE_KEY, '1');
+    if (dontShow) markTickerIntroSeen();
     onClose();
   };
 
@@ -108,8 +108,5 @@ const TickerIntro: FC<TickerIntroProps> = ({ onClose }) => {
   );
 };
 
-export function shouldShowTickerIntro(): boolean {
-  return !localStorage.getItem(STORAGE_KEY);
-}
 
 export default TickerIntro;

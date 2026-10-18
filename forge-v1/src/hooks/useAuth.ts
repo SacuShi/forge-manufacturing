@@ -460,7 +460,7 @@ export function useAuth(): AuthState & {
 
       // ── 9. Character standings (for broker fee accuracy) ──────────────────
       setLoadStep('Loading standings…');
-      let standingsData: StandingsData = { factions: {}, corps: {} };
+      const standingsData: StandingsData = { factions: {}, corps: {} };
       let standingsScopeGranted        = false;
       try {
         const rawStandings = await esiGet<EsiStanding[]>(`/characters/${cid}/standings/`, acc);
@@ -720,7 +720,7 @@ export function useAuth(): AuthState & {
       const activeJobs = await toActiveJobs(rawJobs);
 
       // ── Build standings ───────────────────────────────────────────────────
-      let standingsData: StandingsData = { factions: {}, corps: {} };
+      const standingsData: StandingsData = { factions: {}, corps: {} };
       let standingsScopeGranted        = false;
       if (rawStandings) {
         for (const s of rawStandings) {

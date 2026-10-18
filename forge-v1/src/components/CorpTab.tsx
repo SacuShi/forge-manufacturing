@@ -15,6 +15,9 @@ import type {
   CorpAsset,
   CorpJob,
   BlueprintProfit,
+  CorpBlueprintsResponse,
+  CorpAssetsResponse,
+  CorpJobsResponse,
 } from '../types';
 import ForgeWait from './ForgeWait';
 import { apiGet, apiPost } from '../api/client';
@@ -100,10 +103,7 @@ const CorpBlueprintsView: FC<CorpBlueprintsProps> = ({ token, regionId, onSelect
         limit: '500', offset: '0', type: typeFilter,
         ...(debouncedSearch ? { search: debouncedSearch } : {}),
       });
-      const data = await apiGet<{
-        blueprints: CorpBlueprint[];
-        meta: { total: number; safety_hidden?: number; last_refresh_at: string | null };
-      }>(`/api/corp/blueprints?${params}`, token);
+      const data = await apiGet<CorpBlueprintsResponse>(`/api/corp/blueprints?${params}`, token);
       if (myId !== loadIdRef.current) return; // stale — a newer request is in flight
       setBlueprints(data.blueprints);
       setTotal(data.meta.total);
@@ -113,8 +113,7 @@ const CorpBlueprintsView: FC<CorpBlueprintsProps> = ({ token, regionId, onSelect
       if (myId !== loadIdRef.current) return;
       setError((e as Error).message);
     } finally {
-      if (myId !== loadIdRef.current) return;
-      setLoading(false);
+      if (myId === loadIdRef.current) setLoading(false);
     }
   }, [token, typeFilter, debouncedSearch]);
 
@@ -364,10 +363,7 @@ const CorpAssetsView: FC<CorpAssetsProps> = ({ token, onSelectItem }) => {
         limit: '500',
         ...(debouncedSearch ? { search: debouncedSearch } : {}),
       });
-      const data = await apiGet<{
-        assets: CorpAsset[];
-        meta: { total: number; safety_hidden?: number; last_refresh_at: string | null };
-      }>(`/api/corp/assets?${params}`, token);
+      const data = await apiGet<CorpAssetsResponse>(`/api/corp/assets?${params}`, token);
       setAssets(data.assets);
       setTotal(data.meta.total);
       setSafetyHiddenA(data.meta.safety_hidden ?? 0);
@@ -459,10 +455,7 @@ const CorpJobsView: FC<CorpJobsProps> = ({ token }) => {
     if (!token) return;
     setLoading(true); setError(null);
     try {
-      const data = await apiGet<{
-        jobs: CorpJob[];
-        meta: { count: number; last_refresh_at: string | null };
-      }>('/api/corp/jobs', token);
+      const data = await apiGet<CorpJobsResponse>('/api/corp/jobs', token);
       setJobs(data.jobs);
       setLastRefresh(data.meta.last_refresh_at);
     } catch (e) {

@@ -90,7 +90,7 @@ export function usePushNotifications(token: string | null) {
     if (!token || state !== 'granted' || !jobs.length) return;
     try {
       await apiPost('/api/push/sync-jobs', { jobs }, token);
-    } catch (_) { /* non-critical */ }
+    } catch { /* non-critical */ }
   }, [token, state]);
 
   return { state, enable, disable, syncJobs };

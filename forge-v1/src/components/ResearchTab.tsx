@@ -13,7 +13,7 @@
  * Security: no dangerouslySetInnerHTML; icon URLs use numeric typeId only.
  */
 
-import { useState, useEffect, useMemo, useCallback, type FC } from 'react';
+import { useState, useEffect, useMemo, type FC } from 'react';
 import type { EsiBlueprint, ResearchRoiItem, ResearchRoiResponse } from '../types';
 import { apiPost } from '../api/client';
 import { formatISK } from '../utils/format';
@@ -22,6 +22,23 @@ import ForgeWait from './ForgeWait';
 import { itemIconUrl } from '../utils/icons';
 
 type SortKey = 'saving' | 'pct' | 'time' | 'projected';
+
+interface SortHeaderProps { k: SortKey; label: string; title?: string; sortKey: SortKey; onSort: (k: SortKey) => void }
+
+/** Column header that sorts the table; defined at module level so it is not remounted on every render. */
+const SortHeader: FC<SortHeaderProps> = ({ k, label, title, sortKey, onSort }) => (
+  <th scope="col">
+    <button
+      type="button"
+      className={`col-sort-btn${sortKey === k ? ' col-sort-active' : ''}`}
+      onClick={() => onSort(k)}
+      title={title}
+      aria-pressed={sortKey === k}
+    >
+      {label}{sortKey === k ? <span className="sort-arrow">↓</span> : ''}
+    </button>
+  </th>
+);
 
 interface ResearchTabProps {
   blueprints:      EsiBlueprint[];
@@ -99,23 +116,6 @@ const ResearchTab: FC<ResearchTabProps> = ({ blueprints, regionId, onSelectItem,
     [sorted, builds]
   );
 
-  const Header: FC<{ k: SortKey; label: string; title?: string }> = useCallback(
-    ({ k, label, title }) => (
-      <th scope="col">
-        <button
-          type="button"
-          className={`col-sort-btn${sortKey === k ? ' col-sort-active' : ''}`}
-          onClick={() => setSortKey(k)}
-          title={title}
-          aria-pressed={sortKey === k}
-        >
-          {label}{sortKey === k ? <span className="sort-arrow">↓</span> : ''}
-        </button>
-      </th>
-    ),
-    [sortKey]
-  );
-
   return (
     <div className="main-panel">
       {/* Intro + controls */}
@@ -173,10 +173,10 @@ const ResearchTab: FC<ResearchTabProps> = ({ blueprints, regionId, onSelectItem,
               <tr>
                 <th>Blueprint</th>
                 <th title="Current ME → target ME">ME</th>
-                <Header k="saving"    label="Saving / build" title="ISK saved per build at ME10" />
-                <Header k="pct"       label="%"               title="Saving as % of material cost" />
-                <Header k="projected" label="× batch"         title="Saving × product quantity per run" />
-                <Header k="time"      label="Research time"   title="Estimated time to research current ME → ME10 (needs SDE import)" />
+                <SortHeader sortKey={sortKey} onSort={setSortKey} k="saving"    label="Saving / build" title="ISK saved per build at ME10" />
+                <SortHeader sortKey={sortKey} onSort={setSortKey} k="pct"       label="%"               title="Saving as % of material cost" />
+                <SortHeader sortKey={sortKey} onSort={setSortKey} k="projected" label="× batch"         title="Saving × product quantity per run" />
+                <SortHeader sortKey={sortKey} onSort={setSortKey} k="time"      label="Research time"   title="Estimated time to research current ME → ME10 (needs SDE import)" />
               </tr>
             </thead>
             <tbody>

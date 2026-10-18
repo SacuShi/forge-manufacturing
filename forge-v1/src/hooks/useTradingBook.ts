@@ -120,7 +120,6 @@ export function useTradingBook(
         startCountdown(120);
         timerRef.current = setTimeout(runScan, 120_000);
       });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, clearTimers, startCountdown]);
 
   // Auto-run when token is available
