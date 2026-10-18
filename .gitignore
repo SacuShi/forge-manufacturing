@@ -70,3 +70,6 @@ design-assets/
 # Local-only notes and agent hand-off files (contain machine/server details)
 HANDOFF.md
 FORGE_MEMORY*.md
+
+# Throw-away server copies made by the integration tests
+server/.tmp-test/
