@@ -4,3 +4,6 @@
 # Shell scripts run inside Linux containers and servers: a CRLF checkout breaks them ("bad interpreter").
 *.sh text eol=lf
 docker-entrypoint.sh text eol=lf
+
+# Test snapshots are compared byte for byte, so they keep LF on every platform.
+server/test/snapshots/*.json text eol=lf
