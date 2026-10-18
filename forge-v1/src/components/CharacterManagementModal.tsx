@@ -1,7 +1,7 @@
 // FORGE — Character Management Modal
 // Lets the user add characters, remove alts, and promote an alt to primary.
 
-import { useState, useEffect, type FC } from 'react';
+import { useState, type FC } from 'react';
 import type { CharacterInfo, AltCharacter, RememberedCharacter } from '../types';
 
 interface CharacterManagementModalProps {
@@ -185,10 +185,7 @@ const CharacterManagementModal: FC<CharacterManagementModalProps> = ({
   // Clear the "Loading…" state as soon as the restored character actually
   // shows up in altCharacters (the 15s timeout below is just a fallback for
   // a restore that silently failed).
-  useEffect(() => {
-    if (restoringId != null && loadedIds.has(restoringId)) setRestoringId(null);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [altCharacters]);
+  if (restoringId != null && loadedIds.has(restoringId)) setRestoringId(null);
 
   const handleRestore = (characterId: number) => {
     setRestoringId(characterId);

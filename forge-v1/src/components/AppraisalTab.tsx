@@ -79,13 +79,17 @@ const AppraisalTab: FC<AppraisalTabProps> = ({ seedItems, canDockKeestar = true 
   const [error, setError] = useState<string | null>(null);
   const [goonCopied, setGoonCopied] = useState(false);
 
-  useEffect(() => {
+  // New seed items (sent from the Assets tab) replace the list and discard old results. Adjusted while
+  // rendering, so the table never flashes the previous list. The initial state already holds the first seed.
+  const [seededFrom, setSeededFrom] = useState(seedItems);
+  if (seededFrom !== seedItems) {
+    setSeededFrom(seedItems);
     if (seedItems.length > 0) {
       setItems(seedItems);
       setFromAssets(true);
       setResults(null);
     }
-  }, [seedItems]);
+  }
 
   const doAppraise = useCallback(async (toAppraise: AppraisalInput[], rId: number) => {
     if (toAppraise.length === 0) return;

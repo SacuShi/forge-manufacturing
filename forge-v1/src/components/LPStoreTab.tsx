@@ -47,9 +47,11 @@ function fmtLP(v: number): string {
   return v.toFixed(0);
 }
 
+const NO_CORPS: LPCorp[] = [];
+
 const LPStoreTab: FC<LPStoreTabProps> = ({ onSelectItem, selectedTypeId, lpPoints = [], sellRegionId = 10000002, token = null }) => {
   const [factions, setFactions]     = useState<LPFaction[]>([]);
-  const [corps, setCorps]           = useState<LPCorp[]>([]);
+  const [fetchedCorps, setCorps]   = useState<LPCorp[]>(NO_CORPS);
   const [offers, setOffers]         = useState<LPOffer[]>([]);
   const [total, setTotal]           = useState(0);
   const [pricesLive, setPricesLive] = useState(false);
@@ -101,11 +103,19 @@ const LPStoreTab: FC<LPStoreTabProps> = ({ onSelectItem, selectedTypeId, lpPoint
   const balanceMap = new Map(balances.map(b => [b.corp_id, b.lp]));
   const myCorpIds  = new Set(balances.map(b => b.corp_id));
 
+  // A different faction invalidates the chosen corp (also on first render, as before). Adjusted while rendering.
+  const [corpResetFor, setCorpResetFor] = useState<number | null>(null);
+  if (corpResetFor !== factionId) {
+    setCorpResetFor(factionId);
+    setCorpId(0);
+  }
+  // No faction means no corp list.
+  const corps = factionId === 0 ? NO_CORPS : fetchedCorps;
+
   // Load corps when faction changes
   useEffect(() => {
     localStorage.setItem(LS_FACTION, String(factionId));
-    setCorpId(0);
-    if (factionId === 0) { setCorps([]); return; }
+    if (factionId === 0) return;
     fetch(`/api/lp-store/corps?factionId=${factionId}`)
       .then(r => r.json())
       .then(d => setCorps(d.corps || []))

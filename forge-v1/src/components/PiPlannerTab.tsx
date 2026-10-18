@@ -76,12 +76,14 @@ function factoryTypeWarning(p: PlanPlanet): string | null {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
+const NO_TARGETS: TargetOption[] = [];
+
 const PiPlannerTab: FC = () => {
   const [regions,  setRegions]  = useState<Region[]>([]);
   const [regionId, setRegionId] = useState<number | null>(null);
 
   const [query,          setQuery]          = useState('');
-  const [searchResults,  setSearchResults]  = useState<TargetOption[]>([]);
+  const [fetchedResults, setSearchResults]  = useState<TargetOption[]>(NO_TARGETS);
   const [selectedTargets, setSelectedTargets] = useState<TargetOption[]>([]);
 
   const [colonySlots, setColonySlots] = useState(36);
@@ -104,10 +106,13 @@ const PiPlannerTab: FC = () => {
       .catch(() => {});
   }, []);
 
+  // An empty search box shows no results (derived, so nothing needs to clear the list).
+  const searchResults = query.trim() ? fetchedResults : NO_TARGETS;
+
   // Debounced target search.
   useEffect(() => {
     const q = query.trim();
-    if (!q) { setSearchResults([]); return; }
+    if (!q) return;
     const id = setTimeout(() => {
       apiGet<{ targets: TargetOption[] }>(`/api/pi-planner/targets?q=${encodeURIComponent(q)}`)
         .then(d => setSearchResults(d.targets))

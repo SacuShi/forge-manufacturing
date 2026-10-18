@@ -23,6 +23,8 @@ import { itemIconUrl } from '../utils/icons';
 
 type SortKey = 'saving' | 'pct' | 'time' | 'projected';
 
+const NO_RESEARCH: ResearchRoiResponse = { items: [], research_time_available: false };
+
 interface SortHeaderProps { k: SortKey; label: string; title?: string; sortKey: SortKey; onSort: (k: SortKey) => void }
 
 /** Column header that sorts the table; defined at module level so it is not remounted on every render. */
@@ -61,7 +63,7 @@ function formatDuration(seconds: number | null): string {
 }
 
 const ResearchTab: FC<ResearchTabProps> = ({ blueprints, regionId, onSelectItem, selectedTypeId }) => {
-  const [data, setData]       = useState<ResearchRoiResponse | null>(null);
+  const [fetchedData, setData] = useState<ResearchRoiResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>('saving');
@@ -76,8 +78,11 @@ const ResearchTab: FC<ResearchTabProps> = ({ blueprints, regionId, onSelectItem,
     [blueprints]
   );
 
+  // With no owned BPOs there is nothing to research: derived here rather than set by an effect.
+  const data = ownedBpos.length === 0 ? NO_RESEARCH : fetchedData;
+
   useEffect(() => {
-    if (ownedBpos.length === 0) { setData({ items: [], research_time_available: false }); return; }
+    if (ownedBpos.length === 0) return;
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     setLoading(true);

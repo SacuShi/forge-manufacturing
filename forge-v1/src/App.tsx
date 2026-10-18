@@ -276,8 +276,7 @@ const AppShell: FC = () => {
   // Inter-Hub Arb — the full row of the last item clicked from the inter-hub tab.
   // Non-null → RightSidebar renders the trade view instead of the manufacturing view.
   const [interHubContext,          setInterHubContext]          = useState<InterHubArbRow | null>(null);
-  const [interHubHaulData,         setInterHubHaulData]         = useState<InterHubHaulResult | null>(null);
-  const [interHubHaulLoading,      setInterHubHaulLoading]      = useState(false);
+  const [haulResult,              setHaulResult]               = useState<{ key: string; data: InterHubHaulResult | null } | null>(null);
   const [interHubHaulConfigOpen,   setInterHubHaulConfigOpen]   = useState(false);
   const [interHubHaulRefreshKey,   setInterHubHaulRefreshKey]   = useState(0);
 
@@ -387,30 +386,34 @@ const AppShell: FC = () => {
     return mapToMarketItems(source, allBlueprints, canBuildNowMap);
   }, [rawResults, marketSearchResults, allBlueprints, canBuildNowMap]);
 
-  // Clear inter-hub context whenever the user navigates away from the arb tab.
-  useEffect(() => {
-    if (activeTab !== 'interhub') {
-      setInterHubContext(null);
-      setInterHubHaulData(null);
-    }
-  }, [activeTab]);
+  // Clear inter-hub context whenever the user navigates away from the arb tab (adjusted while rendering).
+  const [tabSeen, setTabSeen] = useState(activeTab);
+  if (tabSeen !== activeTab) {
+    setTabSeen(activeTab);
+    if (activeTab !== 'interhub') setInterHubContext(null);
+  }
 
   // Fetch haul cost per unit whenever an inter-hub item is selected.
+  // The answer is stored with the request it belongs to; data/loading are derived from it (data is dropped when
+  // the context goes away, and kept while the same selection refreshes).
+  const haulKey = interHubContext && auth.token
+    ? `${interHubContext.product_id}|${interHubContext.buy_region_id}|${interHubContext.sell_region_id}|${interHubContext.buy_at}|${auth.token}|${interHubHaulRefreshKey}`
+    : null;
+  const interHubHaulData: InterHubHaulResult | null = haulKey !== null ? haulResult?.data ?? null : null;
+  const interHubHaulLoading = haulKey !== null && haulResult?.key !== haulKey;
   useEffect(() => {
-    if (!interHubContext || !auth.token) { setInterHubHaulData(null); return; }
+    if (!interHubContext || !auth.token || haulKey === null) return;
     let cancelled = false;
-    setInterHubHaulLoading(true);
     const { product_id, buy_region_id, sell_region_id, buy_at } = interHubContext;
     fetch(
       `/api/inter-hub-haul?typeId=${product_id}&buyHub=${buy_region_id}&sellHub=${sell_region_id}&collateral=${buy_at}`,
       { headers: { Authorization: `Bearer ${auth.token}` } }
     )
       .then(r => r.json())
-      .then((data: InterHubHaulResult) => { if (!cancelled) setInterHubHaulData(data); })
-      .catch(() => { if (!cancelled) setInterHubHaulData(null); })
-      .finally(() => { if (!cancelled) setInterHubHaulLoading(false); });
+      .then((data: InterHubHaulResult) => { if (!cancelled) setHaulResult({ key: haulKey, data }); })
+      .catch(() => { if (!cancelled) setHaulResult({ key: haulKey, data: null }); });
     return () => { cancelled = true; };
-  }, [interHubContext, auth.token, interHubHaulRefreshKey]);
+  }, [interHubContext, auth.token, haulKey]);
 
 
   const {
@@ -493,12 +496,10 @@ const AppShell: FC = () => {
     return () => window.removeEventListener('forge:session-expired', handleExpiry);
   }, []);
 
-  // Reset expiry flag once the user successfully logs in again
+  // Reset expiry flag once the user successfully logs in again (adjusted while rendering)
+  if (auth.status === 'authed' && sessionExpired) setSessionExpired(false);
   useEffect(() => {
-    if (auth.status === 'authed') {
-      setSessionExpired(false);
-      localStorage.setItem('forge_ever_authed', '1');
-    }
+    if (auth.status === 'authed') localStorage.setItem('forge_ever_authed', '1');
   }, [auth.status]);
 
   // v1.2.0 — Load saved industry settings on login
