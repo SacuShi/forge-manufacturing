@@ -26,12 +26,12 @@ export function usePushNotifications(token: string | null) {
   // (Unsupported / denied are known synchronously and set by initialPushState.)
   useEffect(() => {
     if (state !== 'idle' || Notification.permission !== 'granted') return;
-    navigator.serviceWorker.getRegistration('/sw.js').then(reg => {
-      if (!reg) return;
-      reg.pushManager.getSubscription().then(sub => {
+    navigator.serviceWorker.getRegistration('/sw.js')
+      .then(reg => reg?.pushManager.getSubscription())
+      .then(sub => {
         if (sub) { setSubscription(sub); setState('granted'); }
-      });
-    });
+      })
+      .catch(() => { /* service worker or push unavailable: stay idle */ });
     // Mount-only check: later state changes come from enable()/disable().
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

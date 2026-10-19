@@ -74,7 +74,7 @@ export function useItemNames(): UseItemNamesReturn {
       }
     };
 
-    load();
+    void load(); // handles its own errors
     return () => { cancelled = true; };
   }, []);
 

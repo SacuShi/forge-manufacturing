@@ -47,7 +47,7 @@ export function useCorpData(
 
     let cancelled = false;
 
-    Promise.allSettled([
+    void Promise.allSettled([
       // v1.14.0 — status is now per-character (the selected Director's corp)
       apiGet<CorpStatus>('/api/corp/status', token),
       apiGet<CorpAccessStatus>('/api/corp/access-status', token),

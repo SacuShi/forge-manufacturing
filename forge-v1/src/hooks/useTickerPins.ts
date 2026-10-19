@@ -304,7 +304,7 @@ export function useTickerPins(input: UseTickerPinsInput): UseTickerPinsOutput {
       } catch { /* non-fatal */ }
     };
 
-    poll();
+    void poll(); // handles its own errors
     const id = setInterval(poll, 30_000);
     return () => clearInterval(id);
   // eslint-disable-next-line react-hooks/exhaustive-deps

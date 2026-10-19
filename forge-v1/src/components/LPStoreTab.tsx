@@ -164,7 +164,7 @@ const LPStoreTab: FC<LPStoreTabProps> = ({ onSelectItem, selectedTypeId, lpPoint
   useEffect(() => { setOffset(0); fetchOffers(false, 0); }, [fetchOffers]);
 
   // Derive sorted category list from all loaded offers
-  const categories = [...new Set(offers.map(o => o.category_name).filter(Boolean) as string[])].sort();
+  const categories = [...new Set(offers.map(o => o.category_name).filter(Boolean) as string[])].sort((a, b) => a.localeCompare(b));
 
   // Filter + annotate with personal LP data, then sort
   const filtered = offers

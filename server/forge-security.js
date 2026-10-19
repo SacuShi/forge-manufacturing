@@ -138,7 +138,7 @@ async function verifyEveJwt(token) {
   let jwk;
   for (const force of [false, true]) {
     const jwks = await fetchJwks(force);
-    jwk = jwks.keys.find(k => !header.kid || k.kid === header.kid);
+    jwk = jwks?.keys?.find(k => !header.kid || k.kid === header.kid); // a malformed JWKS body counts as "no match"
     if (jwk) break;
   }
   if (!jwk) throw new Error(`No matching JWK for kid: ${header.kid}`);

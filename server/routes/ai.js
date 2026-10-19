@@ -191,7 +191,7 @@ router.post('/api/ai-chat',
         logger.debug("✓ AI response generated (no tools)");
 
         // Track cumulative AI usage (v0.9.0)
-        trackAiUsage(characterId, requestBody.model, {
+        void trackAiUsage(characterId, requestBody.model, {
           input_tokens: totalInputTokens,
           output_tokens: totalOutputTokens,
           cache_creation_input_tokens: totalCacheCreationTokens,
@@ -234,7 +234,7 @@ router.post('/api/ai-chat',
 
     // If we hit max iterations, return what we have
     logger.warn("⚠ Max tool iterations reached");
-    trackAiUsage(characterId, 'claude-sonnet-4-6', {
+    void trackAiUsage(characterId, 'claude-sonnet-4-6', {
       input_tokens: totalInputTokens,
       output_tokens: totalOutputTokens,
       cache_creation_input_tokens: totalCacheCreationTokens,

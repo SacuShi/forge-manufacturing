@@ -1213,4 +1213,7 @@ async function main() {
   }
 }
 
-main();
+main().catch((err) => {
+  console.error('\n❌ Import failed:', err.message);
+  process.exit(1);
+});

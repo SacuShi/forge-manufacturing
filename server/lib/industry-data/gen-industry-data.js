@@ -24,6 +24,8 @@ const nm = o => o?.name?.en || o?.name || '';
 
 const ESI = 'https://esi.evetech.net/latest';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+// Plain code-unit order (what a bare .sort() did), so the generated rigs.json stays byte-identical.
+const byCodeUnit = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 async function esi(p) {
   const r = await fetch(`${ESI}${p}?datasource=tranquility`, { headers: { 'User-Agent': 'FORGE-industry-data-gen' } });
   if (!r.ok) throw new Error(`ESI ${p} -> ${r.status}`);
@@ -173,7 +175,7 @@ const EXCLUDE_GROUPS = new Set(['Booster']);
       thukkerMatPct: -(at[ATTR_THUKKER_MAT] || 0),
       timePct:       -(at[A.TIME_BONUS] || 0),
       costPct:       -(at[A.COST_BONUS] || 0),
-      matCovers: [...matCovers].sort(), thukkerCovers: [...thukkerCovers].sort(), timeCovers: [...timeCovers].sort(),
+      matCovers: [...matCovers].sort(byCodeUnit), thukkerCovers: [...thukkerCovers].sort(byCodeUnit), timeCovers: [...timeCovers].sort(byCodeUnit),
       sec: { hi: at[A.SEC_HI] ?? 1, low: at[A.SEC_LOW] ?? 1, null: at[A.SEC_NULL] ?? 1 },
     };
     // Every bonus must have somewhere to apply, and every rig must do something.

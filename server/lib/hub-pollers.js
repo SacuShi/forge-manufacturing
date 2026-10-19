@@ -402,7 +402,7 @@ function ensureHubPollerRunning(hubId) {
     setTimeout(() => pollFn(hubId), delay);
   } else {
     logger.info(`▶ ${HUB_CONFIG[hubId].name} poller starting`);
-    pollFn(hubId);
+    void pollFn(hubId); // the pollers catch their own errors and schedule the next poll
   }
 }
 

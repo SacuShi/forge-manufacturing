@@ -120,7 +120,7 @@ export function useLocationNames(locationIds: number[], token?: string | null): 
       structureIds.forEach((id) => inFlight.current.delete(id));
     }
 
-    Promise.all(promises).then(() => {
+    void Promise.all(promises).then(() => { // every lookup above catches its own failure
       // Clean up inFlight for everything we tried (structures without token
       // were already cleaned up above).
       uncached

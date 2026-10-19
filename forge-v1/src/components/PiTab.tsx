@@ -280,7 +280,7 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
     setLoading(true); setError(null); setPartialErrors([]);
 
     // Fetch PI colonies for every character in parallel, then merge.
-    Promise.allSettled(
+    void Promise.allSettled(
       piCharacters.map(c =>
         apiGet<PiData>('/api/pi/colonies', c.token)
           .then(d => ({ d, name: c.name }))

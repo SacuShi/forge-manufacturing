@@ -262,7 +262,10 @@ const AppShell: FC = () => {
     const idsToRestore = auth.rememberedCharacters
       .filter((c) => !c.needsReauth)
       .map((c) => c.characterId);
-    if (idsToRestore.length > 0) auth.restoreRememberedCharacters(idsToRestore);
+    if (idsToRestore.length > 0) {
+      auth.restoreRememberedCharacters(idsToRestore)
+        .catch((e: unknown) => console.warn('Remembered-character restore failed:', e));
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth.status, auth.rememberEnabled, auth.rememberedCharacters]);
 
@@ -324,7 +327,7 @@ const AppShell: FC = () => {
     const unknown = new Set<number>();
     allRawAssets.forEach(a => { if (!itemNames.has(a.type_id)) unknown.add(a.type_id); });   // includes Asset Safety items (shown in the Assets tab)
     allBlueprintsRaw.forEach(bp => { if (!itemNames.has(bp.type_id)) unknown.add(bp.type_id); });
-    if (unknown.size > 0) resolveUnknown([...unknown]);
+    if (unknown.size > 0) void resolveUnknown([...unknown]); // handles its own errors
   // resolveUnknown changes identity when names changes, so omit it to avoid infinite loop;
   // the auth.status + itemNamesLoading gate ensures this only runs once per login.
   // eslint-disable-next-line react-hooks/exhaustive-deps

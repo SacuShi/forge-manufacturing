@@ -122,7 +122,7 @@ export function useTrueCost(
       }
     };
 
-    fetchTrueCost(false);
+    void fetchTrueCost(false); // handles its own errors
     return () => {
       cancelled = true;
       if (retryTimer) clearTimeout(retryTimer);
