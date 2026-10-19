@@ -19,6 +19,7 @@ const { FORGE_STATIC_SYSTEM_PROMPT, AI_TOOLS } = require('../lib/ai-prompt');
 const { buildPlayerContext } = require('../lib/ai-context');
 
 const PORT = config.port;
+const AI_UNAVAILABLE_MESSAGE = 'The AI advisor is temporarily unavailable. Please try again in a little while.';
 const router = express.Router();
 
 // Max tokens the server will ever request from the API, regardless of what the client sends.
@@ -166,10 +167,11 @@ router.post('/api/ai-chat',
       const data = await aiRes.json();
 
       if (!aiRes.ok) {
-        logger.error("AI error:", data.error?.message);
-        return res.json({ 
-          content: [{ type: "text", text: `[API Error: ${data.error?.message || "AI request failed"}]` }],
-          error: data.error?.message || "AI request failed"
+        // The real reason (billing, overload, bad key...) goes to the log only; users get a plain message.
+        logger.error("AI error:", aiRes.status, data.error?.message);
+        return res.json({
+          content: [{ type: "text", text: AI_UNAVAILABLE_MESSAGE }],
+          error: "AI advisor temporarily unavailable"
         });
       }
 

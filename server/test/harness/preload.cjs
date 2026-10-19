@@ -31,6 +31,9 @@ function anthropic(opts) {
   const hasToolResult = Array.isArray(last.content) && last.content.some((b) => b.type === 'tool_result');
   const asksForTool = typeof last.content === 'string' && last.content.includes('TOOLTEST');
   const usage = { input_tokens: 10, output_tokens: 5 };
+  if (typeof last.content === 'string' && last.content.includes('APIERRTEST')) {
+    return resp({ type: 'error', error: { type: 'invalid_request_error', message: 'Your credit balance is too low to access the Anthropic API.' } }, 400);
+  }
   if (asksForTool) {
     return resp({
       id: 'msg_test', type: 'message', role: 'assistant', stop_reason: 'tool_use', usage,
