@@ -211,7 +211,7 @@ const QueuePlannerTab: FC<QueuePlannerTabProps> = ({ queueCharacters, primaryTok
 
   // Re-plan when the token or hubs change (other inputs re-plan only on the button). Guarded request loader.
   // eslint-disable-next-line react-hooks/set-state-in-effect, react-hooks/exhaustive-deps
-  useEffect(() => { if (primaryToken) void runPlan(); }, [primaryToken, regionId, materialRegionId]);
+  useEffect(() => { if (primaryToken) runPlan(); }, [primaryToken, regionId, materialRegionId]);
 
   // Clean up any pending retry on unmount
   useEffect(() => () => { if (sessionRetryRef.current) clearTimeout(sessionRetryRef.current); }, []);
@@ -223,7 +223,7 @@ const QueuePlannerTab: FC<QueuePlannerTabProps> = ({ queueCharacters, primaryTok
     navigator.clipboard.writeText(text).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    });
+    }).catch(() => { /* clipboard blocked by the browser: nothing was copied, so no "Copied" tick */ });
   }, [result]);
 
   // ── Per-character slot sections built from frontend state + backend recs ──
