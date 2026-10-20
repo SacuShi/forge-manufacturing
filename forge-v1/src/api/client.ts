@@ -126,3 +126,12 @@ export async function esiGet<T>(path: string, token?: string): Promise<T> {
   }
   return res.json() as Promise<T>;
 }
+
+/**
+ * HTTP status from an esiGet error ("ESI <status>: <path>"), or null for a network error.
+ * Read from the prefix only: the path holds character ids, which can contain "403".
+ */
+export function esiErrorStatus(e: unknown): number | null {
+  const m = /^ESI (\d{3}):/.exec(e instanceof Error ? e.message : '');
+  return m ? Number(m[1]) : null;
+}

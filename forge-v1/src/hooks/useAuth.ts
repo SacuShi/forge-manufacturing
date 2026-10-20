@@ -50,7 +50,7 @@ import type {
   JumpClone,
   RememberedCharacter,
 } from '../types';
-import { esiFetchAll, esiGet, apiGet, apiPost } from '../api/client';
+import { esiFetchAll, esiGet, esiErrorStatus, apiGet, apiPost } from '../api/client';
 import { splitAssetSafety, isInAssetSafety } from '../utils/assetSafety';
 
 // ── EVE OAuth constants (must match EVE Developer Portal registration) ────────
@@ -83,6 +83,7 @@ const SCOPES =
   'esi-universe.read_structures.v1';
 
 const SESSION_TOKEN_KEY    = 'forge_token';
+const STANDINGS_RETRY_MS   = 1500;
 const SESSION_STATE_KEY    = 'forge_oauth_state';
 const ALT_TOKENS_KEY       = 'forge_alt_tokens';
 const ADDING_ALT_KEY       = 'forge_adding_alt';
@@ -280,7 +281,8 @@ export function useAuth(): AuthState & {
   const [implants,          setImplants]          = useState<number[]>([]);
   // v1.32.0 — jump clones with their implants (for the clone-based implant selector)
   const [jumpClones,        setJumpClones]        = useState<JumpClone[]>([]);
-  const [hasStandingsScope, setHasStandingsScope] = useState(false);
+  // Assumed granted until ESI answers 403: an unknown state (not loaded yet, ESI down) must not show the re-auth banner.
+  const [hasStandingsScope, setHasStandingsScope] = useState(true);
   const [primaryStandings,  setPrimaryStandings]  = useState<StandingsData | null>(null);
   const [canDockKeestar,    setCanDockKeestar]    = useState(true);
   const [error,             setError]             = useState<string | null>(null);
@@ -462,8 +464,17 @@ export function useAuth(): AuthState & {
       setLoadStep('Loading standings…');
       const standingsData: StandingsData = { factions: {}, corps: {} };
       let standingsScopeGranted        = false;
+      const fetchStandings = () => esiGet<EsiStanding[]>(`/characters/${cid}/standings/`, acc);
       try {
-        const rawStandings = await esiGet<EsiStanding[]>(`/characters/${cid}/standings/`, acc);
+        let rawStandings: EsiStanding[];
+        try {
+          rawStandings = await fetchStandings();
+        } catch (e) {
+          if (esiErrorStatus(e) === 403) throw e;
+          // One retry: a rate limit or ESI blip during the login burst should not cost the standings.
+          await new Promise((r) => setTimeout(r, STANDINGS_RETRY_MS));
+          rawStandings = await fetchStandings();
+        }
         for (const s of rawStandings) {
           if (s.from_type === 'faction')  standingsData.factions[s.from_id] = s.standing;
           if (s.from_type === 'npc_corp') standingsData.corps[s.from_id]    = s.standing;
@@ -475,11 +486,9 @@ export function useAuth(): AuthState & {
       } catch (e) {
         // Only mark the scope as denied on a definitive 403 response.
         // A transient ESI outage (5xx, timeout) must not permanently show the
-        // re-auth banner to users who already granted the scope.
-        const isScopeDenied =
-          (e as Error).message.includes('403') ||
-          (e as Error).message.toLowerCase().includes('forbidden');
-        if (isScopeDenied) {
+        // re-auth banner to users who already granted the scope. (The status is read from the
+        // "ESI <status>:" prefix: the message also holds the character id, which can contain "403".)
+        if (esiErrorStatus(e) === 403) {
           addLog('Standings', 'warn', 'Scope not granted — broker fee uses skills only');
           setHasStandingsScope(false);
           setPrimaryStandings(null);
@@ -1054,7 +1063,7 @@ export function useAuth(): AuthState & {
     setSkills([]);
     setImplants([]);
     setJumpClones([]);
-    setHasStandingsScope(false);
+    setHasStandingsScope(true);
     setPrimaryStandings(null);
     setCanDockKeestar(true);
     setError(null);
