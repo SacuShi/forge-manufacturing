@@ -31,10 +31,7 @@ async function fetchRegionPrices(regionId) {
         `https://esi.evetech.net/latest/markets/${regionId}/orders/` +
         `?datasource=tranquility&order_type=sell&page=${page}`
       );
-      if (!res.ok) {
-        logger.warn(`⚠ Sell orders page ${page} returned ${res.status}, stopping pagination`);
-        break;
-      }
+      if (!res.ok) throw new Error(`ESI returned ${res.status}`);
       const data = await res.json();
       if (!data || data.length === 0) break;
       sellOrders.push(...data);
@@ -42,8 +39,8 @@ async function fetchRegionPrices(regionId) {
       if (!xPages || page >= parseInt(xPages)) break;
       await new Promise(r => setTimeout(r, 100));
     } catch (err) {
-      logger.error(`⚠ Error fetching sell orders page ${page}:`, err.message);
-      break;
+      // A partial book would price everything past the missing page as unlisted, so callers keep their last good prices.
+      throw new Error(`Region ${regionId}: incomplete sell order book (page ${page}: ${err.message})`);
     }
   }
 
@@ -54,10 +51,7 @@ async function fetchRegionPrices(regionId) {
         `https://esi.evetech.net/latest/markets/${regionId}/orders/` +
         `?datasource=tranquility&order_type=buy&page=${page}`
       );
-      if (!res.ok) {
-        logger.warn(`⚠ Buy orders page ${page} returned ${res.status}, stopping pagination`);
-        break;
-      }
+      if (!res.ok) throw new Error(`ESI returned ${res.status}`);
       const data = await res.json();
       if (!data || data.length === 0) break;
       buyOrders.push(...data);
@@ -65,8 +59,7 @@ async function fetchRegionPrices(regionId) {
       if (!xPages || page >= parseInt(xPages)) break;
       await new Promise(r => setTimeout(r, 100));
     } catch (err) {
-      logger.error(`⚠ Error fetching buy orders page ${page}:`, err.message);
-      break;
+      throw new Error(`Region ${regionId}: incomplete buy order book (page ${page}: ${err.message})`);
     }
   }
 

@@ -63,6 +63,11 @@ async function runPreCompute() {
     // Step 2: For each market region, fetch prices and compute profitability
     let totalProcessed = 0;
     const computedAt = new Date().toISOString();
+    // Regions whose prices could not be fetched this run: their rows from the last good run are kept, not deleted as stale.
+    const skippedRegions = [];
+    // SQL fragment excluding the skipped regions from a stale-row delete (one bound '?' per region).
+    const keepSkipped = (column) => skippedRegions.length === 0 ? ''
+      : ` AND ${column} NOT IN (${skippedRegions.map(() => '?').join(', ')})`;
 
     for (const regionId of VALID_REGIONS) {
       logger.info(`⟳ Region ${regionId}: fetching prices...`);
@@ -79,7 +84,8 @@ async function runPreCompute() {
           prices = HP.withJitaFallback(prices, getRawJitaPrices());
         }
       } catch (err) {
-        logger.error(`⚠ Region ${regionId}: price fetch failed, skipping — ${err.message}`);
+        logger.error(`⚠ Region ${regionId}: price fetch failed, keeping its previous results — ${err.message}`);
+        skippedRegions.push(regionId);
         continue;
       }
 
@@ -170,7 +176,7 @@ async function runPreCompute() {
     );
     if (!jitaCount || jitaCount.cnt === 0) {
       // No Jita data: clean stale profits (standalone — no strategies write to stay consistent with)
-      await dbRun(`DELETE FROM precomputed_profits WHERE run_id IS NULL OR run_id != ?`, [runId]);
+      await dbRun(`DELETE FROM precomputed_profits WHERE (run_id IS NULL OR run_id != ?)${keepSkipped('region_id')}`, [runId, ...skippedRegions]);
       logger.warn('⚠ Skipping strategies build — no Jita data this run (Jita ESI fetch may have failed). Existing strategies preserved.');
     } else {
     // Jita data OK: clean profits + rebuild strategies in one transaction so both tables
@@ -179,7 +185,7 @@ async function runPreCompute() {
     await dbTxMutex.lock();
     try {
     await dbRun('BEGIN TRANSACTION');
-    await dbRun(`DELETE FROM precomputed_profits WHERE run_id IS NULL OR run_id != ?`, [runId]);
+    await dbRun(`DELETE FROM precomputed_profits WHERE (run_id IS NULL OR run_id != ?)${keepSkipped('region_id')}`, [runId, ...skippedRegions]);
     await dbRun(`
       INSERT OR REPLACE INTO precomputed_strategies
         (blueprint_id, sell_region_id, product_id, product_name, product_qty,
@@ -241,7 +247,7 @@ async function runPreCompute() {
         ?                                                                      AS run_id
       FROM base
     `, [runId, runId, runId]);
-    await dbRun(`DELETE FROM precomputed_strategies WHERE run_id IS NULL OR run_id != ?`, [runId]);
+    await dbRun(`DELETE FROM precomputed_strategies WHERE (run_id IS NULL OR run_id != ?)${keepSkipped('sell_region_id')}`, [runId, ...skippedRegions]);
     await dbRun('COMMIT');
     } catch (txErr) {
       await dbRun('ROLLBACK').catch(() => {});
