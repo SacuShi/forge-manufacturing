@@ -684,6 +684,19 @@ async function runMigrations() {
     PRIMARY KEY (schematic_id, material_type_id)
   )`);
 
+  // Discord job notifications: one webhook per character, encrypted like a token (anyone holding the URL can post
+  // to that channel). active = 0 once Discord says the webhook was deleted, so FORGE stops posting to it.
+  await dbRun(`CREATE TABLE IF NOT EXISTS discord_webhooks (
+    character_id INTEGER PRIMARY KEY,
+    enc_url      TEXT    NOT NULL,
+    url_iv       TEXT    NOT NULL,
+    url_tag      TEXT    NOT NULL,
+    active       INTEGER NOT NULL DEFAULT 1,
+    created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+    last_ok_at   TEXT    DEFAULT NULL,
+    last_error   TEXT    DEFAULT NULL
+  )`);
+
   // Migrate token captured by test flow (one-time, no-op if already done or test skipped)
   try {
     const testTok = await dbGet(`SELECT * FROM test_structure_token WHERE structure_id = ?`, [1049588174021]);

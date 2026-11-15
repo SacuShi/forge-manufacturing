@@ -3,7 +3,8 @@
     "DELETE /api/chat-history/:characterId  [4 handlers]",
     "DELETE /api/corp/admin/config  [2 handlers]",
     "DELETE /api/corp/admin/whitelist/:characterId  [2 handlers]",
-    "DELETE /api/push/unsubscribe  [2 handlers]",
+    "DELETE /api/notify/discord  [3 handlers]",
+    "DELETE /api/push/unsubscribe  [3 handlers]",
     "GET /api/admin/ai-costs  [2 handlers]",
     "GET /api/admin/precompute-status  [2 handlers]",
     "GET /api/asset-location  [3 handlers]",
@@ -36,6 +37,7 @@
     "GET /api/lp-store  [2 handlers]",
     "GET /api/lp-store/corps  [2 handlers]",
     "GET /api/lp-store/factions  [2 handlers]",
+    "GET /api/notify/discord  [3 handlers]",
     "GET /api/pi-planner/regions  [2 handlers]",
     "GET /api/pi-planner/targets  [2 handlers]",
     "GET /api/pi/colonies  [3 handlers]",
@@ -78,10 +80,14 @@
     "POST /api/material-breakdown  [2 handlers]",
     "POST /api/material-stock-check  [2 handlers]",
     "POST /api/me-research-roi  [2 handlers]",
+    "POST /api/notify/discord  [3 handlers]",
+    "POST /api/notify/discord/disconnect  [3 handlers]",
+    "POST /api/notify/discord/test  [3 handlers]",
     "POST /api/pi-planner/plan  [2 handlers]",
     "POST /api/production-chain  [2 handlers]",
-    "POST /api/push/subscribe  [2 handlers]",
-    "POST /api/push/sync-jobs  [2 handlers]",
+    "POST /api/push/subscribe  [3 handlers]",
+    "POST /api/push/sync-jobs  [3 handlers]",
+    "POST /api/push/unsubscribe  [3 handlers]",
     "POST /api/queue-planner  [3 handlers]",
     "POST /api/remember/forget  [3 handlers]",
     "POST /api/remember/restore  [3 handlers]",
@@ -123,11 +129,11 @@
     },
     {
       "use": "/ errorHandler",
-      "routesBefore": 95
+      "routesBefore": 101
     },
     {
       "use": "/ errorHandler",
-      "routesBefore": 95
+      "routesBefore": 101
     }
   ],
   "orderMatters": []

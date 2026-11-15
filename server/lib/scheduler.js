@@ -98,14 +98,12 @@ function startScheduledJobs({ webpush, checkPushJobs }) {
       .catch(err => logger.error('⚠ Weekly contract ingest failed:', err.message));
   }, ONE_WEEK).unref();
 
-  // Push job completion checker — polls every 5 minutes for finished industry jobs
-  if (webpush) {
-    setInterval(() => {
-      checkPushJobs()
-        .catch(err => logger.error('⚠ Push job check failed:', err.message));
-    }, 5 * 60 * 1000).unref();
-    logger.info('✓ Push notification job checker: running every 5 minutes');
-  }
+  // Job completion checker — every 5 minutes; delivers by browser push (when VAPID is set up) and/or Discord
+  setInterval(() => {
+    checkPushJobs()
+      .catch(err => logger.error('⚠ Job notification check failed:', err.message));
+  }, 5 * 60 * 1000).unref();
+  logger.info(`✓ Job notification checker: running every 5 minutes (browser push ${webpush ? 'on' : 'off'}, Discord on)`);
 }
 
 module.exports = { startCorpRefreshSchedule, startScheduledJobs };

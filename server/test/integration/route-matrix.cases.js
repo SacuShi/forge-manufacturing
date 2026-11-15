@@ -134,6 +134,13 @@ export const CASES = [
   { route: 'POST /api/push/subscribe', url: '/api/push/subscribe', body: {} },
   { route: 'DELETE /api/push/unsubscribe', url: '/api/push/unsubscribe', method: 'DELETE', body: {} },
   { route: 'POST /api/push/sync-jobs', url: '/api/push/sync-jobs', body: { jobs: [] } },
+  { route: 'POST /api/push/unsubscribe', url: '/api/push/unsubscribe', body: {} },
+  // --- Discord job notifications (no case posts a valid webhook URL: that would call discord.com)
+  { route: 'GET /api/notify/discord', url: '/api/notify/discord' },
+  { route: 'POST /api/notify/discord', url: '/api/notify/discord', body: { url: 'https://example.com/not-a-webhook' } },
+  { route: 'POST /api/notify/discord/test', url: '/api/notify/discord/test', body: {} },
+  { route: 'POST /api/notify/discord/disconnect', url: '/api/notify/discord/disconnect', body: {} },
+  { route: 'DELETE /api/notify/discord', url: '/api/notify/discord', method: 'DELETE', body: {} },
 
   // --- corp
   { route: 'GET /api/corp/status', url: '/api/corp/status' },

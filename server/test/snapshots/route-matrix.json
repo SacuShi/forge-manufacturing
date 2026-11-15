@@ -4668,7 +4668,7 @@
    }
   },
   "signedOut": {
-   "status": 503,
+   "status": 401,
    "type": "application/json",
    "shape": {
     "error": "string"
@@ -4677,10 +4677,10 @@
  },
  "DELETE /api/push/unsubscribe": {
   "signedIn": {
-   "status": 401,
+   "status": 200,
    "type": "application/json",
    "shape": {
-    "error": "string"
+    "ok": "boolean"
    }
   },
   "signedOut": {
@@ -4701,11 +4701,118 @@
    }
   },
   "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "POST /api/push/unsubscribe": {
+  "signedIn": {
    "status": 200,
    "type": "application/json",
    "shape": {
-    "ok": "boolean",
-    "skipped": "boolean"
+    "ok": "boolean"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "GET /api/notify/discord": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "active": "boolean",
+    "available": "boolean",
+    "connected": "boolean",
+    "lastError": "null",
+    "lastOkAt": "null"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "POST /api/notify/discord": {
+  "signedIn": {
+   "status": 400,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "POST /api/notify/discord/test": {
+  "signedIn": {
+   "status": 404,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "POST /api/notify/discord/disconnect": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "active": "boolean",
+    "available": "boolean",
+    "connected": "boolean",
+    "lastError": "null",
+    "lastOkAt": "null"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
+   }
+  }
+ },
+ "DELETE /api/notify/discord": {
+  "signedIn": {
+   "status": 200,
+   "type": "application/json",
+   "shape": {
+    "active": "boolean",
+    "available": "boolean",
+    "connected": "boolean",
+    "lastError": "null",
+    "lastOkAt": "null"
+   }
+  },
+  "signedOut": {
+   "status": 401,
+   "type": "application/json",
+   "shape": {
+    "error": "string"
    }
   }
  },
