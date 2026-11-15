@@ -47,6 +47,11 @@ interface LeftSidebarProps {
   pushState:          PushState;
   onPushEnable:       () => void;
   onPushDisable:      () => void;
+  /** The server can send Discord job notifications (hide the row otherwise) */
+  discordAvailable:   boolean;
+  discordEnabled:     boolean;
+  /** Opens the Job notifications window (browser + Discord setup) */
+  onOpenNotifications: () => void;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -178,6 +183,9 @@ const LeftSidebar: FC<LeftSidebarProps> = ({
   pushState,
   onPushEnable,
   onPushDisable,
+  discordAvailable,
+  discordEnabled,
+  onOpenNotifications,
 }) => {
   const portraitUrl = `${PORTRAIT_BASE}/${character.characterId}/portrait?size=64`;
   const bpoCount    = blueprints.filter((b) => b.quantity === -1).length;
@@ -473,6 +481,21 @@ const LeftSidebar: FC<LeftSidebarProps> = ({
               </span>
             </button>
           )}
+        </div>
+      )}
+      {discordAvailable && (
+        <div className="push-toggle-row">
+          <span className="push-toggle-label">💬 Discord job alerts</span>
+          <button
+            type="button"
+            className={`push-toggle${discordEnabled ? ' on' : ''}`}
+            onClick={onOpenNotifications}
+            title={discordEnabled ? 'Discord job alerts are on. Click to test or change them'
+              : 'Get a Discord message when your industry jobs finish'}
+          >
+            <span className="push-toggle-thumb" />
+            <span className="push-toggle-text">{discordEnabled ? 'ON' : 'SET UP'}</span>
+          </button>
         </div>
       )}
 

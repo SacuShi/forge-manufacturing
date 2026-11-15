@@ -2174,6 +2174,144 @@ tr:hover .ticker-pin-btn,
   background: rgba(76, 175, 80, 0.2);
 }
 
+/* ── Job notifications window (browser + Discord) ───────────────────────────── */
+.notify-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.notify-modal {
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 24px 28px;
+  width: 460px;
+  max-width: 92vw;
+  max-height: 85vh;
+  overflow-y: auto;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--color-text-primary);
+}
+.notify-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.notify-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--color-accent-primary);
+}
+.notify-close {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  font-size: 18px;
+  line-height: 1;
+  padding: 2px;
+}
+.notify-help,
+.notify-muted {
+  margin: 4px 0 8px;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+.notify-muted { font-size: 11px; color: var(--color-text-secondary); }
+.notify-section {
+  border-top: 1px solid var(--color-border);
+  padding-top: 14px;
+  margin-top: 14px;
+}
+.notify-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.notify-section-head h3 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+}
+.notify-on { font-size: 11px; color: var(--color-success); }
+.notify-steps {
+  margin: 8px 0;
+  padding-left: 18px;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+}
+.notify-label {
+  display: block;
+  margin: 8px 0 4px;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+.notify-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 9px;
+  border-radius: 4px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+}
+.notify-input[aria-invalid='true'] { border-color: var(--color-danger); }
+.notify-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.notify-btn {
+  padding: 5px 12px;
+  border-radius: 4px;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-primary);
+  font-size: 11px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+}
+.notify-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.notify-btn-primary {
+  border-color: var(--color-accent-primary);
+  color: var(--color-accent-primary);
+}
+.notify-btn-danger { color: var(--color-danger); }
+.notify-error { margin: 6px 0; font-size: 11px; color: var(--color-danger); }
+.notify-ok { margin: 6px 0; font-size: 11px; color: var(--color-success); }
+/* The light theme's red and green are too pale for small text on the light panel (≈3.3:1); darker shades reach 4.5:1+ */
+[data-theme='light'] .notify-error,
+[data-theme='light'] .notify-btn-danger { color: #b91c1c; }
+[data-theme='light'] .notify-ok,
+[data-theme='light'] .notify-on { color: #047857; }
+
+/* Prompt at the top of the Jobs tab */
+.jobs-alert-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  border: 1px dashed var(--color-border);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
 /* Fee character selector in the True Profit section heading */
 .fee-char-select {
   font-size: 10px;

@@ -8,13 +8,25 @@ interface JobsTabViewProps {
   activityLabel: (id: number | undefined) => string;
   onSelectItem: (typeId: number, name: string) => void;
   selectedTypeId: number | null;
+  jobAlertsOn?: boolean;
+  onSetUpJobAlerts?: () => void;
 }
 
-const JobsTabView: FC<JobsTabViewProps> = ({ activeJobs, activeTab, activityLabel, onSelectItem, selectedTypeId }) => {
+const JobsTabView: FC<JobsTabViewProps> = ({
+  activeJobs, activeTab, activityLabel, onSelectItem, selectedTypeId, jobAlertsOn = true, onSetUpJobAlerts,
+}) => {
   return (
     <>
 {activeTab === 'jobs' && (
         <div className="main-panel">
+          {!jobAlertsOn && onSetUpJobAlerts && activeJobs.length > 0 && (
+            <div className="jobs-alert-hint">
+              <span>🔔 Want to know when these finish? FORGE can alert you in your browser or on Discord.</span>
+              <button type="button" className="notify-btn notify-btn-primary" onClick={onSetUpJobAlerts}>
+                Set up alerts
+              </button>
+            </div>
+          )}
           {activeJobs.length === 0 ? (
             <div style={{ color: 'var(--color-text-tertiary)', fontSize: 13,
               padding: 24, textAlign: 'center' }}>

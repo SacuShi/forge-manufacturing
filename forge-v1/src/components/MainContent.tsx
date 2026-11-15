@@ -108,6 +108,9 @@ interface MainContentProps {
   /** Blueprints locked in Asset Safety (left out of the list above) */
   safetyBlueprintCount?: number;
   activeJobs: ActiveJob[];
+  /** Job notifications (browser or Discord) are on; otherwise the Jobs tab offers to set them up */
+  jobAlertsOn?: boolean;
+  onSetUpJobAlerts?: () => void;
   itemNames: Map<number, string>;
   /** v1.33.0 — combined wallet ISK across in-scope characters, for the "✓ Can Build Now" pill */
   walletISK: number;
@@ -200,6 +203,8 @@ const MainContent: FC<MainContentProps> = ({
   rawAssets = [],
   safetyBlueprintCount = 0,
   activeJobs,
+  jobAlertsOn = true,
+  onSetUpJobAlerts,
   itemNames,
   walletISK,
   onSelectItem,
@@ -606,7 +611,8 @@ const MainContent: FC<MainContentProps> = ({
         </div>
       )}
 
-      <JobsTabView activeJobs={activeJobs} activeTab={activeTab} activityLabel={activityLabel} onSelectItem={onSelectItem} selectedTypeId={selectedTypeId} />
+      <JobsTabView activeJobs={activeJobs} activeTab={activeTab} activityLabel={activityLabel} onSelectItem={onSelectItem} selectedTypeId={selectedTypeId}
+        jobAlertsOn={jobAlertsOn} onSetUpJobAlerts={onSetUpJobAlerts} />
 
       {/* v1.11.0 — ME Research ROI tab */}
       {activeTab === 'research' && (

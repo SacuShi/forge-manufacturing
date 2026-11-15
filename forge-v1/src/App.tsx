@@ -79,6 +79,8 @@ import { shouldShowTickerIntro } from './utils/tickerIntro';
 import { useTickerPins, TickerContext } from './hooks/useTickerPins';
 import { useCorpData }            from './hooks/useCorpData';
 import { usePushNotifications }  from './hooks/usePushNotifications';
+import { useDiscordNotifications } from './hooks/useDiscordNotifications';
+import JobNotificationsModal     from './components/JobNotificationsModal';
 import { useCharacterTabData } from './hooks/useCharacterTabData';
 import { useCharacterAggregates } from './hooks/useCharacterAggregates';
 import { useMarketData } from './hooks/useMarketData';
@@ -372,13 +374,17 @@ const AppShell: FC = () => {
     auth.status === 'authed' ? auth.token : null
   );
 
+  const discord = useDiscordNotifications(auth.status === 'authed' ? auth.token : null);
+  const [notifyOpen, setNotifyOpen] = useState(false);
+  const jobAlertsOn = pushState === 'granted' || discord.enabled;
+
   useEffect(() => {
-    if (pushState !== 'granted') return;
+    if (!jobAlertsOn) return;
     const jobs = allActiveJobs
       .filter(j => !j.done && j.endDate)
       .map(j => ({ key: `${j.typeId}:${j.endDate}`, productName: j.name, endDate: j.endDate! }));
-    if (jobs.length) syncJobs(jobs);
-  }, [allActiveJobs, pushState, syncJobs]);
+    if (jobs.length) void syncJobs(jobs);
+  }, [allActiveJobs, jobAlertsOn, syncJobs]);
 
   // Derive marketItems from rawResults (paginated list) or marketSearchResults (search).
   // When feeRates are loaded, profit/margin/ISK-hr are recalculated with the same
@@ -1000,7 +1006,20 @@ const AppShell: FC = () => {
           pushState={pushState}
           onPushEnable={pushEnable}
           onPushDisable={pushDisable}
+          discordAvailable={discord.available}
+          discordEnabled={discord.enabled}
+          onOpenNotifications={() => setNotifyOpen(true)}
         />
+
+        {notifyOpen && (
+          <JobNotificationsModal
+            pushState={pushState}
+            onPushEnable={pushEnable}
+            onPushDisable={pushDisable}
+            discord={discord}
+            onClose={() => { discord.clearMessages(); setNotifyOpen(false); }}
+          />
+        )}
 
         {charModalOpen && (
           <CharacterManagementModal
@@ -1047,6 +1066,8 @@ const AppShell: FC = () => {
           rawAssets={allRawAssets}
           safetyBlueprintCount={safetyBlueprintCount}
           activeJobs={allActiveJobs}
+          jobAlertsOn={jobAlertsOn}
+          onSetUpJobAlerts={() => setNotifyOpen(true)}
           itemNames={itemNames}
           walletISK={totalWalletISK}
           selectedTypeId={selectedTypeId}

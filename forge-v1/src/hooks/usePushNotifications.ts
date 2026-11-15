@@ -89,13 +89,14 @@ export function usePushNotifications(token: string | null) {
     }
   }, [token, subscription]);
 
-  // Sync active jobs to server so it can notify on completion
+  // Sync active jobs to the server so it can notify on completion. The caller decides when (browser push or Discord
+  // on); the server ignores the list for a character with nowhere to send notifications.
   const syncJobs = useCallback(async (jobs: Array<{ key: string; productName: string; endDate: string }>) => {
-    if (!token || state !== 'granted' || !jobs.length) return;
+    if (!token || !jobs.length) return;
     try {
       await apiPost('/api/push/sync-jobs', { jobs }, token);
     } catch { /* non-critical */ }
-  }, [token, state]);
+  }, [token]);
 
   return { state, enable, disable, syncJobs };
 }
