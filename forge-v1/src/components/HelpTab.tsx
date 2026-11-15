@@ -422,6 +422,49 @@ const HelpTab: FC = () => (
         quantity, and time remaining.
       </p>
       <div style={S.tip}>💡 Click any job to open that product's market and profit data in the right panel.</div>
+      <div style={S.tip}>💡 Don't want to keep checking back? Hit <strong>Set up alerts</strong> at the top of the list and
+        FORGE will tell you when they finish — see <strong>Job Notifications</strong> below.</div>
+    </Section>
+
+    {/* ── Job notifications ── */}
+    <Section title="🔔 Job Notifications — Browser & Discord">
+      <p style={S.p}>
+        Every industrialist knows the feeling: you log back in and find your slots have been sitting idle for
+        six hours because a batch of Ravens finished while you were at work. FORGE can give you a nudge the
+        moment your jobs complete, so you can get back in and queue the next lot.
+      </p>
+      <p style={S.p}>
+        Open <strong>Job notifications</strong> from <strong>Set up alerts</strong> on the Active Jobs tab, or from the
+        <strong> 🔔 / 💬</strong> rows at the bottom of the left panel. You can use either option, or both.
+      </p>
+      <ul style={S.ul}>
+        <li style={S.li}><strong>🔔 Browser</strong> — flip it <strong>ON</strong> and accept your browser's permission
+          prompt. You'll get a pop-up on that PC even with the FORGE tab in the background. It's per browser, so turn it on
+          on each machine you use.</li>
+        <li style={S.li}><strong>💬 Discord</strong> — FORGE posts a message in a Discord channel of your choice, so the
+          ping follows you to your phone. Great for a quick "jobs done" while you're ratting, mining or away from the desk.</li>
+      </ul>
+
+      <p style={{ ...S.p, marginTop: 16 }}><strong>Setting up Discord</strong> takes about a minute and needs no bot:</p>
+      <ul style={S.ul}>
+        <li style={S.li}>In Discord, open the settings of the channel you want the pings in (the ⚙ next to its name).
+          You need to be allowed to manage webhooks there — your own server is the easy option.</li>
+        <li style={S.li}>Go to <strong>Integrations → Webhooks → New Webhook</strong>, then <strong>Copy Webhook URL</strong>.</li>
+        <li style={S.li}>Paste it into FORGE and hit <strong>Connect</strong>. FORGE posts a confirmation straight away,
+          so you'll know at once if it's working.</li>
+        <li style={S.li}>From then on you get one tidy message per check listing everything that finished, e.g.
+          <em> "3 industry jobs complete — Raven, Drake, Caracal"</em>. Use <strong>Send a test</strong> any time,
+          <strong> Use another channel</strong> to move it, or <strong>Turn off</strong> to stop.</li>
+      </ul>
+      <div style={S.tip}>💡 Corp industry channel? Point the webhook there and your whole corp sees jobs land —
+        handy for shared builds or a director keeping an eye on the production line.</div>
+      <div style={S.tip}>💡 Treat the webhook URL like a password for that channel: anyone who has it can post there.
+        FORGE stores it encrypted and never shows it back to you, but don't paste it anywhere public. If it does leak,
+        delete the webhook in Discord and connect a new one.</div>
+      <div style={S.tip}>💡 FORGE learns about your jobs when you have it open, then checks every 5 minutes. So after you
+        start new jobs in game, open FORGE once (or hit refresh) so it knows what to watch for — alts included.</div>
+      <div style={S.tip}>💡 If you delete the webhook in Discord, FORGE notices, stops posting, and shows
+        <strong> Needs attention</strong> in the window. Paste a fresh webhook URL to get the pings back.</div>
     </Section>
 
     {/* ── Queue Planner ── */}
@@ -625,6 +668,8 @@ const HelpTab: FC = () => (
       <ul style={S.ul}>
         <li style={S.li}>Log in all your industry alts with <strong>Add Character</strong> — FORGE merges blueprints,
           assets, and jobs across all of them automatically.</li>
+        <li style={S.li}>Idle slots are lost ISK. Turn on <strong>Job notifications</strong> (browser or Discord) and FORGE
+          pings you the moment a job finishes, so the next one goes in straight away.</li>
         <li style={S.li}>Set <strong>⚙ Mfg Setup</strong> to your actual structure before reading any profit numbers.
           An Azbel with T2 ME rigs produces very different True Profit figures than an NPC station.</li>
         <li style={S.li}>The <strong>Market Opportunities</strong> table refreshes market prices automatically in the background.
