@@ -58,7 +58,7 @@ import { useAuth, REMEMBER_PROMPT_SHOWN_KEY } from './hooks/useAuth';
 import { useItemDetail } from './hooks/useItemDetail';
 import { useItemNames }  from './hooks/useItemNames';
 import { useTrueCost }   from './hooks/useTrueCost';
-import { apiGet, apiPost } from './api/client';
+import { apiGet, apiPost, readJsonReply } from './api/client';
 import { formatBuildTime }  from './utils/format';
 import { QUICK_PROMPTS }    from './data/mockData';
 
@@ -788,7 +788,7 @@ const AppShell: FC = () => {
         }),
       });
 
-      const data = await response.json() as AiChatResponse;
+      const data = await readJsonReply<AiChatResponse>(response);
 
       if (!response.ok || data.error) {
         const msg = data.code === 'SESSION_EXPIRED'

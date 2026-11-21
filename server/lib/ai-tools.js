@@ -2,6 +2,8 @@
 // AI advisor tool dispatch: executes one tool call from the model and returns a plain result object.
 // Extracted from server.js; everything it needs from the server is injected so it stays testable.
 const { buildTopProfitableQuery, orderFor } = require('./profit-query');
+const { buildPiSummary } = require('./pi-colony');
+const { getCached } = require('./cache');
 
 function createAiTools({ CORP_BP_USABLE_SQL, PORT, REGIONS, VALID_REGIONS, dbAll, dbGet, ensureCorpDataFresh, esiFetch, fetch, getItemPricesAllRegions, hubBooks, resolveViewerCorpAccess, security }) {
   // Tells the advisor how to read price_source on precomputed rows (a Jita price is not a hub price).
@@ -729,53 +731,22 @@ function createAiTools({ CORP_BP_USABLE_SQL, PORT, REGIONS, VALID_REGIONS, dbAll
             const piRes = await fetch(`http://localhost:${PORT}/api/pi/colonies?characterId=${characterId}`, {
               headers: { Authorization: `Bearer ${eveToken}` }
             });
-            const piData       = await piRes.json();
-            const planets      = piData.colonies      || [];
-            const productNames = piData.productNames  || {}; // typeId → {name, piTier}
-            const schematics   = piData.schematics    || {}; // schematicId → {name}
-            const factoryOutputs = piData.factoryOutputs || {}; // schematicId → output typeId
-            const prices       = piData.prices        || {}; // typeId → {sell, buy}
+            // Never JSON-parse an error page: a non-200 or non-JSON reply becomes a plain tool error.
+            const piType = piRes.headers?.get?.('content-type') || '';
+            if (!piRes.ok || !piType.includes('application/json')) {
+              toolResult = { error: `PI colony data unavailable (HTTP ${piRes.status})`, note: 'PI data may require a re-login if the planets ESI scope was recently granted. Tell the player you could not read their colonies; do not guess their setup.' };
+              break;
+            }
+            const piData = await piRes.json();
+            if (!(piData.colonies || []).length) { toolResult = { summary: 'No active PI colonies found.', planets: [] }; break; }
 
-            if (!planets.length) { toolResult = { summary: 'No active PI colonies found.', planets: [] }; break; }
+            // Max colonies = 1 + Interplanetary Consolidation (skill 2495) level, when the session has skills.
+            const sessSkills = getCached(`session:${characterId}`)?.skills;
+            const icSkill    = Array.isArray(sessSkills) ? sessSkills.find(s => s.skill_id === 2495) : undefined;
+            const maxColonies = Array.isArray(sessSkills) ? 1 + (icSkill?.active_skill_level || 0) : null;
 
-            const summary = planets.map(p => {
-              // Unique extractors with market price (P0 raw materials)
-              const extracting = [...new Map(
-                (p.pins || [])
-                  .filter(pin => pin.extractor_details?.product_type_id)
-                  .map(pin => {
-                    const tid   = pin.extractor_details.product_type_id;
-                    const name  = productNames[tid]?.name || `Type ${tid}`;
-                    const price = prices[tid] || {};
-                    return [tid, { name, sell: Math.round(price.sell || 0), buy: Math.round(price.buy || 0) }];
-                  })
-              ).values()];
-              // Unique factories with output product price (P1/P2/P3)
-              const producing = [...new Map(
-                (p.pins || [])
-                  .filter(pin => pin.factory_details?.schematic_id)
-                  .map(pin => {
-                    const sid       = pin.factory_details.schematic_id;
-                    const outputTid = factoryOutputs[sid];
-                    const name      = schematics[sid]?.name || `Schematic ${sid}`;
-                    const price     = outputTid ? (prices[outputTid] || {}) : {};
-                    return [sid, { name, sell: Math.round(price.sell || 0), buy: Math.round(price.buy || 0) }];
-                  })
-              ).values()];
-              return {
-                planet:      p.planet_name || `Planet ${p.planet_id}`,
-                type:        p.planet_type,
-                extracting,  // P0 raw materials being mined, with sell/buy ISK prices
-                producing,   // factory outputs (P1/P2/P3), with sell/buy ISK prices
-                num_pins:    (p.pins || []).length,
-                last_update: p.last_update,
-              };
-            });
-            toolResult = {
-              colony_count: planets.length,
-              colonies: summary,
-              note: 'extracting = P0 raw materials. producing = processed factory outputs. sell/buy are current Jita prices. If you harvest these materials yourself you avoid buying them at market price — factor this into manufacturing cost calculations.',
-            };
+            toolResult = buildPiSummary(piData, { maxColonies });
+            toolResult.note += ' If the player harvests a material themselves they avoid buying it at market price — factor this into manufacturing cost calculations.';
           } catch (e) { toolResult = { error: e.message, note: 'PI data may require a re-login if ESI scope was recently granted.' }; }
           break;
         }

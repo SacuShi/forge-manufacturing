@@ -4495,6 +4495,7 @@
     "bpCrossRef": {},
     "colonies": "array(empty)",
     "factoryOutputs": {},
+    "planetNames": {},
     "prices": {},
     "productNames": {},
     "schematics": {},

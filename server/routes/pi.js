@@ -7,6 +7,7 @@ const security = require('../forge-security');
 const { dbAll, SQL_VARIABLE_LIMIT } = require('../lib/db');
 const { esiFetch } = require('../lib/esi');
 const { getCached } = require('../lib/cache');
+const { normalisePins, pinSchematicId, planetDisplayName } = require('../lib/pi-colony');
 
 const router = express.Router();
 
@@ -109,6 +110,7 @@ async function fetchPiColonyLayouts({ characterId, eveToken, planets }) {
   const colonies         = [];
   const schematicIds     = new Set();
   const extractorProdIds = new Set(); // P0 raw resources being extracted
+  const contentTypeIds   = new Set(); // everything sitting in storage / launchpads / factory buffers
 
   await Promise.allSettled(planets.map(async (planet) => {
     try {
@@ -117,17 +119,42 @@ async function fetchPiColonyLayouts({ characterId, eveToken, planets }) {
         { headers: { Authorization: `Bearer ${eveToken}` } }
       );
       const detail = r.ok ? await r.json() : { pins: [] };
-      for (const pin of (detail.pins || [])) {
+      // ESI puts a factory's schematic id at the pin's top level, not in factory_details.
+      // normalisePins copies it into factory_details so the PI tab and the AI advisor see every factory.
+      const pins = normalisePins(detail.pins);
+      for (const pin of pins) {
         if (pin.extractor_details?.product_type_id) extractorProdIds.add(pin.extractor_details.product_type_id);
-        if (pin.factory_details?.schematic_id)      schematicIds.add(pin.factory_details.schematic_id);
+        const sid = pinSchematicId(pin);
+        if (sid) schematicIds.add(sid);
+        for (const c of (pin.contents || [])) if (c?.type_id) contentTypeIds.add(c.type_id);
       }
-      colonies.push({ ...planet, pins: detail.pins || [] });
+      colonies.push({ ...planet, pins });
     } catch (e) {
       colonies.push({ ...planet, pins: [], error: e.message });
     }
   }));
 
-  return { colonies, schematicIds, extractorProdIds };
+  return { colonies, schematicIds, extractorProdIds, contentTypeIds };
+}
+
+// Planet names as the game shows them ("Tanoo I"), from the SDE planet table + solar system names.
+async function resolvePiPlanetNames({ planets, systemNames }) {
+  const planetNames = {};
+  const ids = planets.map(p => p.planet_id).filter(Number.isInteger).slice(0, SQL_VARIABLE_LIMIT);
+  if (!ids.length) return planetNames;
+  try {
+    const rows = await dbAll(
+      `SELECT planet_id, system_id, planet_index FROM sde_planets WHERE planet_id IN (${ids.map(() => '?').join(',')})`,
+      ids
+    );
+    for (const r of rows) {
+      const name = planetDisplayName(systemNames[r.system_id], r.planet_index);
+      if (name) planetNames[r.planet_id] = name;
+    }
+  } catch (e) {
+    logger.warn('PI planet name lookup failed:', e.message);
+  }
+  return planetNames;
 }
 
 async function resolvePiSchematicsAndOutputs({ schematicIds, extractorProdIds }) {
@@ -137,12 +164,26 @@ async function resolvePiSchematicsAndOutputs({ schematicIds, extractorProdIds })
     schematics[id] = await resolveSchematic(id);
   }));
 
-  // Resolve factory output type_ids.
-  // EVE PI schematic name === output product name (e.g. "Coolant" → Coolant item).
-  // Lookup by name in items table to get type_id without needing SDE planetSchematics import.
+  // Resolve factory output type_ids. First from the SDE schematic table (pi_schematics, CCP data);
+  // any schematic not found there falls back to a name match, since EVE names each PI schematic after
+  // its output product (e.g. "Coolant" → Coolant item).
   const factoryOutputs = {}; // schematicId → output type_id
   const allPiTypeIds   = new Set(extractorProdIds);
-  const schematicEntries = Object.entries(schematics); // [[id, {name,cycleTime}], ...]
+  const sids = [...schematicIds].filter(Number.isInteger).slice(0, SQL_VARIABLE_LIMIT);
+  if (sids.length) {
+    try {
+      const sdeRows = await dbAll(
+        `SELECT schematic_id, product_type_id FROM pi_schematics WHERE schematic_id IN (${sids.map(() => '?').join(',')})`,
+        sids
+      );
+      for (const r of sdeRows) {
+        if (r.product_type_id) { factoryOutputs[r.schematic_id] = r.product_type_id; allPiTypeIds.add(r.product_type_id); }
+      }
+    } catch (e) {
+      logger.warn('PI schematic SDE lookup failed, using name match:', e.message);
+    }
+  }
+  const schematicEntries = Object.entries(schematics).filter(([id]) => !factoryOutputs[id]); // [[id, {name,cycleTime}], ...]
   if (schematicEntries.length) {
     const names = schematicEntries.map(([, s]) => s.name);
     const ph    = names.map(() => '?').join(',');
@@ -244,18 +285,20 @@ router.get('/api/pi/colonies', security.apiLimiter, security.verifyEveToken, asy
     const { planets, sessionBlueprints } = await fetchPiPlanetList({ characterId, eveToken });
 
     if (!planets?.length) {
-      return res.json({ colonies: [], productNames: {}, schematics: {}, systemNames: {}, prices: {}, factoryOutputs: {}, bpCrossRef: {} });
+      return res.json({ colonies: [], productNames: {}, schematics: {}, systemNames: {}, planetNames: {}, prices: {}, factoryOutputs: {}, bpCrossRef: {} });
     }
 
-    const { colonies, schematicIds, extractorProdIds } = await fetchPiColonyLayouts({ characterId, eveToken, planets });
+    const { colonies, schematicIds, extractorProdIds, contentTypeIds } = await fetchPiColonyLayouts({ characterId, eveToken, planets });
     const { schematics, factoryOutputs, allPiTypeIds }  = await resolvePiSchematicsAndOutputs({ schematicIds, extractorProdIds });
-    const productNames = await resolvePiProductNames({ allPiTypeIds });
-    const prices        = resolvePiPrices({ allPiTypeIds });
+    // Stored items need names too, but are kept out of allPiTypeIds so the blueprint cross-reference is unchanged.
+    const productNames = await resolvePiProductNames({ allPiTypeIds: new Set([...allPiTypeIds, ...contentTypeIds]) });
+    const prices        = resolvePiPrices({ allPiTypeIds: new Set([...allPiTypeIds, ...contentTypeIds]) });
     const bpCrossRef    = await resolvePiBlueprintCrossRef({ sessionBlueprints, allPiTypeIds });
     const systemNames   = await resolvePiSystemNames({ planets });
+    const planetNames   = await resolvePiPlanetNames({ planets, systemNames });
 
     colonies.sort((a, b) => a.planet_id - b.planet_id);
-    const data = { colonies, productNames, schematics, systemNames, prices, factoryOutputs, bpCrossRef };
+    const data = { colonies, productNames, schematics, systemNames, planetNames, prices, factoryOutputs, bpCrossRef };
 
     // Cache result with simple eviction: drop oldest entry when map exceeds 200 characters.
     if (piDetailCache.size >= 200) {

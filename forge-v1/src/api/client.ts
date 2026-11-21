@@ -135,3 +135,22 @@ export function esiErrorStatus(e: unknown): number | null {
   const m = /^ESI (\d{3}):/.exec(e instanceof Error ? e.message : '');
   return m ? Number(m[1]) : null;
 }
+
+/**
+ * Reads a FORGE API reply as JSON. If something in between (Cloudflare, a server restart) answered with an
+ * HTML error page instead, this throws a plain-English Error rather than "Unexpected token '<'".
+ */
+export async function readJsonReply<T>(res: Response): Promise<T> {
+  const text = await res.text();
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    if (res.status === 524 || res.status === 504) {
+      throw new Error('the request took too long and the connection timed out. Please try again, or ask about one thing at a time.');
+    }
+    if (res.status === 502 || res.status === 503 || res.status === 521 || res.status === 522 || res.status === 523) {
+      throw new Error('FORGE could not be reached just now (it may be restarting). Please try again in a minute.');
+    }
+    throw new Error(`FORGE sent an unexpected reply (HTTP ${res.status}). Please try again.`);
+  }
+}

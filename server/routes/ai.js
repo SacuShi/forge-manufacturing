@@ -25,6 +25,15 @@ const router = express.Router();
 // Max tokens the server will ever request from the API, regardless of what the client sends.
 const AI_MAX_TOKENS = 2000;
 
+// Cloudflare cuts a request off at 100 s and sends its own HTML error page, which the browser cannot read
+// ("Unexpected token '<'"). So the advisor works to a time budget: once AI_TOOL_BUDGET_MS has passed (or on
+// the last allowed round) it is told to answer with what it already has, and every API call must finish by
+// AI_HARD_DEADLINE_MS so the reply always leaves FORGE as JSON before Cloudflare gives up.
+const AI_TOOL_BUDGET_MS   = 60_000;
+const AI_HARD_DEADLINE_MS = 90_000;
+const AI_TOO_SLOW_MESSAGE = 'That question needed more time than the connection allows, so I stopped before finishing. ' +
+  'Please try again, or ask about one thing at a time.';
+
 // -- AI tool dispatch (lib/ai-tools.js) --------------------------------------
 // Built on first use: several of these (e.g. CORP_BP_USABLE_SQL) are declared further down this file,
 // so constructing it here at load time would read them before they exist.
@@ -130,8 +139,19 @@ router.post('/api/ai-chat',
     let totalCacheCreationTokens = 0;
     let totalCacheReadTokens = 0;
 
+    const startedAt = Date.now();
+
     while (iteration < maxIterations) {
       iteration++;
+
+      // Last round, or out of time for more tool calls: the model must answer now from what it has.
+      const elapsed     = Date.now() - startedAt;
+      const answerNow   = iteration === maxIterations || elapsed > AI_TOOL_BUDGET_MS;
+      const msLeft      = AI_HARD_DEADLINE_MS - elapsed;
+      if (msLeft < 5_000) {
+        logger.warn(`⚠ AI chat out of time after ${iteration - 1} round(s) for character ${characterId}`);
+        return res.json({ content: [{ type: "text", text: AI_TOO_SLOW_MESSAGE }] });
+      }
 
       const requestBody = {
         model: "claude-sonnet-4-6",
@@ -148,21 +168,32 @@ router.post('/api/ai-chat',
           }
         ],
         messages: conversationMessages,
-        tools: tools
+        tools: tools,
+        ...(answerNow ? { tool_choice: { type: "none" } } : {})
       };
 
-      logger.debug(`🤖 AI request (iteration ${iteration})`);
+      logger.debug(`🤖 AI request (iteration ${iteration}${answerNow ? ', answer now' : ''})`);
 
-      const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-          "anthropic-beta": "prompt-caching-2024-07-31"
-        },
-        body: JSON.stringify(requestBody)
-      });
+      let aiRes;
+      try {
+        aiRes = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": apiKey,
+            "anthropic-version": "2023-06-01",
+            "anthropic-beta": "prompt-caching-2024-07-31"
+          },
+          body: JSON.stringify(requestBody),
+          timeout: msLeft, // node-fetch 2: rejects with type 'request-timeout'
+        });
+      } catch (fetchErr) {
+        if (fetchErr.type === 'request-timeout') {
+          logger.warn(`⚠ AI request timed out (iteration ${iteration}) for character ${characterId}`);
+          return res.json({ content: [{ type: "text", text: AI_TOO_SLOW_MESSAGE }] });
+        }
+        throw fetchErr;
+      }
 
       const data = await aiRes.json();
 
