@@ -510,9 +510,16 @@ const TradingTab: FC<TradingTabProps> = ({ token, canDockKeestar = true }) => {
     >
       <span className="td-col-rank">{rank}</span>
       <span className="td-col-name">
-        <img src={itemIconUrl(item.typeId, 22)} alt="" width={16} height={16}
-          onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
-        {item.name}
+        {/* Same icon treatment as the Inter-Hub Arb rows. */}
+        <img
+          src={itemIconUrl(item.typeId)}
+          alt=""
+          width={24} height={24}
+          loading="lazy"
+          style={{ borderRadius: 2, flexShrink: 0, opacity: 0.9 }}
+          onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+        />
+        <span className="td-col-name-text">{item.name}</span>
       </span>
       <span className="td-col-margin td-pos">{item.netMarginPct.toFixed(1)}%</span>
       <span className="td-col-iskday td-pos" title={item.avgDailyVol === 0 ? 'No volume data — ISK/day cannot be estimated' : undefined}>

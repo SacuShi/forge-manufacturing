@@ -5383,7 +5383,8 @@ tr:hover .ticker-pin-btn,
 .td-row-stale       { opacity: .6; }
 
 .td-col-rank   { color: var(--color-text-muted); font-size: 11px; }
-.td-col-name   { display: flex; align-items: center; gap: 6px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.td-col-name   { display: flex; align-items: center; gap: 8px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.td-col-name-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .td-col-margin { text-align: left; font-weight: 600; }
 .td-col-iskday { text-align: left; font-weight: 600; }
 .td-col-vol    { text-align: left; color: var(--color-text-muted); }
