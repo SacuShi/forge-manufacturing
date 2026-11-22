@@ -6,6 +6,7 @@ const logger = require('../lib/logger');
 const security = require('../forge-security');
 const HP = require('../lib/hub-price');
 const IM = require('../lib/industry-math'); // shared manufacturing mechanics (rigs, ME, EIV, job cost, time)
+const { loadReactionSetup } = require('../lib/reaction-setup');
 const { dbAll, dbGet, SQL_VARIABLE_LIMIT } = require('../lib/db');
 const { getCached } = require('../lib/cache');
 const { VALID_REGIONS } = require('../lib/hubs');
@@ -163,7 +164,10 @@ function runQueuePlannerAllocation({
   safeHorizon, horizonDays, totalSalesFeeRate,
   effectiveBudget, mfgFreeSlots, reactionFreeSlots, multiCharMode, characters,
   adjustedPrices, sci, reactionSci = 0, facilityTaxDecimal, hubPrices, jitaPrices, hubIsJita, coldMatCost = null,
+  reactionSetup = null,   // {setup, facilityTaxDecimal} from lib/reaction-setup.js; null = no refinery saved
 }) {
+  const rxSetup = reactionSetup?.setup || IM.describeSetup({});
+  const rxFacilityTax = reactionSetup ? reactionSetup.facilityTaxDecimal : facilityTaxDecimal;
   const meetsSkills = bpId => {
     const reqs = reqsByBp.get(bpId) || [];
     return reqs.every(r => (skillMap[r.skill_id] || 0) >= r.skill_level);
@@ -213,14 +217,15 @@ function runQueuePlannerAllocation({
     // Material multiplier = owned blueprint ME × structure × the saved rigs that cover THIS product
     // (each at its real, security-scaled value). Reactions run in refineries, not engineering
     // complexes, so the structure/rig set doesn't apply to them.
-    const mods     = IM.modifiersForProduct(setup, c.product_group_id);
-    const meFactor = isReaction ? IM.blueprintMeMult(ownedBp.me) : IM.blueprintMeMult(ownedBp.me) * mods.matMult;
+    // Reactions use the pilot's refinery + reactor rigs (IM.reactionModifiers, same as True Profit).
+    const mods     = isReaction ? IM.reactionModifiers(rxSetup, c.product_group_id, skillMap) : IM.modifiersForProduct(setup, c.product_group_id);
+    const meFactor = IM.blueprintMeMult(ownedBp.me) * mods.matMult;
     const effectiveME = (1 - meFactor) * 100;
 
     // Build time: skills (incl. science skills the blueprint requires), blueprint TE, structure,
     // the rigs' TE bonus and implant — or the Reactions-skill model for reaction jobs.
     const timeMult = isReaction
-      ? IM.reactionTimeMultiplier({ skillMap })
+      ? mods.timeMult
       : IM.timeMultiplier({
           skillMap, requiredSkills: reqsByBp.get(c.blueprint_id) || [], blueprintTe: ownedBp.te || 0,
           modsTimeMult: mods.timeMult, implantPct,
@@ -271,8 +276,8 @@ function runQueuePlannerAllocation({
       const eiv = IM.estimatedItemValue(candidateMats, n, adjustedPrices);
       // Reactions are charged on the system's reaction cost index (CCP has one index per activity).
       const job = IM.jobCost({
-        eiv, sci: (isReaction ? reactionSci : sci) || 0, costMult: isReaction ? 1 : mods.costMult,
-        facilityTaxDecimal: facilityTaxDecimal || 0, activity: isReaction ? 'reaction' : 'manufacturing',
+        eiv, sci: (isReaction ? reactionSci : sci) || 0, costMult: mods.costMult,
+        facilityTaxDecimal: (isReaction ? rxFacilityTax : facilityTaxDecimal) || 0, activity: isReaction ? 'reaction' : 'manufacturing',
       }).total;
       return { mat, job };
     };
@@ -344,9 +349,9 @@ function runQueuePlannerAllocation({
       ownedBpME:              ownedBp.me,
       effectiveME,
       materialMultiplier:     meFactor,
-      rigsApplied:            isReaction ? 0 : mods.appliedRigs.length,
+      rigsApplied:            mods.appliedRigs.length,
       // false when the product's item group isn't in the game-data table, so no rig bonus could be applied
-      rigCoverageKnown:       isReaction ? true : mods.familyKnown,
+      rigCoverageKnown:       mods.familyKnown,
       assignedCharacterId:    assignedChar?.characterId ?? null,
       assignedCharacterName:  assignedChar?.name       ?? null,
     });
@@ -525,7 +530,9 @@ router.post('/api/queue-planner', security.apiLimiter, security.verifyEveToken, 
       fetchAdjustedPrices(), fetchActivityCostIndices(),
     ]);
     const sci         = IM.costIndexFor(activityIndices, 'manufacturing', targetSystemId);
-    const reactionSci = IM.costIndexFor(activityIndices, 'reaction', targetSystemId);
+    // Reactions: their own refinery setup (system, tax, refinery, reactor rigs); none saved = the manufacturing system/tax.
+    const reactionSetup = await loadReactionSetup(settings);
+    const reactionSci = IM.costIndexFor(activityIndices, 'reaction', reactionSetup.systemId);
 
     // ── Activity filter ───────────────────────────────────────────────────────
     const allowedActivities = activityFilter === 'manufacturing' ? [1]
@@ -560,7 +567,7 @@ router.post('/api/queue-planner', security.apiLimiter, security.verifyEveToken, 
       candidates, reqsByBp, skillMap, bpByType, setup, implantPct,
       safeHorizon, horizonDays, totalSalesFeeRate,
       effectiveBudget, mfgFreeSlots, reactionFreeSlots, multiCharMode, characters,
-      adjustedPrices, sci, reactionSci, facilityTaxDecimal,
+      adjustedPrices, sci, reactionSci, facilityTaxDecimal, reactionSetup,
       hubPrices: matHubPrices, jitaPrices: matJitaPrices, hubIsJita: safeMaterialRegionId === 10000002, coldMatCost,
     });
 

@@ -700,6 +700,7 @@ Reactions convert moon ore/gas → intermediate and composite materials feeding 
 KEY: reaction formulas cannot be researched, copied or invented (no blueprint ME/TE). The refinery itself gives no
 material bonus, but reactor ME RIGS do (−2% materials, ×1.0 low sec / ×1.1 null sec) and reactor time rigs cut time.
 Advanced Industry does NOT speed reactions — the Reactions skill does (−4% time per level). Tatara: −25% reaction time; Athanor: none.
+Reactor rigs only work in low-sec/null-sec (refineries cannot be anchored in high-sec); a rig only helps the reaction types it is built for (composite/simple, hybrid, biochemical). FORGE prices and times reactions from the pilot's own refinery and reactor rigs (Mfg Setup → Reactions); without one saved, only the Reactions skill is counted. Never assume a rig or refinery the pilot has not saved.
 Where: Refinery only (Athanor medium, Tatara large) in low/null sec. Cannot run in hisec. Fuel blocks are an input of each run.
 
 Reactor types (each handles one category):

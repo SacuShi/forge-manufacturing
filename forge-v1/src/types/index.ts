@@ -727,6 +727,13 @@ export interface IndustrySettings {
   invention_rig_ids?:    string;
   invention_system_id?:  number | null;
   invention_system_name?: string | null;
+  /** Reaction (refinery) setup: Athanor/Tatara + reactor rigs. Null structure = none saved (only the Reactions skill counts). */
+  reaction_structure_type_id?: number | null;
+  reaction_rig_ids?:           string;
+  reaction_system_id?:         number | null;
+  reaction_system_name?:       string | null;
+  reaction_facility_tax?:      number;
+  reaction_system_security?:   number | null;
   /** v1.35.0 — inter-hub independent haul config */
   interhub_haul_enabled?:  boolean;
   interhub_method?:        string;
@@ -753,11 +760,13 @@ export interface IndustryRigStat {
   timePct: number;
   /** Multiplier applied to the bonuses by system security class */
   sec:     { hi: number; low: number; null: number };
+  /** Reactor rig (fits a refinery) rather than an engineering-complex rig */
+  reaction?: boolean;
 }
 
 export interface IndustryRigsResponse {
   rigs: Record<string, IndustryRigStat>;
-  structures: Record<string, { name: string; matMult: number; costMult: number; timeMult: number }>;
+  structures: Record<string, { name: string; matMult: number; costMult: number; timeMult: number; refinery?: boolean; rigSize?: 'M' | 'L' }>;
 }
 
 /** One suggestion from GET /api/structure-fit-suggestions (anonymous, counts only) */

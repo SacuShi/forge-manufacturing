@@ -21,6 +21,7 @@ const {
 } = market;
 
 const { nonBuiltSource } = require('../lib/item-origin');
+const { loadReactionSetup } = require('../lib/reaction-setup');
 
 const router = express.Router();
 
@@ -83,7 +84,7 @@ router.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, asyn
       return res.status(404).json({ error: `No blueprint found for product ${product_id}${source ? ` (source: ${source})` : ''}`, source });
     }
     // Reaction formulas (activity 9) run in refineries, not engineering complexes: the structure's
-    // material/cost/time bonuses and the Industry skill don't apply (same rule as the Queue Planner).
+    // material/cost/time bonuses and the Industry skill don't apply; the pilot's refinery + reactor rigs do (below).
     const isReaction = blueprint.activity_id === 9;
     const materials = blueprintMaterialsCache.get(blueprint.blueprint_id) || [];
 
@@ -103,21 +104,26 @@ router.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, asyn
     // its own attribute × the system-security multiplier, applies only to the product families
     // its description lists, and every factor multiplies (no additive summing).
     const productRow = await dbGet('SELECT group_id FROM items WHERE type_id = ?', [product_id]);
-    const sysRow     = settings?.system_id
-      ? await dbGet('SELECT security_status FROM sde_systems WHERE system_id = ?', [settings.system_id])
+    // Reactions run in a refinery (Athanor/Tatara + reactor rigs): their own saved setup, shared with the Queue Planner
+    // (lib/reaction-setup.js). Nothing saved = no refinery bonuses, only the Reactions skill, mfg system/tax as before.
+    const rx         = isReaction ? await loadReactionSetup(settings) : null;
+    const useRx      = !!rx?.configured;
+    const shownSystemId = useRx ? rx.systemId : (settings?.system_id || null);
+    const sysRow     = shownSystemId
+      ? await dbGet('SELECT security_status FROM sde_systems WHERE system_id = ?', [shownSystemId])
       : null;
-    const setup      = IM.describeSetup({
+    const setup      = rx ? rx.setup : IM.describeSetup({
       structureTypeId: settings?.structure_type_id || null,
       rigIds,
       systemSecurity:  sysRow ? sysRow.security_status : null,
     });
     const mods       = isReaction
-      ? { family: null, familyKnown: true, appliedRigs: [], matMult: 1, timeMult: 1, costMult: 1 }
+      ? IM.reactionModifiers(setup, productRow?.group_id, skillMap)
       : IM.modifiersForProduct(setup, productRow?.group_id);
     const bpMeMult   = IM.blueprintMeMult(baseME);
     const meFactor   = bpMeMult * mods.matMult;          // total material multiplier for this job
     const effectiveME = (1 - meFactor) * 100;            // combined % reduction (display)
-    const structureMeBonus = (setup.structure && !isReaction) ? (1 - setup.structure.matMult) * 100 : 0;
+    const structureMeBonus = setup.structure ? (1 - setup.structure.matMult) * 100 : 0;
     const rigMeBonus = mods.appliedRigs.reduce((sum, r) => sum + r.usedMatPct, 0);
 
     // ── Adjusted prices + cost indices (ESI, cached) ──────────────────────
@@ -133,8 +139,8 @@ router.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, asyn
 
     // ── Manufacturing job cost = EIV × (SCI × structure cost bonus + facility tax + SCC) ──
     // Reactions are charged on the system's REACTION index, not the manufacturing one.
-    const sci            = IM.costIndexFor(activityIndices, isReaction ? 'reaction' : 'manufacturing', targetSystemId);
-    const jc             = IM.jobCost({ eiv, sci, costMult: mods.costMult, facilityTaxDecimal, activity: isReaction ? 'reaction' : 'manufacturing' });
+    const sci            = IM.costIndexFor(activityIndices, isReaction ? 'reaction' : 'manufacturing', useRx ? rx.systemId : targetSystemId);
+    const jc             = IM.jobCost({ eiv, sci, costMult: mods.costMult, facilityTaxDecimal: useRx ? rx.facilityTaxDecimal : facilityTaxDecimal, activity: isReaction ? 'reaction' : 'manufacturing' });
     const systemJobCost  = jc.system;
     const sccSurcharge   = jc.scc;
     const facilityTaxCost = jc.facility;
@@ -278,7 +284,7 @@ router.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, asyn
     const baseBuildSeconds   = (blueprint.build_time || 0) * runs;
     const industryLvl        = skillMap[3380] || 0;          // Industry: -4%/lvl mfg time
     const advIndustryLvl     = skillMap[3388] || 0;          // Advanced Industry: -3%/lvl all jobs
-    const structureTeBonus   = (setup.structure && !isReaction) ? (1 - setup.structure.timeMult) * 100 : 0;
+    const structureTeBonus   = setup.structure ? (1 - setup.structure.timeMult) * 100 : 0;   // refinery: Tatara 25% reaction time
     // Best manufacturing-time implant the character has plugged in (if any).
     const mfgImplant = isReaction ? null : ((implants || [])
       .map(id => INDUSTRY_IMPLANTS[id])
@@ -292,7 +298,7 @@ router.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, asyn
       [blueprint.blueprint_id]
     );
     const timeMult = isReaction
-      ? IM.reactionTimeMultiplier({ skillMap })
+      ? mods.timeMult   // Reactions skill × refinery × reactor time rigs (IM.reactionModifiers)
       : IM.timeMultiplier({
           skillMap, requiredSkills, blueprintTe: baseTE || 0,
           modsTimeMult: mods.timeMult, implantPct: mfgImplant ? mfgImplant.pct : 0,
@@ -308,9 +314,10 @@ router.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, asyn
       .filter(imp => imp && imp.kind === 'reprocessing')
       .sort((a, b) => b.pct - a.pct)[0] || null;
 
-    const STRUCTURE_LABELS = { 35825: 'Raitaru', 35826: 'Azbel', 35827: 'Sotiyo' };
-    const structureLabel = settings?.structure_type_id
-      ? (STRUCTURE_LABELS[settings.structure_type_id] || 'Engineering Complex')
+    // A reaction with no refinery saved shows no structure: the manufacturing complex does not apply to it.
+    const shownStructureId = isReaction ? (setup.structureTypeId || null) : (settings?.structure_type_id || null);
+    const structureLabel = shownStructureId
+      ? (IM.STRUCTURES[shownStructureId]?.name || (isReaction ? 'Refinery' : 'Engineering Complex'))
       : 'NPC Station';
 
     res.json({
@@ -416,12 +423,12 @@ router.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, asyn
       prices_warm:      pricesWarm,
       setup_configured: !!(settings?.system_id),
       manufacturing_setup: {
-        system_id:          settings?.system_id         || null,
-        system_name:        settings?.system_name       || 'Not configured — using Jita IV',
-        structure_type_id:  settings?.structure_type_id || null,
+        system_id:          useRx ? rx.systemId : (settings?.system_id || null),
+        system_name:        (useRx ? settings.reaction_system_name : settings?.system_name) || 'Not configured — using Jita IV',
+        structure_type_id:  shownStructureId,
         structure_label:    structureLabel,
-        rig_ids:            rigIds,
-        facility_tax_pct:   settings?.facility_tax      || 0,
+        rig_ids:            isReaction ? setup.rigs.map(r => r.id) : rigIds,
+        facility_tax_pct:   (useRx ? settings.reaction_facility_tax : settings?.facility_tax) || 0,
         sci_raw:            sci,
         // Effective ME breakdown (v1.9.3)
         // For T2 items blueprint_me = T2 BPC base ME (2) + decryptor.me; for T1 = researched BPO ME.

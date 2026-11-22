@@ -18,7 +18,7 @@ const path = require('path');
 
 const SDE_DIR = process.argv[2];
 if (!SDE_DIR) { console.error('usage: node gen-industry-data.js <sde-dir>'); process.exit(1); }
-const OUT = __dirname;
+const OUT = process.env.GEN_OUT || __dirname;   // GEN_OUT lets a dry run write somewhere else for diffing
 const readSde = f => JSON.parse(fs.readFileSync(path.join(SDE_DIR, f), 'utf8'));
 const nm = o => o?.name?.en || o?.name || '';
 
@@ -186,6 +186,55 @@ const EXCLUDE_GROUPS = new Set(['Booster']);
     rigs[id] = rig;
   }
 
+  // ── reactor rigs (Upwell refinery rigs: Athanor takes M, Tatara takes L) ──
+  // Which product groups a rig speeds up/saves on comes from CCP's own SDE field
+  // engineering_rig_affected_group_ids.reaction (not hand-typed). The M-set Composite/Hybrid/Biochemical rigs
+  // define the three families; the L-set "Reactor Efficiency" rig covers all three (every group it lists must
+  // belong to one of them). Bonuses: attribute 2713 (RefRigTimeBonus) and 2714 (RefRigMatBonus).
+  // High-sec is not allowed (no hiSecModifier attribute; refineries can't be anchored there either).
+  const REACTION_FAMILY_BY_NAME = { Composite: 'reaction_composite', Hybrid: 'reaction_hybrid', Biochemical: 'reaction_biochemical' };
+  const REACTOR_EFFECT = /^rigReaction(Comp|Hyb|Bio)(Time|Mat)Bonus$/;
+  const ATTR_REF_TIME = 2713, ATTR_REF_MAT = 2714;
+  const reactorTypes = Object.entries(T).filter(([, t]) => /^Standup (M|L)-Set .*Reactor/.test(nm(t)) && !/Blueprint/.test(nm(t)) && t.published !== false);
+  const groupsOf = t => (t.engineering_rig_affected_group_ids?.reaction || []).map(Number).sort((a, b) => a - b);
+  const reactionGroupFamily = {};
+  for (const [id, t] of reactorTypes) {
+    const nameFam = Object.keys(REACTION_FAMILY_BY_NAME).find(k => nm(t).includes(` ${k} Reactor`));
+    if (!nameFam) continue;                       // the all-in-one L rig is handled below
+    const gs = groupsOf(t);
+    if (!gs.length) throw new Error(`reactor rig ${id} (${nm(t)}) has no affected groups in the SDE`);
+    for (const g of gs) {
+      if (reactionGroupFamily[g] && reactionGroupFamily[g] !== REACTION_FAMILY_BY_NAME[nameFam]) throw new Error(`reaction group ${g} claimed by two families`);
+      reactionGroupFamily[g] = REACTION_FAMILY_BY_NAME[nameFam];
+    }
+  }
+  for (const [g, f] of Object.entries(reactionGroupFamily)) {
+    if (fam[g] && fam[g] !== f) throw new Error(`group ${g} already ${fam[g]}, wanted ${f}`);
+    fam[g] = f;
+  }
+  for (const [id, t] of reactorTypes) {
+    const ty = await esi(`/universe/types/${id}/`);
+    const at = {}; (ty.dogma_attributes || []).forEach(a => { at[a.attribute_id] = a.value; });
+    for (const e of ty.dogma_effects || []) {
+      const d = await effect(e.effect_id);
+      if (IGNORED_EFFECTS.has(d.name) || d.name === 'structureReactionRigSecurityModification') continue;
+      if (!REACTOR_EFFECT.test(d.name)) throw new Error(`reactor rig ${id} (${nm(t)}) has an unknown effect "${d.name}" — review the generator`);
+    }
+    const fams = [...new Set(groupsOf(t).map(g => {
+      if (!reactionGroupFamily[g]) throw new Error(`reactor rig ${id} affects group ${g} that no single-family rig covers`);
+      return reactionGroupFamily[g];
+    }))].sort(byCodeUnit);
+    const matPct = -(at[ATTR_REF_MAT] || 0), timePct = -(at[ATTR_REF_TIME] || 0);
+    if (!(matPct > 0 || timePct > 0)) throw new Error(`reactor rig ${id} (${nm(t)}) has no bonus values — attribute read failed?`);
+    rigs[id] = {
+      name: nm(t), size: nm(t).startsWith('Standup M-') ? 'M' : 'L', family: 'Reactor', reaction: true,
+      matPct, thukkerMatPct: 0, timePct, costPct: 0,
+      matCovers: matPct > 0 ? fams : [], thukkerCovers: [], timeCovers: timePct > 0 ? fams : [],
+      // No hiSecModifier attribute = cannot be used in high-sec (refineries cannot be anchored there).
+      sec: { hi: 0, low: at[A.SEC_LOW] ?? 1, null: at[A.SEC_NULL] ?? 1 },
+    };
+  }
+
   // ── structures.json ──────────────────────────────────────────────────────
   const structures = {};
   for (const id of [35825, 35826, 35827]) {
@@ -195,6 +244,19 @@ const EXCLUDE_GROUPS = new Set(['Booster']);
     for (const k of ['matMult', 'costMult', 'timeMult']) {
       if (typeof structures[id][k] !== 'number') throw new Error(`structure ${id} missing ${k}`);
     }
+  }
+  // Upwell refineries (reactions run here). Engineering bonuses don't exist on them; the only structure bonus is
+  // strReactionTimeMultiplier (attr 2721: Tatara 0.75, Athanor has none = 1). Rig size from rigSize attr 1547 (2 = M, 3 = L).
+  const ATTR_REACTION_TIME = 2721, ATTR_RIG_SIZE = 1547;
+  const RIG_SIZE_NAME = { 2: 'M', 3: 'L' };
+  for (const id of [35835, 35836]) {
+    const ty = await esi(`/universe/types/${id}/`);
+    const at = {}; (ty.dogma_attributes || []).forEach(a => { at[a.attribute_id] = a.value; });
+    if (!RIG_SIZE_NAME[at[ATTR_RIG_SIZE]]) throw new Error(`refinery ${id} has unexpected rigSize ${at[ATTR_RIG_SIZE]}`);
+    structures[id] = {
+      name: ty.name, refinery: true, rigSize: RIG_SIZE_NAME[at[ATTR_RIG_SIZE]],
+      matMult: 1, costMult: 1, timeMult: at[ATTR_REACTION_TIME] ?? 1,
+    };
   }
 
   // ── science-time-skills.json ─────────────────────────────────────────────

@@ -16,5 +16,21 @@
   "matMult": 0.99,
   "costMult": 0.95,
   "timeMult": 0.7
+ },
+ "35835": {
+  "name": "Athanor",
+  "refinery": true,
+  "rigSize": "M",
+  "matMult": 1,
+  "costMult": 1,
+  "timeMult": 1
+ },
+ "35836": {
+  "name": "Tatara",
+  "refinery": true,
+  "rigSize": "L",
+  "matMult": 1,
+  "costMult": 1,
+  "timeMult": 0.75
  }
 }

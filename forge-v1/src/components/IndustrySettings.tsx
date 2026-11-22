@@ -20,6 +20,8 @@ import type {
 import { apiGet, apiPost } from '../api/client';
 
 import HaulMethodFields from './HaulMethodFields';
+import ReactionSetupSection from './ReactionSetupSection';
+import { EMPTY_REACTION_SETUP, type ReactionSetupState } from '../utils/reactionSetup';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { fmtISK, type CharacterSkillData } from '../data/haulProviders';
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -228,6 +230,8 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
   const [structureId,    setStructureId]    = useState<number | null>(null);
   const [selectedRigs,   setSelectedRigs]   = useState<number[]>([]);
   const [facilityTax,    setFacilityTax]    = useState(0);
+  // Reactions run in a refinery (Athanor/Tatara): a separate, optional setup (see ReactionSetupSection).
+  const [reaction,       setReaction]       = useState<ReactionSetupState>(EMPTY_REACTION_SETUP);
   // Real game stats + context that make the setup honest: security of the chosen system (rig
   // bonuses scale by it), CCP's published rig values, rigs that were dropped, and what other
   // FORGE pilots report for the same structure.
@@ -302,6 +306,19 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
       setSizeDroppedCount(0);
       setSystemSecurity(initial.system_security ?? null);
       setFacilityTax(initial.facility_tax ?? 0);
+      let rxRigs: number[] = [];
+      try {
+        const parsed: unknown = JSON.parse(initial.reaction_rig_ids || '[]');
+        if (Array.isArray(parsed)) rxRigs = parsed.map(Number).filter(Number.isFinite);
+      } catch { /* corrupt value → no reactor rigs */ }
+      setReaction({
+        structureId:    initial.reaction_structure_type_id ?? null,
+        rigs:           rxRigs,
+        systemId:       initial.reaction_system_id ?? null,
+        systemName:     initial.reaction_system_name ?? null,
+        systemSecurity: initial.reaction_system_security ?? null,
+        tax:            initial.reaction_facility_tax ?? 0,
+      });
       setHaulEnabled(initial.haul_enabled ?? false);
       setLeg1Method((initial.leg1_method ?? 'user_defined') as HaulMethod);
       setLeg2Method((initial.leg2_method ?? 'user_defined') as HaulMethod);
@@ -331,6 +348,7 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
       setSizeDroppedCount(0);
       setSystemSecurity(null);
       setFacilityTax(0);
+      setReaction(EMPTY_REACTION_SETUP);
       setHaulEnabled(false);
       setLeg1Method('user_defined'); setLeg2Method('user_defined');
       setLeg1Rate(0);         setLeg2Rate(0);
@@ -502,6 +520,12 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
         structure_type_id: structureId,
         rig_ids:           isNpc ? [] : selectedRigs,
         facility_tax:      isNpc ? 0 : facilityTax,
+        // Reaction (refinery) setup — saved separately by the server; null structure = none
+        reaction_structure_type_id: reaction.structureId,
+        reaction_rig_ids:           reaction.structureId === null ? [] : reaction.rigs,
+        reaction_system_id:         reaction.structureId === null ? null : reaction.systemId,
+        reaction_system_name:       reaction.structureId === null ? null : reaction.systemName,
+        reaction_facility_tax:      reaction.structureId === null ? 0 : reaction.tax,
         haul_enabled:      haulEnabled,
         // Phase 1 compat
         leg1_haul_rate:    leg1SaveZero ? 0 : leg1Rate,
@@ -536,6 +560,12 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
         system_security:   systemSecurity,
         security_class:    securityClassOf(systemSecurity),
         invalid_rig_ids:   [],
+        reaction_structure_type_id: reaction.structureId,
+        reaction_rig_ids:           JSON.stringify(reaction.structureId === null ? [] : reaction.rigs),
+        reaction_system_id:         reaction.structureId === null ? null : reaction.systemId,
+        reaction_system_name:       reaction.structureId === null ? null : reaction.systemName,
+        reaction_facility_tax:      reaction.structureId === null ? 0 : reaction.tax,
+        reaction_system_security:   reaction.structureId === null ? null : reaction.systemSecurity,
         haul_enabled:      haulEnabled,
         leg1_haul_rate:    leg1SaveZero ? 0 : leg1Rate,
         leg2_haul_rate:    leg2AutoZero ? 0 : leg2Rate,
@@ -558,7 +588,7 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
       setSaving(false);
     }
   }, [canSave, token, systemId, systemName, systemSecurity, structureId, isNpc, selectedRigs,
-      facilityTax, haulEnabled, leg1SaveZero, leg2AutoZero,
+      facilityTax, reaction, haulEnabled, leg1SaveZero, leg2AutoZero,
       leg1Method, leg2Method, leg1Rate, leg2Rate,
       leg1Collateral, leg2Collateral, leg1IskPerJump, leg2IskPerJump,
       leg1FlatTotal, leg2FlatTotal, leg1ServiceLabel, leg2ServiceLabel,
@@ -824,6 +854,9 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
               </div>
             )}
           </div>
+
+          {/* ── Reactions (refinery) ──────────────────────────────────────── */}
+          <ReactionSetupSection token={token} value={reaction} onChange={setReaction} rigStats={rigStats} />
 
           {/* ── Haulage ───────────────────────────────────────────────────── */}
           <div className="settings-section" id="settings-haulage">

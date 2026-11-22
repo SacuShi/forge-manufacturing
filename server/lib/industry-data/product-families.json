@@ -108,6 +108,8 @@
  "419": "basic_medium_ship",
  "420": "basic_small_ship",
  "426": "structure",
+ "428": "reaction_composite",
+ "429": "reaction_composite",
  "430": "structure",
  "438": "structure",
  "439": "structure",
@@ -175,6 +177,7 @@
  "663": "ammo",
  "707": "structure",
  "709": "structure",
+ "712": "reaction_biochemical",
  "716": "adv_component",
  "737": "equipment",
  "738": "equipment",
@@ -249,6 +252,7 @@
  "958": "adv_medium_ship",
  "963": "adv_medium_ship",
  "964": "adv_component",
+ "974": "reaction_hybrid",
  "1019": "ammo",
  "1122": "equipment",
  "1136": "structure",
@@ -456,6 +460,7 @@
  "4086": "structure",
  "4088": "ammo",
  "4093": "equipment",
+ "4096": "reaction_biochemical",
  "4107": "equipment",
  "4117": "equipment",
  "4127": "equipment",
@@ -477,6 +482,9 @@
  "4810": "equipment",
  "4905": "ammo",
  "4913": "equipment",
+ "4932": "reaction_composite",
  "5120": "capital_ship",
- "5239": "drone_fighter"
+ "5140": "equipment",
+ "5239": "drone_fighter",
+ "5251": "equipment"
 }

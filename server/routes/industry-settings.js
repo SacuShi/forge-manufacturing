@@ -83,12 +83,18 @@ module.exports = function industrySettingsRoutes({ blueprintMaterialsCache }) {
       rigIds,
       systemSecurity: sysRow ? sysRow.security_status : null,
     });
+    // Reaction (refinery) setup extras: the reaction system's security class, for the same honest rig display.
+    const rxSys = settings.reaction_system_id
+      ? await dbGet('SELECT security_status FROM sde_systems WHERE system_id = ?', [settings.reaction_system_id])
+      : null;
     return {
       ...settings,
       system_security: sysRow ? sysRow.security_status : null,
       security_class:  setup.secClass,
       invalid_rig_ids: setup.invalidRigIds,
       ignored_rig_ids: setup.ignoredRigIds,
+      reaction_system_security: rxSys ? rxSys.security_status : null,
+      reaction_security_class:  IM.securityClass(rxSys ? rxSys.security_status : null),
     };
   }
 
@@ -472,6 +478,11 @@ module.exports = function industrySettingsRoutes({ blueprintMaterialsCache }) {
       // Unknown ids (old picker bug, stale entries) are dropped instead of silently counting as 0.
       // Same rules the read path enforces: real rigs only, no duplicates, max 3, matching the structure's
       // size, and none at an NPC station.
+      // A refinery is not a manufacturing structure (its only bonus is on reactions): refused here so it can never
+      // cut a manufacturing time. It is chosen in the separate reaction setup.
+      if (IM.STRUCTURES[Number(structure_type_id)]?.refinery) {
+        return res.status(400).json({ error: 'Refineries are set up under Reactions, not as the manufacturing structure' });
+      }
       const cleanRigIds = IM.describeSetup({
         structureTypeId: Number(structure_type_id) || null, rigIds: rig_ids, systemSecurity: null,
       }).rigs.map(r => r.id);
@@ -488,6 +499,23 @@ module.exports = function industrySettingsRoutes({ blueprintMaterialsCache }) {
         interhub_flat_total, interhub_self_fuel, interhub_collateral,
         interhub_service_label, interhub_self_char_id, interhub_self_ship,
       });
+
+      // The reaction (refinery) setup is saved only when the client sends it, so a client that does not know about it
+      // leaves what is saved untouched.
+      if (Object.prototype.hasOwnProperty.call(req.body, 'reaction_structure_type_id')) {
+        const rxId = Number(req.body.reaction_structure_type_id) || null;
+        const refinery = rxId && IM.STRUCTURES[rxId]?.refinery ? rxId : null;
+        const rxSystem = req.body.reaction_system_id;
+        if (!validSystemId(rxSystem)) return res.status(400).json({ error: 'Invalid system id' });
+        const rxRigs = IM.describeSetup({ structureTypeId: refinery, rigIds: req.body.reaction_rig_ids, systemSecurity: null }).rigs.map(r => r.id);
+        const rxTax = Math.min(IM.MAX_FACILITY_TAX * 100, Math.max(0, parseFloat(req.body.reaction_facility_tax) || 0));
+        await dbRun(
+          `UPDATE character_industry_settings
+              SET reaction_structure_type_id = ?, reaction_rig_ids = ?, reaction_system_id = ?, reaction_system_name = ?, reaction_facility_tax = ?
+            WHERE character_id = ?`,
+          [refinery, JSON.stringify(rxRigs), rxSystem ? Number(rxSystem) : null, req.body.reaction_system_name ? String(req.body.reaction_system_name).slice(0, 80) : null, rxTax, characterId]
+        );
+      }
 
       res.json({ ok: true });
 

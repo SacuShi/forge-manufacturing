@@ -589,6 +589,13 @@ async function runMigrations() {
   await addColumn('character_industry_settings', "invention_rig_ids TEXT DEFAULT '[]'");
   await addColumn('character_industry_settings', 'invention_system_id INTEGER DEFAULT NULL');
   await addColumn('character_industry_settings', 'invention_system_name TEXT DEFAULT NULL');
+  // Reaction setup (Athanor/Tatara + reactor rigs): a separate setup from the manufacturing one, because reactions run in
+  // refineries, not engineering complexes. NULL structure = no refinery saved (only the Reactions skill applies).
+  await addColumn('character_industry_settings', 'reaction_structure_type_id INTEGER DEFAULT NULL');
+  await addColumn('character_industry_settings', "reaction_rig_ids TEXT DEFAULT '[]'");
+  await addColumn('character_industry_settings', 'reaction_system_id INTEGER DEFAULT NULL');
+  await addColumn('character_industry_settings', 'reaction_system_name TEXT DEFAULT NULL');
+  await addColumn('character_industry_settings', 'reaction_facility_tax REAL DEFAULT 0');
 
   // PI Planner: system/planet/region geography + PI schematic recipes (populated by sde-import.js)
   await dbRun(`CREATE TABLE IF NOT EXISTS sde_regions (

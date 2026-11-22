@@ -176,7 +176,8 @@ t('Mfg Setup rig catalog == generated rig data (ids, names, sizes)', () => {
   assert.deepStrictEqual(missing, [], 'catalog ids unknown to game data');
   const mismatch = rows.filter(r => M.RIGS[r.id] && (M.RIGS[r.id].name !== r.name || M.RIGS[r.id].size !== r.size));
   assert.deepStrictEqual(mismatch.map(r => r.id), [], 'catalog name/size differs from game data');
-  const notInUi = Object.keys(M.RIGS).map(Number).filter(id => !rows.some(r => r.id === id));
+  // Reactor rigs are not in this hand-listed picker: ReactionSetupSection builds its list from /api/industry-rigs.
+  const notInUi = Object.keys(M.RIGS).map(Number).filter(id => !M.RIGS[id].reaction && !rows.some(r => r.id === id));
   assert.deepStrictEqual(notInUi, [], 'game-data rigs the picker cannot select');
 });
 

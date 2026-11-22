@@ -88,6 +88,8 @@ function productFamily(groupId) {
 
 // Rig size each engineering complex can fit (Raitaru M, Azbel L, Sotiyo XL) and the rig slot count.
 const STRUCTURE_RIG_SIZE = { 35825: 'M', 35826: 'L', 35827: 'XL' };
+// Upwell refineries (Athanor M, Tatara L) come from the generated game data, like everything else.
+for (const [id, s] of Object.entries(STRUCTURES)) if (s.refinery) STRUCTURE_RIG_SIZE[id] = s.rigSize;
 const MAX_RIGS = 3;
 
 /**
@@ -114,10 +116,11 @@ function describeSetup({ structureTypeId, rigIds = [], systemSecurity = null }) 
     seen.add(id);
     const r = RIGS[id];
     if (!r) { invalidRigIds.push(id); continue; }
-    if (!fitSize || r.size !== fitSize || rigs.length >= MAX_RIGS) { ignoredRigIds.push(id); continue; }
-    // Unknown security: use the highsec multiplier (the smallest standard value)
-    // rather than inflating the bonus; the response flags securityKnown=false.
-    const secMult = r.sec[secClass || 'hi'];
+    // A reactor rig only fits a refinery and an engineering rig only an engineering complex.
+    if (!fitSize || r.size !== fitSize || rigs.length >= MAX_RIGS || !!r.reaction !== !!structure?.refinery) { ignoredRigIds.push(id); continue; }
+    // Unknown security: use the smallest standard multiplier (highsec 1.0 for engineering rigs, lowsec 1.0 for
+    // reactor rigs, which have no highsec value) rather than inflating the bonus; the response flags securityKnown=false.
+    const secMult = r.sec[secClass || (r.reaction ? 'low' : 'hi')];
     rigs.push({
       id, name: r.name, size: r.size, family: r.family,
       matPct: r.matPct, thukkerMatPct: r.thukkerMatPct || 0, timePct: r.timePct,
@@ -239,10 +242,28 @@ function reactionTimeMultiplier({ skillMap = {}, refineryTimeMult = 1 }) {
   return (1 - 0.04 * (skillMap[45746] || 0)) * refineryTimeMult;
 }
 
+/**
+ * Everything a reaction job gets from a Mfg Setup, in one place (True Profit and the Queue Planner both call this).
+ * `setup` is describeSetup() of the pilot's REACTION setup (refinery + reactor rigs); with no refinery saved the job
+ * gets only the Reactions skill. Returns the same shape as modifiersForProduct, except:
+ *   matMult  — reactor ME rigs covering this product (blueprint ME is applied by the caller; a refinery has no
+ *              structure material bonus)
+ *   timeMult — Reactions skill × refinery time bonus × reactor time rigs
+ *   costMult — 1 (CCP's data has no refinery job-cost bonus)
+ */
+function reactionModifiers(setup, groupId, skillMap = {}) {
+  const mods = modifiersForProduct(setup, groupId);
+  return {
+    ...mods,
+    costMult: 1,
+    timeMult: reactionTimeMultiplier({ skillMap, refineryTimeMult: mods.timeMult }),
+  };
+}
+
 module.exports = {
   SCC_RATE, SCC_RATES, NPC_FACILITY_TAX, T2_BPC_BASE_ME, T2_BPC_BASE_TE, MAX_FACILITY_TAX, ALPHA_CLONE_TAX, SCIENCE_JOB_VALUE_FRACTION,
   RIGS, STRUCTURES, SCIENCE,
   securityClass, productFamily, describeSetup, modifiersForProduct, STRUCTURE_RIG_SIZE, MAX_RIGS,
   blueprintMeMult, jobQuantity, jobMaterials, estimatedItemValue, jobCost, scienceJobBase, timeMultiplier,
-  reactionTimeMultiplier, costIndexFor, clampFacilityTax, effectiveFacilityTax, jobActivityId, isReactionActivity, activityLabel,
+  reactionTimeMultiplier, reactionModifiers, costIndexFor, clampFacilityTax, effectiveFacilityTax, jobActivityId, isReactionActivity, activityLabel,
 };

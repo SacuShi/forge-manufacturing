@@ -1747,5 +1747,297 @@
    "low": 1.9,
    "null": 0.1
   }
+ },
+ "46484": {
+  "name": "Standup M-Set Composite Reactor Time Efficiency I",
+  "size": "M",
+  "family": "Reactor",
+  "reaction": true,
+  "matPct": 0,
+  "thukkerMatPct": 0,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "reaction_composite"
+  ],
+  "sec": {
+   "hi": 0,
+   "low": 1,
+   "null": 1.1
+  }
+ },
+ "46485": {
+  "name": "Standup M-Set Composite Reactor Time Efficiency II",
+  "size": "M",
+  "family": "Reactor",
+  "reaction": true,
+  "matPct": 0,
+  "thukkerMatPct": 0,
+  "timePct": 24,
+  "costPct": 0,
+  "matCovers": [],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "reaction_composite"
+  ],
+  "sec": {
+   "hi": 0,
+   "low": 1,
+   "null": 1.1
+  }
+ },
+ "46486": {
+  "name": "Standup M-Set Composite Reactor Material Efficiency I",
+  "size": "M",
+  "family": "Reactor",
+  "reaction": true,
+  "matPct": 2,
+  "thukkerMatPct": 0,
+  "timePct": 0,
+  "costPct": 0,
+  "matCovers": [
+   "reaction_composite"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [],
+  "sec": {
+   "hi": 0,
+   "low": 1,
+   "null": 1.1
+  }
+ },
+ "46487": {
+  "name": "Standup M-Set Composite Reactor Material Efficiency II",
+  "size": "M",
+  "family": "Reactor",
+  "reaction": true,
+  "matPct": 2.4,
+  "thukkerMatPct": 0,
+  "timePct": 0,
+  "costPct": 0,
+  "matCovers": [
+   "reaction_composite"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [],
+  "sec": {
+   "hi": 0,
+   "low": 1,
+   "null": 1.1
+  }
+ },
+ "46488": {
+  "name": "Standup M-Set Hybrid Reactor Time Efficiency I",
+  "size": "M",
+  "family": "Reactor",
+  "reaction": true,
+  "matPct": 0,
+  "thukkerMatPct": 0,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "reaction_hybrid"
+  ],
+  "sec": {
+   "hi": 0,
+   "low": 1,
+   "null": 1.1
+  }
+ },
+ "46489": {
+  "name": "Standup M-Set Hybrid Reactor Time Efficiency II",
+  "size": "M",
+  "family": "Reactor",
+  "reaction": true,
+  "matPct": 0,
+  "thukkerMatPct": 0,
+  "timePct": 24,
+  "costPct": 0,
+  "matCovers": [],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "reaction_hybrid"
+  ],
+  "sec": {
+   "hi": 0,
+   "low": 1,
+   "null": 1.1
+  }
+ },
+ "46490": {
+  "name": "Standup M-Set Hybrid Reactor Material Efficiency I",
+  "size": "M",
+  "family": "Reactor",
+  "reaction": true,
+  "matPct": 2,
+  "thukkerMatPct": 0,
+  "timePct": 0,
+  "costPct": 0,
+  "matCovers": [
+   "reaction_hybrid"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [],
+  "sec": {
+   "hi": 0,
+   "low": 1,
+   "null": 1.1
+  }
+ },
+ "46491": {
+  "name": "Standup M-Set Hybrid Reactor Material Efficiency II",
+  "size": "M",
+  "family": "Reactor",
+  "reaction": true,
+  "matPct": 2.4,
+  "thukkerMatPct": 0,
+  "timePct": 0,
+  "costPct": 0,
+  "matCovers": [
+   "reaction_hybrid"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [],
+  "sec": {
+   "hi": 0,
+   "low": 1,
+   "null": 1.1
+  }
+ },
+ "46492": {
+  "name": "Standup M-Set Biochemical Reactor Time Efficiency I",
+  "size": "M",
+  "family": "Reactor",
+  "reaction": true,
+  "matPct": 0,
+  "thukkerMatPct": 0,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "reaction_biochemical"
+  ],
+  "sec": {
+   "hi": 0,
+   "low": 1,
+   "null": 1.1
+  }
+ },
+ "46493": {
+  "name": "Standup M-Set Biochemical Reactor Time Efficiency II",
+  "size": "M",
+  "family": "Reactor",
+  "reaction": true,
+  "matPct": 0,
+  "thukkerMatPct": 0,
+  "timePct": 24,
+  "costPct": 0,
+  "matCovers": [],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "reaction_biochemical"
+  ],
+  "sec": {
+   "hi": 0,
+   "low": 1,
+   "null": 1.1
+  }
+ },
+ "46494": {
+  "name": "Standup M-Set Biochemical Reactor Material Efficiency I",
+  "size": "M",
+  "family": "Reactor",
+  "reaction": true,
+  "matPct": 2,
+  "thukkerMatPct": 0,
+  "timePct": 0,
+  "costPct": 0,
+  "matCovers": [
+   "reaction_biochemical"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [],
+  "sec": {
+   "hi": 0,
+   "low": 1,
+   "null": 1.1
+  }
+ },
+ "46495": {
+  "name": "Standup M-Set Biochemical Reactor Material Efficiency II",
+  "size": "M",
+  "family": "Reactor",
+  "reaction": true,
+  "matPct": 2.4,
+  "thukkerMatPct": 0,
+  "timePct": 0,
+  "costPct": 0,
+  "matCovers": [
+   "reaction_biochemical"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [],
+  "sec": {
+   "hi": 0,
+   "low": 1,
+   "null": 1.1
+  }
+ },
+ "46496": {
+  "name": "Standup L-Set Reactor Efficiency I",
+  "size": "L",
+  "family": "Reactor",
+  "reaction": true,
+  "matPct": 2,
+  "thukkerMatPct": 0,
+  "timePct": 20,
+  "costPct": 0,
+  "matCovers": [
+   "reaction_biochemical",
+   "reaction_composite",
+   "reaction_hybrid"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "reaction_biochemical",
+   "reaction_composite",
+   "reaction_hybrid"
+  ],
+  "sec": {
+   "hi": 0,
+   "low": 1,
+   "null": 1.1
+  }
+ },
+ "46497": {
+  "name": "Standup L-Set Reactor Efficiency II",
+  "size": "L",
+  "family": "Reactor",
+  "reaction": true,
+  "matPct": 2.4,
+  "thukkerMatPct": 0,
+  "timePct": 24,
+  "costPct": 0,
+  "matCovers": [
+   "reaction_biochemical",
+   "reaction_composite",
+   "reaction_hybrid"
+  ],
+  "thukkerCovers": [],
+  "timeCovers": [
+   "reaction_biochemical",
+   "reaction_composite",
+   "reaction_hybrid"
+  ],
+  "sec": {
+   "hi": 0,
+   "low": 1,
+   "null": 1.1
+  }
  }
 }

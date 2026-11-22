@@ -244,6 +244,12 @@ const HelpTab: FC = () => (
           Sotiyo XL), and an NPC station takes none. Rig bonuses are also multiplied by the security of your system
           (×1.9 in lowsec, ×2.1 in nullsec and wormholes), and the panel shows each rig's real value and whether it applies
           to the item you're looking at. A rig that can't apply is flagged instead of being counted.</li>
+        <li style={S.li}><strong>Reactions</strong> — reactions run in a <em>refinery</em>, not an engineering complex, so they have
+          their own setup under <em>Reactions</em> in Mfg Setup: pick your Athanor or Tatara, its system, its tax and up to 3
+          reactor rigs. A Tatara runs reactions 25% faster (an Athanor gives no bonus); a reactor rig cuts reaction time (−20%) or
+          materials (−2%), T2 a little more, ×1 in lowsec and ×1.1 in nullsec. Refineries and reactor rigs don't work in highsec,
+          and a rig only helps the reactions it is built for (composite, hybrid or biochemical). Leave it empty and FORGE counts
+          only your Reactions skill, as before.</li>
         <li style={S.li}><strong>Facility tax</strong> — the structure owner's tax on top of the SCI. Often 0–3% in
           alliance structures; CCP caps it at 10%. NPC stations charge a fixed 0.25%, which FORGE adds for you.</li>
         <li style={S.li}><strong>Haulage</strong> — tick <em>Haulage Costs</em> and set your rates so freight is part of True Profit.
@@ -525,8 +531,8 @@ const HelpTab: FC = () => (
         <li style={S.li}>It prices materials with the same rules as True Profit: your <strong>Buy in</strong> hub first, anything it
           can't supply from Jita. Those materials are marked <strong>J</strong> in the shopping list and an amber note says how many
           you'd have to import. The plan figures don't include freight; open an item's True Profit for the figure with freight.</li>
-        <li style={S.li}>Reaction jobs are timed with your Reactions skill (Advanced Industry doesn't speed up reactions in game)
-          and priced on the system's reaction cost index. Blueprints locked in Asset Safety are never offered.</li>
+        <li style={S.li}>Reaction jobs are timed with your Reactions skill plus your refinery and reactor rigs from Mfg Setup →
+          Reactions (Advanced Industry doesn't speed up reactions in game) and priced on the system's reaction cost index. Blueprints locked in Asset Safety are never offered.</li>
       </ul>
       <div style={S.tip}>💡 Queue Planner only recommends blueprints you own. Add more characters and their
         blueprints appear automatically in the pool.</div>

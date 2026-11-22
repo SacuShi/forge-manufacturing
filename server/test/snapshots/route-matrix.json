@@ -2290,6 +2290,322 @@
        ]
       },
       "timePct": "number"
+     },
+     "46484": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": "array(empty)",
+      "matPct": "number",
+      "name": "string",
+      "reaction": "boolean",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "46485": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": "array(empty)",
+      "matPct": "number",
+      "name": "string",
+      "reaction": "boolean",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "46486": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "reaction": "boolean",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": "array(empty)",
+      "timePct": "number"
+     },
+     "46487": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "reaction": "boolean",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": "array(empty)",
+      "timePct": "number"
+     },
+     "46488": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": "array(empty)",
+      "matPct": "number",
+      "name": "string",
+      "reaction": "boolean",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "46489": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": "array(empty)",
+      "matPct": "number",
+      "name": "string",
+      "reaction": "boolean",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "46490": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "reaction": "boolean",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": "array(empty)",
+      "timePct": "number"
+     },
+     "46491": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "reaction": "boolean",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": "array(empty)",
+      "timePct": "number"
+     },
+     "46492": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": "array(empty)",
+      "matPct": "number",
+      "name": "string",
+      "reaction": "boolean",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "46493": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": "array(empty)",
+      "matPct": "number",
+      "name": "string",
+      "reaction": "boolean",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "46494": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "reaction": "boolean",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": "array(empty)",
+      "timePct": "number"
+     },
+     "46495": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "reaction": "boolean",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": "array(empty)",
+      "timePct": "number"
+     },
+     "46496": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "reaction": "boolean",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
+     },
+     "46497": {
+      "costPct": "number",
+      "family": "string",
+      "matCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "matPct": "number",
+      "name": "string",
+      "reaction": "boolean",
+      "sec": {
+       "hi": "number",
+       "low": "number",
+       "null": "number"
+      },
+      "size": "string",
+      "thukkerCovers": "array(empty)",
+      "thukkerMatPct": "number",
+      "timeCovers": {
+       "array": [
+        "string"
+       ]
+      },
+      "timePct": "number"
      }
     },
     "structures": {
@@ -2309,6 +2625,22 @@
       "costMult": "number",
       "matMult": "number",
       "name": "string",
+      "timeMult": "number"
+     },
+     "35835": {
+      "costMult": "number",
+      "matMult": "number",
+      "name": "string",
+      "refinery": "boolean",
+      "rigSize": "string",
+      "timeMult": "number"
+     },
+     "35836": {
+      "costMult": "number",
+      "matMult": "number",
+      "name": "string",
+      "refinery": "boolean",
+      "rigSize": "string",
       "timeMult": "number"
      }
     }
@@ -2481,6 +2813,13 @@
     "leg2_service_label": "null",
     "material_region_id": "number",
     "material_region_name": "string",
+    "reaction_facility_tax": "number",
+    "reaction_rig_ids": "string",
+    "reaction_security_class": "null",
+    "reaction_structure_type_id": "null",
+    "reaction_system_id": "null",
+    "reaction_system_name": "null",
+    "reaction_system_security": "null",
     "rig_ids": "string",
     "security_class": "string",
     "structure_id": "null",
