@@ -16,13 +16,13 @@ const InterHubTradeView: FC<InterHubTradeViewProps> = ({ interHubContext, interH
   return (
     <>
 {interHubContext && (() => {
-          // Use character's actual rates once loaded; fall back to Accounting V estimate while loading
-          const taxRate    = interHubHaulData ? interHubHaulData.transaction_tax_rate : 0.03375;
+          // The pilot's own rates once loaded; until then the rate the list used (the pilot's, or Accounting V when logged out)
+          const taxRate    = interHubHaulData ? interHubHaulData.transaction_tax_rate : interHubContext.tax_rate;
           const brokerRate = interHubHaulData ? interHubHaulData.broker_fee_rate      : null;
           const taxAmount  = interHubContext.sell_into * taxRate;
           const brokerAmt  = brokerRate != null ? interHubContext.sell_into * brokerRate : null;
           const haulCost   = interHubHaulData?.haul_cost ?? 0;
-          // net_profit (from arb row) used TAX=0.964 estimate; recalc with real rates once loaded
+          // net_profit from the list row is recalculated with the pilot's own rates once they load
           const netProfitReal = interHubHaulData
             ? interHubContext.sell_into * (1 - taxRate) - interHubContext.buy_at
             : interHubContext.net_profit;
@@ -33,7 +33,7 @@ const InterHubTradeView: FC<InterHubTradeViewProps> = ({ interHubContext, interH
           const row        = interHubContext;
           const haul       = interHubHaulData;
           const haulLabel  = haul?.haul_enabled
-            ? `${haul.method_label}${(haul.contracts ?? 0) > 1 ? `, ${haul.contracts} contracts` : ''}`
+            ? `${haul.method_label}${(haul.contracts ?? 0) > 1 ? `, ${haul.contracts} contracts` : ''}${(haul.units_per_trip ?? 1) > 1 ? `, ÷ ${(haul.units_per_trip ?? 1).toLocaleString()} units/trip` : ''}`
             : null;
 
           const rowStyle: React.CSSProperties = {
@@ -110,7 +110,7 @@ const InterHubTradeView: FC<InterHubTradeViewProps> = ({ interHubContext, interH
                   <div style={rowStyle}>
                     <span style={labelStyle}>
                       Transaction tax
-                      {haul ? ` (Accounting ${haul.accounting_level}, ${(taxRate * 100).toFixed(2)}%)` : ' (est. Acct V)'}
+                      {haul ? ` (Accounting ${haul.accounting_level}, ${(taxRate * 100).toFixed(2)}%)` : ` (est. ${(taxRate * 100).toFixed(2)}%)`}
                     </span>
                     <span style={{ ...valueStyle, color: 'var(--color-danger)' }}>−{formatISK(taxAmount)}</span>
                   </div>

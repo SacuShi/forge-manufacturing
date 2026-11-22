@@ -1,6 +1,6 @@
 // FORGE — Inter-Hub Arbitrage tab
 // Finds items where buying at sell orders in hub A and filling buy orders at hub B
-// yields a net profit after 3.375% sales tax (Accounting L5 assumed).
+// yields a net profit after sales tax (the pilot's own rate when logged in, else Accounting V).
 
 import { useState, useEffect, useCallback, useRef, type FC } from 'react';
 import type { InterHubArbRow, InterHubArbResponse } from '../types';
@@ -112,6 +112,9 @@ const InterHubTab: FC<InterHubTabProps> = ({
   const [error,       setError]       = useState<string | null>(null);
   const loadingMoreRef = useRef(false);
   const latest = useLatestRequest();
+  // Read inside the loader so a token refresh doesn't re-run the search; the list uses the pilot's own sales tax.
+  const tokenRef = useRef(token);
+  useEffect(() => { tokenRef.current = token; }, [token]);
 
   const fetchPage = useCallback(async (
     buy: number, sell: number, margin: number, sort: SortKey, offset: number, append: boolean
@@ -131,7 +134,7 @@ const InterHubTab: FC<InterHubTabProps> = ({
 
     try {
       const url = `/api/inter-hub-arb?buyHub=${buy}&sellHub=${sell}&minMargin=${margin}&sortBy=${sort}&limit=${PAGE_SIZE}&offset=${offset}`;
-      const r = await fetch(url);
+      const r = await fetch(url, tokenRef.current ? { headers: { Authorization: `Bearer ${tokenRef.current}` } } : undefined);
       const data: InterHubArbResponse = await r.json();
       if (!r.ok) throw new Error((data as { error?: string }).error || `HTTP ${r.status}`);
       if (!latest.isCurrent(generation)) return;

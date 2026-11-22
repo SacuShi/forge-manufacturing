@@ -1,3 +1,4 @@
+import { GROSS_HINT } from '../utils/profitHints';
 /**
  * FORGE v1.0 — ItemTable component
  *
@@ -59,9 +60,6 @@ interface ColDef {
 }
 
 // Column header tooltips — visible on hover, explain what each number means.
-const GROSS_HINT =
-  'Est. Gross — sell price minus raw material cost, before broker fees, sales tax, or job costs. ' +
-  'Uses an ME 0 blueprint. A rough ranking baseline only — open an item for your real net profit.';
 
 const MARGIN_HINT =
   'Margin — gross profit as a percentage of sell price. Higher margin = more buffer if prices move against you. ' +

@@ -39,7 +39,7 @@
  */
 
 import { useState, useMemo, useEffect, type FC } from 'react';
-import { findAssetSafetyItemIds, ASSET_SAFETY_LOCATION_ID, ASSET_SAFETY_WRAP_TYPE_ID } from '../utils/assetSafety';
+import { findAssetSafetyItemIds, ASSET_SAFETY_LOCATION_ID, ASSET_SAFETY_WRAP_TYPE_ID, assetRowKey } from '../utils/assetSafety';
 import type {
   MarketItem,
   SortField,
@@ -265,7 +265,7 @@ const MainContent: FC<MainContentProps> = ({
   const [assetExportSet,   setAssetExportSet]   = useState<Set<string>>(new Set());
   const [lastExportIdx,    setLastExportIdx]     = useState<number | null>(null);
   // Items sent to the Appraise tab
-  const [appraisalItems,   setAppraisalItems]   = useState<Array<{ typeId: number; name: string; qty: number }>>([]);
+  const [appraisalItems,   setAppraisalItems]   = useState<Array<{ typeId: number; name: string; qty: number; isCopy?: boolean }>>([]);
 
   const getBpName = (typeId: number) =>
     itemNames.get(typeId) ?? `Blueprint #${typeId}`;
@@ -449,9 +449,12 @@ const MainContent: FC<MainContentProps> = ({
       return cur;
     }
 
-    const g = new Map<string, { name: string; qty: number; typeId: number; locationId: number }>();
+    const g = new Map<string, { name: string; qty: number; typeId: number; locationId: number; isCopy: boolean }>();
     rawAssets.forEach((a) => {
-      const name       = itemNames.get(a.type_id) ?? `Item #${a.type_id}`;
+      // A blueprint COPY is a different thing from the original (BPO): contract-only, no market price.
+      const isCopy     = !!a.is_blueprint_copy;
+      const baseName   = itemNames.get(a.type_id) ?? `Item #${a.type_id}`;
+      const name       = isCopy ? `${baseName} (Copy)` : baseName;
       // The wrap container itself is just the box: only what is inside it is listed.
       if (a.type_id === ASSET_SAFETY_WRAP_TYPE_ID) return;
       const inSafety   = safetyIds.has(a.item_id);
@@ -462,12 +465,12 @@ const MainContent: FC<MainContentProps> = ({
       // Asset Safety items are grouped apart from the same station's usable items (negative id = "locked in a wrap
       // at |id|"; -2004 = not yet delivered anywhere), so they can never be mistaken for, or merged with, usable stock.
       if (inSafety) locationId = -locationId;
-      const key  = `${a.type_id}:${locationId}`;
+      const key  = assetRowKey(a.type_id, locationId, isCopy);
       const prev = g.get(key);
       if (prev) {
         prev.qty += a.quantity;
       } else {
-        g.set(key, { name, qty: a.quantity, typeId: a.type_id, locationId });
+        g.set(key, { name, qty: a.quantity, typeId: a.type_id, locationId, isCopy });
       }
     });
     return Array.from(g.values())
@@ -495,17 +498,20 @@ const MainContent: FC<MainContentProps> = ({
 
   // What is locked in Asset Safety (independent of the pill and the search box): drives the fee panel.
   const safetyHoldings = useMemo(() => {
-    const m = new Map<number, number>();
+    const m = new Map<string, { typeId: number; qty: number; isCopy: boolean }>();
     for (const a of rawAssets) {
       if (a.type_id === ASSET_SAFETY_WRAP_TYPE_ID || !safetyIds.has(a.item_id)) continue;
-      m.set(a.type_id, (m.get(a.type_id) ?? 0) + a.quantity);
+      const isCopy = !!a.is_blueprint_copy;
+      const key = `${a.type_id}:${isCopy}`;
+      const prev = m.get(key);
+      if (prev) prev.qty += a.quantity; else m.set(key, { typeId: a.type_id, qty: a.quantity, isCopy });
     }
-    return [...m.entries()].map(([typeId, qty]) => ({ typeId, qty }));
+    return [...m.values()];
   }, [rawAssets, safetyIds]);
 
-  // Blueprints and formulas aren't sold on the market (they trade by contract), so they can't be valued at a Jita price.
-  const isBlueprintName = (typeId: number) => /(blueprint|formula)$/i.test(itemNames.get(typeId) ?? '');
-  const safetyValuable  = useMemo(() => safetyHoldings.filter((h) => !isBlueprintName(h.typeId)), [safetyHoldings, itemNames]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Blueprint COPIES (and formula copies) trade by contract only, so they have no Jita price. Originals (BPOs) are sold
+  // on the market and are valued like any other item.
+  const safetyValuable  = useMemo(() => safetyHoldings.filter((h) => !h.isCopy), [safetyHoldings]);
   const safetyUnvaluedTypes = safetyHoldings.length - safetyValuable.length;
 
   // BPO/BPC lookup — built from the full blueprints list (quantity === -1 → BPO).
@@ -533,9 +539,9 @@ const MainContent: FC<MainContentProps> = ({
 
   // Fast key→{name,qty,typeId} lookup used by the appraise function
   const assetItemMap = useMemo(() => {
-    const map = new Map<string, { name: string; qty: number; typeId: number }>();
+    const map = new Map<string, { name: string; qty: number; typeId: number; isCopy: boolean }>();
     for (const item of assetGroups) {
-      map.set(`${item.typeId}:${item.locationId}`, { name: item.name, qty: item.qty, typeId: item.typeId });
+      map.set(assetRowKey(item.typeId, item.locationId, item.isCopy), { name: item.name, qty: item.qty, typeId: item.typeId, isCopy: item.isCopy });
     }
     return map;
   }, [assetGroups]);
@@ -560,7 +566,7 @@ const MainContent: FC<MainContentProps> = ({
         ? [...items].sort((a, b) => a.name.localeCompare(b.name) * assetSortDir)
         : [...items].sort((a, b) => b.qty - a.qty);
       for (const item of sortedItems) {
-        keys.push(`${item.typeId}:${locationId}`);
+        keys.push(assetRowKey(item.typeId, locationId, item.isCopy));
       }
     }
     return keys;
@@ -569,15 +575,16 @@ const MainContent: FC<MainContentProps> = ({
   }, [locationGroups, expandedLocs, assetSort, assetSortDir, locationNames]);
 
   const sendToAppraise = () => {
-    const agg = new Map<number, { name: string; qty: number }>();
+    const agg = new Map<string, { typeId: number; name: string; qty: number; isCopy: boolean }>();
     for (const key of assetExportSet) {
       const item = assetItemMap.get(key);
       if (!item) continue;
-      const prev = agg.get(item.typeId);
+      const aggKey = `${item.typeId}:${item.isCopy}`;
+      const prev = agg.get(aggKey);
       if (prev) prev.qty += item.qty;
-      else agg.set(item.typeId, { name: item.name, qty: item.qty });
+      else agg.set(aggKey, { typeId: item.typeId, name: item.name, qty: item.qty, isCopy: item.isCopy });
     }
-    setAppraisalItems([...agg.entries()].map(([typeId, { name, qty }]) => ({ typeId, name, qty })));
+    setAppraisalItems([...agg.values()].map(({ typeId, name, qty, isCopy }) => ({ typeId, name, qty, ...(isCopy ? { isCopy } : {}) })));
     onTabChange('appraise');
   };
 

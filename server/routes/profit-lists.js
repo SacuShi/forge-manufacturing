@@ -6,13 +6,14 @@ const express = require('express');
 const logger = require('../lib/logger');
 const security = require('../forge-security');
 const fetch = require('node-fetch');
-const { buildTopProfitableQuery } = require('../lib/profit-query'); // hub prices: own orders first, Jita fallback (always tagged), order depth
+const { buildTopProfitableQuery, orderFor } = require('../lib/profit-query'); // hub prices: own orders first, Jita fallback (always tagged), order depth
 const { dbAll, dbGet } = require('../lib/db');
 const { clientErrMsg } = require('../lib/http-errors');
 const { getCached } = require('../lib/cache');
-const { HUB_CONFIG, HUB_STANDINGS, HUB_STRUCTURE_FEES, HUB_SYSTEM_IDS, REGIONS, REGION_TO_HUB, VALID_REGIONS } = require('../lib/hubs');
-const { getCharacterSession, calcSalesFeeRates } = require('../lib/character-session');
-const { calcLegHaulCost, getJumpCount } = require('../lib/haul');
+const { HUB_CONFIG, HUB_SYSTEM_IDS, REGIONS, REGION_TO_HUB, VALID_REGIONS } = require('../lib/hubs');
+const { getCharacterSession, hubFeeRates, defaultHubTaxRate } = require('../lib/character-session');
+const { queryInterHubArb } = require('../lib/inter-hub');
+const { perUnitHaulCost, getJumpCount } = require('../lib/haul');
 const { hubBooks } = require('../lib/hub-pollers');
 
 const router = express.Router();
@@ -67,15 +68,8 @@ router.get('/api/top-profitable', security.apiLimiter, async (req, res) => {
 
     const isCrossHub = sourceRegionId !== regionId;
 
-    // Validate sort column to prevent SQL injection
-    const allowedSorts = {
-      profit:      'profit DESC',
-      margin:      'profit_margin DESC',
-      isk_per_hour:'isk_per_hour DESC',
-      cost:        'material_cost ASC',
-      sell_price:  'sell_price DESC',
-    };
-    const orderClause = allowedSorts[sort] || allowedSorts.profit;
+    // Sort column from the shared whitelist (lib/profit-query.js) — never user text in SQL
+    const orderClause = orderFor(sort);
 
     const results = await fetchTopProfitableResults({
       isCrossHub, regionId, sourceRegionId, minProfit, minVolume, includeRisky, orderClause, limit,
@@ -210,8 +204,12 @@ async function applyHaulCostPerUnit({ results, characterId, regionId }) {
     const unitVol = volMap.get(item.product_id) || 0;
     const rowJumps = item.price_source === 'jita_fallback' && regionId !== 10000002 ? leg2JumpsJita : leg2Jumps;
     if (unitVol > 0 && rowJumps > 0) {
-      const r = calcLegHaulCost(leg2Cfg, unitVol, rowJumps, leg2Col);
-      item.haul_cost_per_unit = r.cost;
+      // One trip's cost shared by the units on it (courier limits, one day's market volume)
+      const r = perUnitHaulCost(leg2Cfg, {
+        unitVolM3: unitVol, unitValue: item.sell_price || 0, jumps: rowJumps,
+        tradeUnits: item.avg_daily_volume > 0 ? item.avg_daily_volume : null, fixedCollateral: leg2Col,
+      });
+      item.haul_cost_per_unit = r.perUnit;
       item.haul_isk_per_m3    = r.effectiveIskPerM3;
       item.haul_volume_m3     = unitVol;
     } else {
@@ -257,15 +255,8 @@ router.get('/api/top-profitable-by-skills', security.apiLimiter, security.verify
 
     const characterSkills = sessionData.skills || [];
 
-    // Validate sort column to prevent SQL injection
-    const allowedSorts = {
-      profit:       'profit DESC',
-      margin:       'profit_margin DESC',
-      isk_per_hour: 'isk_per_hour DESC',
-      cost:         'material_cost ASC',
-      sell_price:   'sell_price DESC',
-    };
-    const orderClause = allowedSorts[sort] || allowedSorts.profit;
+    // Sort column from the shared whitelist (lib/profit-query.js) — never user text in SQL
+    const orderClause = orderFor(sort);
 
     // Candidate pool size. New/low-skill characters can build only a small fraction
     // of the top-profit items, so we must scan DEEP enough to still find `limit`
@@ -367,8 +358,8 @@ router.get('/api/search-profitable', security.apiLimiter, async (req, res) => {
 });
 
 // Inter-hub arbitrage: items where buying sell orders at hub A and filling
-// buy orders at hub B yields a net profit after sales tax.
-// No auth required — all prices are pre-computed public data.
+// buy orders at hub B yields a net profit after sales tax (lib/inter-hub.js).
+// No auth required — all prices are pre-computed public data; a logged-in pilot gets their own tax rate.
 router.get('/api/inter-hub-arb', security.apiLimiter, async (req, res) => {
   try {
     const rawBuy  = parseInt(req.query.buyHub  || '10000002', 10);
@@ -384,56 +375,20 @@ router.get('/api/inter-hub-arb', security.apiLimiter, async (req, res) => {
     const limit     = Math.min(200, parseInt(req.query.limit || '100', 10));
     const offset    = Math.max(0, parseInt(req.query.offset || '0', 10));
 
-    const allowedSorts = {
-      est_daily_profit: 'est_daily_profit DESC NULLS LAST',
-      net_profit:       'net_profit DESC',
-      net_margin_pct:   'net_margin_pct DESC',
-      isk_per_m3:       'isk_per_m3 DESC NULLS LAST',
-      avg_daily_volume: 'avg_daily_volume DESC NULLS LAST',
-    };
     const rawSort  = req.query.sortBy || 'est_daily_profit';
-    const orderBy  = allowedSorts[rawSort] || allowedSorts.est_daily_profit;
 
-    // 3.375% sales tax at Accounting V: 1 − 0.075×(1−0.11×5) = 0.96625 (was a
-    // hand-typed 0.964/3.6% that didn't match calcSalesFeeRates — fixed 17 Sept
-    // 2026). Broker fee not included — user fills existing buy orders.
-    const TAX = 0.96625;
+    // Filling a buy order costs sales tax only (no broker fee). The pilot's own rate when they are
+    // logged in (Accounting + any CCP discount at the sell hub); otherwise Accounting V at that hub.
+    let taxRate = defaultHubTaxRate(sellHub);
+    if (req.headers.authorization) {
+      try {
+        const { characterId } = await security.extractCharacterFromToken(req.headers.authorization);
+        const { skillMap, standings } = getCharacterSession(characterId);
+        if (Object.keys(skillMap).length > 0) taxRate = hubFeeRates(skillMap, standings, sellHub).transactionTaxRate;
+      } catch { /* invalid/expired token — public estimate */ }
+    }
 
-    const rows = await dbAll(`
-      SELECT
-        p1.product_id,
-        p1.product_name,
-        p1.region_id                          AS buy_region_id,
-        p2.region_id                          AS sell_region_id,
-        MIN(p1.sell_price)                    AS buy_at,
-        MAX(p2.buy_price)                     AS sell_into,
-        MAX(p2.buy_price) - MIN(p1.sell_price)          AS gross_spread,
-        (MAX(p2.buy_price) - MIN(p1.sell_price)) / MIN(p1.sell_price) * 100  AS gross_margin_pct,
-        MAX(p2.buy_price) * ${TAX} - MIN(p1.sell_price) AS net_profit,
-        (MAX(p2.buy_price) * ${TAX} - MIN(p1.sell_price)) / MIN(p1.sell_price) * 100 AS net_margin_pct,
-        COALESCE(i.packaged_volume, 0)         AS volume_m3,
-        CASE WHEN COALESCE(i.packaged_volume, 0) > 0
-          THEN (MAX(p2.buy_price) * ${TAX} - MIN(p1.sell_price)) / i.packaged_volume
-          ELSE NULL END                        AS isk_per_m3,
-        COALESCE(MAX(p1.avg_daily_volume), MAX(p2.avg_daily_volume)) AS avg_daily_volume,
-        CASE WHEN COALESCE(MAX(p1.avg_daily_volume), MAX(p2.avg_daily_volume)) IS NOT NULL
-          THEN COALESCE(MAX(p1.avg_daily_volume), MAX(p2.avg_daily_volume))
-               * (MAX(p2.buy_price) * ${TAX} - MIN(p1.sell_price))
-          ELSE NULL END                        AS est_daily_profit
-      FROM precomputed_profits p1
-      JOIN precomputed_profits p2
-        ON p1.product_id = p2.product_id
-       AND p1.region_id  = ?
-       AND p2.region_id  = ?
-      LEFT JOIN items i ON i.type_id = p1.product_id
-      WHERE p1.sell_price > 0
-        AND COALESCE(p1.price_source, '') != 'jita_fallback'   -- a Jita price standing in for a hub with no stock isn't an arbitrage source
-        AND p2.buy_price  > 0
-        AND (p2.buy_price * ${TAX} - p1.sell_price) / p1.sell_price * 100 >= ?
-      GROUP BY p1.product_id
-      ORDER BY ${orderBy}
-      LIMIT ? OFFSET ?
-    `, [buyHub, sellHub, minMargin, limit, offset]);
+    const rows = await queryInterHubArb({ buyHub, sellHub, taxRate, minMargin, sortBy: rawSort, limit, offset });
 
     const buyHubName  = REGIONS[buyHub]?.hub  || `Region ${buyHub}`;
     const sellHubName = REGIONS[sellHub]?.hub || `Region ${sellHub}`;
@@ -461,6 +416,7 @@ router.get('/api/inter-hub-arb', security.apiLimiter, async (req, res) => {
         sell_vol_at_buy:    buyEntry  ? buyEntry.sellQtyTop  : null,
         buy_orders_at_sell: sellEntry ? sellEntry.buyOrders  : null,
         buy_vol_at_sell:    sellEntry ? sellEntry.buyQtyTop  : null,
+        tax_rate:           taxRate,
       }];
     });
 
@@ -563,7 +519,7 @@ router.get('/api/inter-hub-haul', security.apiLimiter, security.verifyEveToken, 
     // Skills + standings — needed for accurate fee rates
     const { skillMap, standings } = getCharacterSession(characterId);
     const { brokerFeeRate, transactionTaxRate, brokerRelations, accounting } =
-      calcSalesFeeRates(skillMap, standings, HUB_STANDINGS[sellHub], HUB_STRUCTURE_FEES[sellHub] ?? null);
+      hubFeeRates(skillMap, standings, sellHub);
 
     const settings = await dbGet(
       `SELECT interhub_haul_enabled, interhub_method, interhub_haul_rate, interhub_isk_per_jump,
@@ -599,8 +555,17 @@ router.get('/api/inter-hub-haul', security.apiLimiter, security.verifyEveToken, 
       flat_total:   settings.interhub_flat_total    || 0,
       self_fuel:    settings.interhub_self_fuel     || 0,
     };
-    const col    = settings.interhub_collateral > 0 ? settings.interhub_collateral : collateral;
-    const result = calcLegHaulCost(legCfg, volumeM3, jumps, col);
+    // A trip's cost is shared by every unit on it: up to the courier's volume/collateral limits and one
+    // day's traded volume for this pair (what you would realistically move per trip).
+    const volRow = await dbGet(
+      `SELECT COALESCE(MAX(p1.avg_daily_volume), MAX(p2.avg_daily_volume)) AS vol
+         FROM precomputed_profits p1 JOIN precomputed_profits p2 ON p2.product_id = p1.product_id AND p2.region_id = ?
+        WHERE p1.product_id = ? AND p1.region_id = ?`, [sellHub, typeId, buyHub]);
+    const result = perUnitHaulCost(legCfg, {
+      unitVolM3: volumeM3, unitValue: collateral, jumps,
+      tradeUnits: volRow?.vol > 0 ? volRow.vol : null,
+      fixedCollateral: settings.interhub_collateral > 0 ? settings.interhub_collateral : 0,
+    });
 
     const methodLabel = legCfg.method === 'red_frog'   ? 'Red Frog'
                       : legCfg.method === 'black_frog'  ? 'Black Frog'
@@ -613,7 +578,9 @@ router.get('/api/inter-hub-haul', security.apiLimiter, security.verifyEveToken, 
       method:               legCfg.method,
       method_label:         methodLabel,
       service_label:        settings.interhub_service_label || null,
-      haul_cost:            result.cost,
+      haul_cost:            result.perUnit,      // ISK per unit (one trip's cost ÷ units per trip)
+      trip_cost:            result.tripCost,
+      units_per_trip:       result.unitsPerTrip,
       effective_isk_per_m3: result.effectiveIskPerM3,
       contracts:            result.contracts,
       jumps,

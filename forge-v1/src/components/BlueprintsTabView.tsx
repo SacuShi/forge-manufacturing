@@ -1,3 +1,4 @@
+import { GROSS_HINT } from '../utils/profitHints';
 import { itemIconUrl } from '../utils/icons';
 import { formatISK, formatMargin } from '../utils/format';
 import type { BlueprintProfit, EsiBlueprint } from '../types';
@@ -61,6 +62,9 @@ const BlueprintsTabView: FC<BlueprintsTabViewProps> = ({ activeTab, blueprintOwn
                 {f.toUpperCase()}
               </button>
             ))}
+            <span style={{ fontSize: 10, color: 'var(--color-text-tertiary)', marginLeft: 4 }} title={GROSS_HINT}>
+              before job costs and fees · ME 0
+            </span>
             <button
               type="button"
               className={`pill-filter${bpBuildableOnly ? ' active' : ''}`}
@@ -94,6 +98,9 @@ const BlueprintsTabView: FC<BlueprintsTabViewProps> = ({ activeTab, blueprintOwn
                 {label}{bpSort === key ? <span className="sort-arrow">{bpSortDir === 'asc' ? '↑' : '↓'}</span> : ''}
               </button>
             ))}
+            <span style={{ fontSize: 10, color: 'var(--color-text-tertiary)', marginLeft: 4 }} title={GROSS_HINT}>
+              before job costs and fees · ME 0
+            </span>
           </div>
 
           {/* Blueprint list — grouped by type_id */}
@@ -194,7 +201,7 @@ const BlueprintsTabView: FC<BlueprintsTabViewProps> = ({ activeTab, blueprintOwn
                       return <div className="bp-metrics bp-metrics-empty">no market<br/>data</div>;
                     }
                     return (
-                      <div className="bp-metrics">
+                      <div className="bp-metrics" title={GROSS_HINT}>
                         <div className={`bp-metric${bpSort === 'iskPerHour' ? ' active' : ''}`}>
                           <span className="bp-metric-label">ISK/hr</span>
                           <span className="bp-metric-val" style={{ color: p.iskPerHour > 0 ? 'var(--color-success)' : 'var(--color-danger)' }}>

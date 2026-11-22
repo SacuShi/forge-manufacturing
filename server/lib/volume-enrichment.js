@@ -8,6 +8,7 @@ const market = require('./market-cache'); // live values (historyPriceMap, ...) 
 const { dbAll, dbRun, dbTxMutex } = require('./db');
 const { esiFetch } = require('./esi');
 const { VALID_REGIONS } = require('./hubs');
+const { summariseHistory } = require('./market-history');
 const { loadHistoryPriceMap } = market;
 
 // VOLUME ENRICHMENT JOB (v0.9.1)
@@ -20,18 +21,21 @@ const { loadHistoryPriceMap } = market;
  * (Previously computed from the Jita row and copied to every hub, so a hub's label described
  * Jita's spread and Jita's volume.)
  */
-function classifyLiquidity({ marketGroupId, sellPrice, materialCost, buyPrice, avgVolume }) {
+// materialCost is for ONE RUN, which makes productQty units: margins compare a run's revenue
+// (sellPrice × productQty) with the run's cost. Price tiers stay per unit (what one unit sells for).
+function classifyLiquidity({ marketGroupId, sellPrice, materialCost, buyPrice, avgVolume, productQty = 1 }) {
+  const runRevenue = sellPrice * (productQty || 1);
   // TIER 1: Contract-only items (cannot be sold on market)
   if (marketGroupId === null) return 'contract_only';
   // TIER 2: Margin cap (500% maximum - anything beyond is likely scam/phantom)
-  if (materialCost > 0 && (sellPrice / materialCost) > 5.0) return 'extreme_margin';
+  if (materialCost > 0 && (runRevenue / materialCost) > 5.0) return 'extreme_margin';
   // TIER 3: Volume requirements (tiered by price)
   if (sellPrice < 100000000 && avgVolume < 10) return 'low_volume';                              // <100M ISK needs 10+ units/day
   if (sellPrice >= 100000000 && sellPrice < 1000000000 && avgVolume < 5) return 'low_volume';   // 100M-1B ISK needs 5+ units/day
   if (sellPrice >= 1000000000 && avgVolume < 2) return 'low_volume';                            // >1B ISK needs 2+ units/day
   // TIER 4: Spread sanity check
   if (buyPrice === 0 && sellPrice > 10000000) return 'no_buy_orders';                            // >10M ISK with no buy orders = suspicious
-  if (materialCost > 0 && ((sellPrice - materialCost) / sellPrice) > 0.9) return 'suspicious_spread';  // >90% spread is unusual
+  if (materialCost > 0 && runRevenue > 0 && ((runRevenue - materialCost) / runRevenue) > 0.9) return 'suspicious_spread';  // >90% spread is unusual
   return null;
 }
 
@@ -57,8 +61,10 @@ async function applyRegionVolumeAndLiquidity() {
     );
     const hubVol = new Map(volRows.map(r => [r.type_id, r.avg_30d_volume]));
     const rows = await dbAll(
-      `SELECT blueprint_id, product_id, sell_price, buy_price, material_cost, price_source
-         FROM precomputed_profits WHERE region_id = ?`, [regionId]
+      `SELECT pp.blueprint_id, pp.product_id, pp.sell_price, pp.buy_price, pp.material_cost, pp.price_source,
+              COALESCE(b.product_quantity, 1) AS product_qty
+         FROM precomputed_profits pp LEFT JOIN blueprints b ON b.blueprint_id = pp.blueprint_id
+        WHERE pp.region_id = ?`, [regionId]
     );
 
     await dbTxMutex.lock();
@@ -84,7 +90,7 @@ async function applyRegionVolumeAndLiquidity() {
         const src = hv != null ? 'hub' : 'jita';
         const liq = classifyLiquidity({
           marketGroupId: j.market_group_id ?? null,
-          sellPrice: r.sell_price, materialCost: r.material_cost,
+          sellPrice: r.sell_price, materialCost: r.material_cost, productQty: r.product_qty,
           buyPrice: soldAtJita ? (j.buy_price || 0) : (r.buy_price || 0),
           avgVolume: vol || 0,
         });
@@ -107,6 +113,19 @@ async function applyRegionVolumeAndLiquidity() {
   return updated;
 }
 
+// Profit of one run priced at a history price (no live sell orders): revenue = price × units per run.
+// An unknown material cost (NULL) leaves profit unknown.
+function historyPricedProfit(unitPrice, { material_cost, build_time, product_qty }) {
+  if (material_cost == null) return { profit: null, profitMargin: null, iskPerHour: null };
+  const revenue = unitPrice * (product_qty || 1);
+  const profit = revenue - material_cost;
+  return {
+    profit,
+    profitMargin: revenue > 0 ? profit / revenue * 100 : 0,
+    iskPerHour: build_time > 0 ? profit / (build_time / 3600) : 0,
+  };
+}
+
 async function runVolumeEnrichment() {
   if (jobState.volumeEnrichmentRunning) {
     logger.info('⚠ Volume enrichment already running, skipping');
@@ -123,15 +142,21 @@ async function runVolumeEnrichment() {
 
     const JITA_REGION = 10000002;
     
-    // Get top items from Jita that don't have volume data yet (or need refresh).
-    // Volume history comes from Jita ESI — enrich Jita rows, then copy to other regions.
+    // Top Jita items with no volume yet OR whose volume is more than a day old (markets change;
+    // before Nov 2026 a volume, once found, was never refreshed). Jita rows are enriched here; the
+    // other hubs get their own volumes in applyRegionVolumeAndLiquidity.
     const itemsToEnrich = await dbAll(`
-      SELECT product_id, product_name, sell_price, buy_price, material_cost
-      FROM precomputed_profits
-      WHERE region_id = 10000002
-        AND profit > 0 AND sell_price > 0
-        AND (avg_daily_volume IS NULL OR avg_daily_volume = 0)
-      ORDER BY profit DESC
+      SELECT pp.product_id, pp.product_name, pp.sell_price, pp.buy_price, pp.material_cost,
+             COALESCE(b.product_quantity, 1) AS product_qty
+      FROM precomputed_profits pp
+      LEFT JOIN blueprints b ON b.blueprint_id = pp.blueprint_id
+      LEFT JOIN item_history_prices ihp ON ihp.type_id = pp.product_id
+      WHERE pp.region_id = 10000002
+        AND pp.profit > 0 AND pp.sell_price > 0
+        AND (pp.avg_daily_volume IS NULL OR pp.avg_daily_volume = 0
+             OR ihp.updated_at IS NULL OR ihp.updated_at < datetime('now', '-1 day'))
+      GROUP BY pp.product_id
+      ORDER BY MAX(pp.profit) DESC
       LIMIT 2000
     `);
 
@@ -166,15 +191,9 @@ async function runVolumeEnrichment() {
         if (historyRes.ok) {
           const history = await historyRes.json();
           if (Array.isArray(history) && history.length > 0) {
-            // Calculate 30-day average (or less if not enough data)
-            const recentHistory = history.slice(-30);
-            sampleDays = recentHistory.length;
-            const totalVolume = recentHistory.reduce((sum, day) => sum + (day.volume || 0), 0);
-            avgVolume = sampleDays > 0 ? totalVolume / sampleDays : 0;
-            // 30-day average of the daily trade-weighted average price
-            // ESI 'average' = volume-weighted mean of actual transactions for that day
-            const totalPrice = recentHistory.reduce((sum, day) => sum + (day.average || 0), 0);
-            avg30dPrice = sampleDays > 0 ? totalPrice / sampleDays : 0;
+            // Units traded in the last 30 calendar days ÷ 30, and the recent average price (lib/market-history.js)
+            const h = summariseHistory(history);
+            avgVolume = h.avgDailyVolume; avg30dPrice = h.avgPrice; sampleDays = h.tradingDays;
           }
         }
 
@@ -212,7 +231,7 @@ async function runVolumeEnrichment() {
         // Determine liquidity risk using 4-tier system
         const liquidityRisk = classifyLiquidity({
           marketGroupId, sellPrice: item.sell_price, materialCost: item.material_cost,
-          buyPrice: item.buy_price, avgVolume,
+          productQty: item.product_qty, buyPrice: item.buy_price, avgVolume,
         });
 
         // Update Jita row only — copy to other regions after the loop
@@ -267,10 +286,7 @@ async function runVolumeEnrichment() {
           if (histRes.ok) {
             const history = await histRes.json();
             if (Array.isArray(history) && history.length > 0) {
-              const recent = history.slice(-30);
-              const sampleDays = recent.length;
-              const avgVol = recent.reduce((s, d) => s + (d.volume || 0), 0) / sampleDays;
-              const avgPrice = recent.reduce((s, d) => s + (d.average || 0), 0) / sampleDays;
+              const { avgDailyVolume: avgVol, avgPrice, tradingDays: sampleDays } = summariseHistory(history);
               if (avgPrice > 0) {
                 await dbRun(`
                   INSERT INTO item_history_prices (type_id, avg_30d_price, avg_30d_volume, sample_days, updated_at)
@@ -287,25 +303,22 @@ async function runVolumeEnrichment() {
                 // (sell_price = 0, filtered out) until the next precompute cycle
                 // runs (up to 6 hours away). Update all regions — historical price
                 // is hub-agnostic (we only have Jita history but it's the best proxy).
-                await dbRun(`
-                  UPDATE precomputed_profits
-                  SET sell_price    = ?,
-                      profit        = ? - material_cost,
-                      profit_margin = CASE WHEN ? > 0
-                                       THEN (? - material_cost) / ? * 100
-                                       ELSE 0 END,
-                      isk_per_hour  = CASE WHEN build_time > 0
-                                       THEN (? - material_cost) / (build_time / 3600.0)
-                                       ELSE 0 END,
-                      price_source  = 'history_30d',
-                      avg_30d_price = ?
-                  WHERE product_id = ? AND sell_price = 0
-                `, [
-                  avgPrice,
-                  avgPrice, avgPrice, avgPrice, avgPrice, avgPrice,
-                  avgPrice,
-                  item.product_id
-                ]);
+                // A run makes product_quantity units; a recipe with an unknown material cost stays
+                // without a profit figure (same rule as the pre-compute).
+                const rowsToPrice = await dbAll(`
+                  SELECT pp.blueprint_id, pp.region_id, pp.material_cost, pp.build_time,
+                         COALESCE(b.product_quantity, 1) AS product_qty
+                    FROM precomputed_profits pp LEFT JOIN blueprints b ON b.blueprint_id = pp.blueprint_id
+                   WHERE pp.product_id = ? AND pp.sell_price = 0`, [item.product_id]);
+                for (const row of rowsToPrice) {
+                  const p = historyPricedProfit(avgPrice, row);
+                  await dbRun(`
+                    UPDATE precomputed_profits
+                    SET sell_price = ?, profit = ?, profit_margin = ?, isk_per_hour = ?,
+                        price_source = 'history_30d', avg_30d_price = ?
+                    WHERE blueprint_id = ? AND region_id = ?
+                  `, [avgPrice, p.profit, p.profitMargin, p.iskPerHour, avgPrice, row.blueprint_id, row.region_id]);
+                }
               }
             }
           }
@@ -353,4 +366,4 @@ async function runVolumeEnrichment() {
   }
 }
 
-module.exports = { runVolumeEnrichment, applyRegionVolumeAndLiquidity };
+module.exports = { runVolumeEnrichment, applyRegionVolumeAndLiquidity, classifyLiquidity, historyPricedProfit };

@@ -5,6 +5,7 @@
 const logger = require('./logger');
 const { dbAll, dbRun } = require('./db');
 const { getCached } = require('./cache');
+const { HUB_STANDINGS, HUB_STRUCTURE_FEES, STRUCTURE_SCC_BROKER_FEE, HUB_FEE_PROMOTIONS } = require('./hubs');
 
 // Clamp client-posted skills/standings/implants before they are persisted or trusted: bounded sizes,
 // numeric ids, levels 0-5, standings -10..10. Malformed entries are dropped, never thrown on.
@@ -171,7 +172,40 @@ function calcSalesFeeRates(skillMap, standings, hub, fixedBrokerFee = null) {
   return { brokerFeeRate, transactionTaxRate, brokerRelations, accounting, factionStanding, corpStanding };
 }
 
+// The CCP fee discount running at a hub on a given date (or null). Dates are UTC; `until` is exclusive.
+function activeFeePromotion(regionId, now = Date.now()) {
+  const t = now instanceof Date ? now.getTime() : Number(now);
+  return HUB_FEE_PROMOTIONS.find(p => p.regionId === Number(regionId)
+    && t >= Date.parse(p.from) && t < Date.parse(p.until)) || null;
+}
+
+/**
+ * Broker fee + sales tax for selling at a FORGE hub (the hub's main station or structure) — the ONE place
+ * every route gets its fee rates from:
+ *   - NPC hubs: skills + the hub's faction/corp standings (calcSalesFeeRates).
+ *   - Player structures: the owner's broker fee + CCP's 0.5% SCC surcharge (no standings).
+ *   - CCP time-limited discounts (HUB_FEE_PROMOTIONS) applied on the dates they run.
+ * Returns calcSalesFeeRates' fields plus `feePromotion` (label or null).
+ */
+function hubFeeRates(skillMap, standings, regionId, now = Date.now()) {
+  const ownerFee = HUB_STRUCTURE_FEES[regionId];
+  const fixedBroker = ownerFee == null ? null : ownerFee + STRUCTURE_SCC_BROKER_FEE;
+  const rates = calcSalesFeeRates(skillMap || {}, standings || {}, HUB_STANDINGS[regionId], fixedBroker);
+  const promo = activeFeePromotion(regionId, now);
+  if (promo) {
+    rates.brokerFeeRate      *= promo.brokerMult;
+    rates.transactionTaxRate *= promo.taxMult;
+  }
+  rates.feePromotion = promo ? promo.label : null;
+  return rates;
+}
+
+// Sales tax used when the pilot is unknown (public lists): Accounting V at that hub, discounts included.
+function defaultHubTaxRate(regionId, now = Date.now()) {
+  return hubFeeRates({ 16622: 5 }, {}, regionId, now).transactionTaxRate;
+}
+
 module.exports = {
   sanitizeSkills, sanitizeStandings, sanitizeImplants, loadSkillSnapshots, saveSkillSnapshot, getCharacterSession,
-  calcSalesFeeRates, INDUSTRY_IMPLANTS,
+  calcSalesFeeRates, hubFeeRates, activeFeePromotion, defaultHubTaxRate, INDUSTRY_IMPLANTS,
 };

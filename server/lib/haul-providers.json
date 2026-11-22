@@ -1,0 +1,32 @@
+{
+  "red_frog": {
+    "name": "Red Frog",
+    "max_volume_m3": 860000,
+    "max_collateral": 1000000000,
+    "min_fee": 1000000,
+    "isk_per_m3": 400,
+    "collateral_rate": 0.005,
+    "rates_as_of": "Jun 2025",
+    "note": "Highsec only"
+  },
+  "black_frog": {
+    "name": "Black Frog",
+    "max_volume_m3": 860000,
+    "max_collateral": 10000000000,
+    "min_fee": 1500000,
+    "isk_per_m3": 1200,
+    "collateral_rate": 0.01,
+    "rates_as_of": "Jun 2025",
+    "note": "Lowsec / Null / WH"
+  },
+  "pushx": {
+    "name": "PushX",
+    "max_volume_m3": 860000,
+    "max_collateral": 1500000000,
+    "min_fee": 1000000,
+    "isk_per_m3": 380,
+    "collateral_rate": 0.005,
+    "rates_as_of": "Jun 2025",
+    "note": "Highsec + some lowsec/null"
+  }
+}

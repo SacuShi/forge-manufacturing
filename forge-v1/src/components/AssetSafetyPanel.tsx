@@ -17,7 +17,7 @@ export interface SafetyHolding { typeId: number; qty: number }
 
 interface Props {
   holdings: SafetyHolding[];
-  /** item types in Asset Safety that can't be valued at a Jita price (blueprints/formulas) */
+  /** item types in Asset Safety that can't be valued at a Jita price (blueprint / formula copies) */
   unvaluedTypes?: number;
   /** Asset Safety wraps present in the asset list (even if ESI listed nothing inside them) */
   wrapCount: number;
@@ -93,7 +93,7 @@ const AssetSafetyPanel: FC<Props> = ({ holdings, unvaluedTypes = 0, wrapCount, h
       They can&apos;t be used for manufacturing, so FORGE leaves them out of every calculation (have/needed, shortfalls,
       buildable-now, the Queue Planner) until you release them.
       <ul className="notice-list">
-        {holdings.length === 0 && <li>Only blueprints are locked here, and blueprints can't be valued at a Jita price.</li>}
+        {holdings.length === 0 && <li>Only blueprint copies are locked here, and copies have no market price (they sell by contract).</li>}
         {holdings.length > 0 && val.status === 'loading' && <li>Pricing them at Jita…</li>}
         {holdings.length > 0 && val.status === 'error' && <li>Couldn&apos;t price them at Jita ({val.error}). Reload to try again.</li>}
         {holdings.length > 0 && val.status === 'ready' && (

@@ -95,3 +95,7 @@ export function assetSafetyFees(totalValue: number): { otherSystem: number; same
   const v = Number.isFinite(totalValue) && totalValue > 0 ? totalValue : 0;
   return { otherSystem: v * ASSET_SAFETY_FEE_OTHER_SYSTEM, sameSystem: v * ASSET_SAFETY_FEE_SAME_SYSTEM };
 }
+
+/** Key of one asset row (type at a location). Blueprint copies get their own row: they are not the original. */
+export const assetRowKey = (typeId: number, locationId: number, isCopy = false): string =>
+  `${typeId}:${locationId}${isCopy ? ':bpc' : ''}`;

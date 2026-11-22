@@ -31,11 +31,24 @@ const HUB_CONFIG = {
   keepstar: { name: 'C-J6MT Keepstar', stationId: 1049588174021, regionId: 10099000, label: '1st Taj Mahgoon (DJ\'s Retirement Fund)', isStructure: true },
 };
 
-// Fixed broker fees for player structures (no standings discount applies).
+// Broker fee set by the OWNER of a player structure (no standings discount applies).
 // Key is the synthetic regionId used in VALID_REGIONS / regionPriceCache.
+// CCP adds its own SCC surcharge on top in every structure (STRUCTURE_SCC_BROKER_FEE), so the
+// fee a pilot actually pays at the Keepstar is 1.5% + 0.5% = 2.0%.
 const HUB_STRUCTURE_FEES = {
   10099000: 0.015, // C-J6MT Keepstar — 1.5% set by structure owner
 };
+
+// CCP's SCC surcharge on broker fees in player structures (0.5%, since the 2023 Viridian changes).
+const STRUCTURE_SCC_BROKER_FEE = 0.005;
+
+// Time-limited CCP fee discounts at a hub station. Each switches itself on and off by date (UTC).
+// 'Fractured Skies' (CCP, 'Fractured Skies In Focus', 28 Oct 2026): 50% off sales tax AND broker fee at
+// the Emperor Family Academy, Amarr VIII (Oris), for six months from the expansion's release on 10 Nov 2026.
+const HUB_FEE_PROMOTIONS = [
+  { regionId: 10000043, stationId: 60008494, from: '2026-11-10T00:00:00Z', until: '2027-05-10T00:00:00Z',
+    brokerMult: 0.5, taxMult: 0.5, label: 'Fractured Skies: 50% off fees at Amarr EFA until 10 May 2027' },
+];
 
 const HUB_IDS = Object.keys(HUB_CONFIG);
 
@@ -102,6 +115,6 @@ const KEEPSTAR_STRUCTURE_ID = 1049588174021;
 const KEEPSTAR_REGION_ID    = 10099000;
 
 module.exports = {
-  HUB_CONFIG, HUB_STRUCTURE_FEES, HUB_IDS, REGION_TO_HUB, VALID_REGIONS, REGIONS, HUB_STANDINGS, HUB_SYSTEM_IDS,
+  HUB_CONFIG, HUB_STRUCTURE_FEES, STRUCTURE_SCC_BROKER_FEE, HUB_FEE_PROMOTIONS, HUB_IDS, REGION_TO_HUB, VALID_REGIONS, REGIONS, HUB_STANDINGS, HUB_SYSTEM_IDS,
   KEEPSTAR_STRUCTURE_ID, KEEPSTAR_REGION_ID,
 };

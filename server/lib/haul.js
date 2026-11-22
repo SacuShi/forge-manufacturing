@@ -8,45 +8,15 @@ const { dbAll, dbGet } = require('./db');
 const { esiFetch } = require('./esi');
 const { HUB_SYSTEM_IDS } = require('./hubs');
 
-// ── Haulage provider rate tables (Phase 2) ────────────────────────────────────
-// Approximate published rates — versioned. Users should verify against provider
-// websites for current pricing; these are embedded for quick calculation only.
-const HAUL_PROVIDERS = {
-  red_frog: {
-    name:            'Red Frog',
-    max_volume_m3:   860_000,
-    max_collateral:  1_000_000_000,
-    min_fee:         1_000_000,
-    isk_per_m3:      400,
-    collateral_rate: 0.005,    // 0.5%
-    rates_as_of:     'Jun 2025',
-    note:            'Highsec only',
-  },
-  black_frog: {
-    name:            'Black Frog',
-    max_volume_m3:   860_000,
-    max_collateral:  10_000_000_000,
-    min_fee:         1_500_000,
-    isk_per_m3:      1_200,
-    collateral_rate: 0.01,     // 1%
-    rates_as_of:     'Jun 2025',
-    note:            'Lowsec / Null / WH',
-  },
-  pushx: {
-    name:            'PushX',
-    max_volume_m3:   860_000,
-    max_collateral:  1_500_000_000,
-    min_fee:         1_000_000,
-    isk_per_m3:      380,
-    collateral_rate: 0.005,    // 0.5%
-    rates_as_of:     'Jun 2025',
-    note:            'Highsec + some lowsec/null',
-  },
-};
+// ── Haulage provider rate tables ──────────────────────────────────────────────
+// The ONE copy lives in haul-providers.json; the website imports the same file
+// (forge-v1/src/data/haulProviders.ts). Approximate published rates — players
+// should check the provider's site for current pricing.
+const HAUL_PROVIDERS = require('./haul-providers.json');
 
 /**
  * Calculate the total haul fee for a contract hauler provider.
- * Handles splitting oversized loads into multiple contracts automatically.
+ * A load bigger than the provider's volume OR collateral limit is split into several contracts.
  *
  * @param {string} provider - 'red_frog' | 'black_frog' | 'pushx'
  * @param {number} volumeM3
@@ -56,13 +26,45 @@ const HAUL_PROVIDERS = {
 function calcProviderFee(provider, volumeM3, collateral) {
   const p = HAUL_PROVIDERS[provider];
   if (!p || volumeM3 <= 0) return { cost: 0, effectiveIskPerM3: 0, contracts: 1 };
-  const contracts    = Math.ceil(volumeM3 / p.max_volume_m3);
-  const volPerCon    = volumeM3   / contracts;
-  const collPerCon   = (collateral || 0) / contracts;
+  const coll         = collateral || 0;
+  const contracts    = Math.max(1, Math.ceil(volumeM3 / p.max_volume_m3),
+                                p.max_collateral > 0 ? Math.ceil(coll / p.max_collateral) : 1);
+  const volPerCon    = volumeM3 / contracts;
+  const collPerCon   = coll / contracts;
   const feePerCon    = Math.max(p.min_fee, p.isk_per_m3 * volPerCon + p.collateral_rate * collPerCon);
   const totalFee     = feePerCon * contracts;
   const effectiveM3  = totalFee / volumeM3;
   return { cost: totalFee, effectiveIskPerM3: effectiveM3, contracts };
+}
+
+/**
+ * Haul cost PER UNIT for trading: a courier fee, a flat price or a fuel bill is paid per TRIP, so it is
+ * shared by every unit on that trip. Units per trip = the most that one trip can carry and that you would
+ * trade — the provider's volume and collateral limits, and `tradeUnits` (e.g. one day's market volume).
+ * With no limit known at all, one unit per trip (the old, most cautious figure).
+ *
+ * @param {Object} cfg         leg config (as calcLegHaulCost)
+ * @param {Object} o
+ * @param {number} o.unitVolM3  packaged m³ of one unit
+ * @param {number} o.unitValue  ISK value of one unit (collateral)
+ * @param {number} o.jumps
+ * @param {number|null} [o.tradeUnits]       units you would move per trip (null = unknown)
+ * @param {number} [o.fixedCollateral]       pilot's declared collateral per trip (0 = value of the cargo)
+ * @returns {{ perUnit: number, tripCost: number, unitsPerTrip: number, contracts: number, effectiveIskPerM3: number }}
+ */
+function perUnitHaulCost(cfg, { unitVolM3, unitValue, jumps, tradeUnits = null, fixedCollateral = 0 }) {
+  const p = HAUL_PROVIDERS[cfg.method];
+  const limits = [];
+  if (p && unitVolM3 > 0) limits.push(p.max_volume_m3 / unitVolM3);
+  if (p && p.max_collateral > 0 && unitValue > 0 && !(fixedCollateral > 0)) limits.push(p.max_collateral / unitValue);
+  if (tradeUnits != null && tradeUnits > 0) limits.push(tradeUnits);
+  const unitsPerTrip = limits.length > 0 ? Math.max(1, Math.floor(Math.min(...limits))) : 1;
+  const collateral = fixedCollateral > 0 ? fixedCollateral : unitValue * unitsPerTrip;
+  const trip = calcLegHaulCost(cfg, unitVolM3 * unitsPerTrip, jumps, collateral);
+  return {
+    perUnit: trip.cost / unitsPerTrip, tripCost: trip.cost, unitsPerTrip,
+    contracts: trip.contracts, effectiveIskPerM3: trip.effectiveIskPerM3,
+  };
 }
 
 /**
@@ -299,4 +301,4 @@ async function calcHaulLegs({ haulEnabled, settings, matRegionId, sellRegionId, 
            legJCost, legJVolM3, legJJumps, legJRouteKnown, leg1RouteKnown, leg2RouteKnown };
 }
 
-module.exports = { HAUL_PROVIDERS, calcLegHaulCost, getJumpCount, calcHaulLegs };
+module.exports = { HAUL_PROVIDERS, calcProviderFee, calcLegHaulCost, perUnitHaulCost, getJumpCount, calcHaulLegs };

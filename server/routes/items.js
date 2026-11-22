@@ -14,6 +14,7 @@ const { CONTRACT_INGEST_REGION, contractRationale } = require('../lib/contracts'
 const market = require('../lib/market-cache'); // live values (historyPriceMap, ...) are read as market.<name>
 const { inventionChance, inventionSkillLevels } = require('../lib/invention');
 const { sanitizeSkills } = require('../lib/character-session');
+const { summariseHistory } = require('../lib/market-history');
 const {
   regionPriceCache, getHubPrices, getRawHubPrices, getRawJitaPrices, kickRegionWarm,
   blueprintMaterialsCache,
@@ -293,14 +294,8 @@ async function fetchItemPriceHistory(typeId, regionId) {
     if (historyRes.ok) {
       const historyData = await historyRes.json();
       if (Array.isArray(historyData) && historyData.length > 0) {
-        // Calculate 30-day average BEFORE sorting — ESI returns history oldest-first,
-        // so slice(-30) on the raw array gives the 30 most recent trading days.
-        // IMPORTANT: must happen before .sort() which mutates the array in-place,
-        // changing the order and making slice(-30) return the oldest days instead.
-        const recent30 = historyData.slice(-30);
-        const avg30dFromHistory = recent30.length > 0
-          ? recent30.reduce((sum, d) => sum + (d.average || 0), 0) / recent30.length
-          : 0;
+        // Average price of the 30 most recent trading days (shared with the volume jobs: lib/market-history.js)
+        const avg30dFromHistory = summariseHistory(historyData).avgPrice;
         const priceHistory = historyData
           .sort((a, b) => new Date(b.date) - new Date(a.date))
           .slice(0, 90)

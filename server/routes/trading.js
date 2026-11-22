@@ -6,8 +6,8 @@ const fetch = require('node-fetch');
 const logger = require('../lib/logger');
 const security = require('../forge-security');
 const { dbAll } = require('../lib/db');
-const { HUB_CONFIG, HUB_IDS, HUB_STANDINGS, HUB_STRUCTURE_FEES } = require('../lib/hubs');
-const { getCharacterSession, calcSalesFeeRates } = require('../lib/character-session');
+const { HUB_CONFIG, HUB_IDS } = require('../lib/hubs');
+const { getCharacterSession, hubFeeRates } = require('../lib/character-session');
 const { hubBooks, hubMetas, hubNameMaps, ensureHubPollerRunning } = require('../lib/hub-pollers');
 
 const router = express.Router();
@@ -180,7 +180,7 @@ router.post('/api/trading/scan', security.apiLimiter, security.verifyEveToken, a
     const sessionCached = Object.keys(skillMap).length > 0;
     // Fees use the selected hub's faction/corp standings (or fixed fee for player structures)
     const { brokerFeeRate, transactionTaxRate } =
-      calcSalesFeeRates(skillMap, standings, HUB_STANDINGS[cfg.regionId], HUB_STRUCTURE_FEES[cfg.regionId] ?? null);
+      hubFeeRates(skillMap, standings, cfg.regionId);
 
     const activeBook = hubBooks[hubId];
     if (activeBook.size === 0) {
@@ -260,9 +260,14 @@ router.get('/api/trading/character-orders', security.apiLimiter, security.verify
       : [];
     const nameMap = new Map(nameRows.map(r => [r.product_id, r.product_name]));
 
-    // Enrich each order with undercut status from the live Jita book (orders are always at Jita)
+    // Enrich each order with undercut status from the live book of the hub station the order is AT.
+    // Orders anywhere else (no FORGE book for that station) get no undercut verdict — unknown, not "fine".
+    const hubByStation = new Map(Object.entries(HUB_CONFIG).map(([id, c]) => [c.stationId, id]));
+    const orderHubs = new Set(esiOrders.map(o => hubByStation.get(o.location_id)).filter(Boolean));
+    for (const h of orderHubs) ensureHubPollerRunning(h);
     const orders = esiOrders.map(o => {
-      const book = hubBooks.jita.get(o.type_id);
+      const hubId = hubByStation.get(o.location_id);
+      const book = hubId ? hubBooks[hubId]?.get(o.type_id) : null;
       let isUndercut = false, undercutBy = 0, bookBest = null;
 
       if (book) {

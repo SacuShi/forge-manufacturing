@@ -182,7 +182,7 @@ const LPStoreTab: FC<LPStoreTabProps> = ({ onSelectItem, selectedTypeId, lpPoint
     .map(o => {
       const myLP    = balanceMap.get(o.corp_id) ?? null;
       const maxBuys = (myLP != null && o.lp_cost > 0) ? Math.floor(myLP / o.lp_cost) : null;
-      const maxIsk  = (maxBuys != null && o.net_isk > 0) ? maxBuys * o.net_isk : null;
+      const maxIsk  = (maxBuys != null && o.net_isk > 0 && !o.req_unpriced) ? maxBuys * o.net_isk : null;
       return { ...o, myLP, maxBuys, maxIsk };
     })
     .sort((a, b) => {
@@ -694,7 +694,9 @@ const LPStoreTab: FC<LPStoreTabProps> = ({ onSelectItem, selectedTypeId, lpPoint
                           {o.required_items.map(r => (
                             <span key={r.type_id} style={{ color: 'var(--color-text-muted)', whiteSpace: 'nowrap', fontSize: 11 }}>
                               {fmtNum(r.quantity)}× {r.name}
-                              {r.unit_price > 0 && <span style={{ color: 'var(--color-loss)', marginLeft: 4 }}>({formatISK(r.total_cost)})</span>}
+                              {r.unit_price > 0
+                                ? <span style={{ color: 'var(--color-loss)', marginLeft: 4 }}>({formatISK(r.total_cost)})</span>
+                                : <span style={{ color: 'var(--color-warning)', marginLeft: 4 }} title="Nobody sells this at the hub, so its cost is unknown">(no price)</span>}
                             </span>
                           ))}
                         </div>
@@ -705,11 +707,11 @@ const LPStoreTab: FC<LPStoreTabProps> = ({ onSelectItem, selectedTypeId, lpPoint
                     </td>
                     <td style={{ padding: '4px 8px', textAlign: 'right',
                                  color: o.net_isk > 0 ? 'var(--color-profit)' : 'var(--color-loss)' }}>
-                      {o.jita_buy > 0 ? formatISK(o.net_isk) : '—'}
+                      {o.jita_buy > 0 && !o.req_unpriced ? formatISK(o.net_isk) : '—'}
                     </td>
                     <td style={{ padding: '4px 8px', textAlign: 'right', fontWeight: 600,
                                  color: o.isk_per_lp >= 1000 ? 'var(--color-profit)' : o.isk_per_lp >= 0 ? 'var(--color-text)' : 'var(--color-loss)' }}>
-                      {o.jita_buy > 0 ? formatISK(o.isk_per_lp) : '—'}
+                      {o.jita_buy > 0 && !o.req_unpriced ? formatISK(o.isk_per_lp) : '—'}
                     </td>
                     <td style={{ padding: '4px 8px', textAlign: 'right', color: 'var(--color-text-muted)' }}>
                       {fmtVol(o.volume)}

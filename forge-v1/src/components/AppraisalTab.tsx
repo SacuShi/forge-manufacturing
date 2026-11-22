@@ -8,6 +8,8 @@ interface AppraisalInput {
   typeId: number;
   name: string;
   qty: number;
+  /** a blueprint copy (from the Assets tab): contract-only, so no market price */
+  isCopy?: boolean;
 }
 
 interface AppraisalResult {
@@ -18,6 +20,7 @@ interface AppraisalResult {
   buy: number;
   sellTotal: number;
   buyTotal: number;
+  isCopy?: boolean;
 }
 
 interface AppraisalResponse {
@@ -399,12 +402,12 @@ const AppraisalTab: FC<AppraisalTabProps> = ({ seedItems, canDockKeestar = true 
                     <td style={{ ...s.tdCell, textAlign: 'right', fontVariantNumeric: 'tabular-nums', opacity: buyColActive ? 1 : 0.35 }}>
                       {row.buy > 0
                         ? <span style={{ color: 'var(--color-text-primary)' }}>{formatISK(adj(row.buyTotal, adjustPct))}</span>
-                        : <span style={{ color: 'var(--color-text-tertiary)' }}>no orders</span>}
+                        : <span style={{ color: 'var(--color-text-tertiary)' }}>{row.isCopy ? 'copy · contract only' : 'no orders'}</span>}
                     </td>
                     <td style={{ ...s.tdCell, textAlign: 'right', fontVariantNumeric: 'tabular-nums', opacity: sellColActive ? 1 : 0.35 }}>
                       {row.sell > 0
                         ? <span style={{ color: 'var(--color-text-secondary)' }}>{formatISK(adj(row.sellTotal, adjustPct))}</span>
-                        : <span style={{ color: 'var(--color-text-tertiary)' }}>no orders</span>}
+                        : <span style={{ color: 'var(--color-text-tertiary)' }}>{row.isCopy ? 'copy · contract only' : 'no orders'}</span>}
                     </td>
                   </tr>
                 ))}

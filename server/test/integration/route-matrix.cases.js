@@ -72,8 +72,6 @@ export const CASES = [
   // --- blueprints and profit
   { route: 'POST /api/true-cost', url: '/api/true-cost', body: { product_id: U.PRODUCT, me: 10, te: 20, runs: 1, regionId: REGION, materialRegionId: REGION }, exact: true },
   { route: 'POST /api/true-cost', url: '/api/true-cost', body: {}, label: 'missing product' },
-  { route: 'POST /api/calculate-profitability', url: '/api/calculate-profitability', body: { ownedBlueprints, topN: 5, regionId: REGION } },
-  { route: 'POST /api/production-chain', url: '/api/production-chain', body: { itemName: 'Test Frigate', ownedBlueprints } },
   { route: 'POST /api/material-breakdown', url: '/api/material-breakdown', body: { typeId: U.PRODUCT, regionId: REGION, ownedBlueprints } },
   { route: 'POST /api/me-research-roi', url: '/api/me-research-roi', body: { blueprints: ownedBlueprints, regionId: REGION, targetME: 10 } },
   { route: 'POST /api/get-price', url: `/api/get-price?regionId=${REGION}`, body: { typeId: U.PRODUCT } },

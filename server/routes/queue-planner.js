@@ -8,9 +8,9 @@ const HP = require('../lib/hub-price');
 const IM = require('../lib/industry-math'); // shared manufacturing mechanics (rigs, ME, EIV, job cost, time)
 const { dbAll, dbGet, SQL_VARIABLE_LIMIT } = require('../lib/db');
 const { getCached } = require('../lib/cache');
-const { HUB_STANDINGS, HUB_STRUCTURE_FEES, VALID_REGIONS } = require('../lib/hubs');
+const { VALID_REGIONS } = require('../lib/hubs');
 const { fetchAdjustedPrices, fetchActivityCostIndices } = require('../lib/esi-industry-data');
-const { getCharacterSession, calcSalesFeeRates, INDUSTRY_IMPLANTS } = require('../lib/character-session');
+const { getCharacterSession, hubFeeRates, INDUSTRY_IMPLANTS } = require('../lib/character-session');
 const { CORP_BP_USABLE_SQL, ensureCorpDataFresh, resolveViewerCorpAccess } = require('../lib/corp');
 const market = require('../lib/market-cache');
 const { getRawHubPrices, getRawJitaPrices, kickRegionWarm, blueprintMaterialsCache } = market;
@@ -514,7 +514,8 @@ router.post('/api/queue-planner', security.apiLimiter, security.verifyEveToken, 
     const coldMatCost = new Map();
     if (!matHubPrices) {
       const rowsCold = await dbAll('SELECT blueprint_id, material_cost FROM precomputed_profits WHERE region_id = ?', [safeMaterialRegionId]);
-      for (const r of rowsCold) coldMatCost.set(r.blueprint_id, r.material_cost || 0);
+      // A NULL cost (some material unpriced) is unknown: left out, so that candidate is skipped while cold
+      for (const r of rowsCold) if (r.material_cost != null) coldMatCost.set(r.blueprint_id, r.material_cost);
     }
 
     // ── Job cost inputs (EIV × SCI + SCC + facility tax) ──────────────────────
@@ -551,9 +552,7 @@ router.post('/api/queue-planner', security.apiLimiter, security.verifyEveToken, 
     const { candidates, reqsByBp } = await fetchQueueCandidates({ bpTypeIds, safeRegionId, allowedActivities });
 
     // ── Character's personal sales fee rates at the selected hub ─────────────
-    const { brokerFeeRate, transactionTaxRate } = calcSalesFeeRates(
-      skillMap, standings, HUB_STANDINGS[safeRegionId], HUB_STRUCTURE_FEES[safeRegionId] ?? null
-    );
+    const { brokerFeeRate, transactionTaxRate } = hubFeeRates(skillMap, standings, safeRegionId);
     const totalSalesFeeRate = brokerFeeRate + transactionTaxRate;
 
     // ── Greedy slot allocation ────────────────────────────────────────────────

@@ -25,6 +25,9 @@ const orderFor = (sort) => SORTS[sort] || SORTS.profit;
 
 const ACTIVITY_IDS = { manufacturing: 1, reaction: 9 };
 
+// Cross-hub revenue of one run (sell hub unit price × units the blueprint makes per run).
+const XH_REVENUE = 'sell.sell_price * COALESCE(xb.product_quantity, 1)';
+
 /**
  * @param {object} o
  * @param {boolean} [o.isCrossHub]   materials priced at sourceRegionId, product sold at regionId
@@ -45,7 +48,7 @@ function buildTopProfitableQuery(o) {
     includeRisky = false, orderClause = SORTS.profit, search, activity, limit,
   } = o;
   const t = isCrossHub ? 'sell.' : '';
-  const where = [`${t}region_id = ?`, isCrossHub ? '(sell.sell_price - src.material_cost) > ?' : 'profit > ?', `${t}sell_price > 0`];
+  const where = [`${t}region_id = ?`, isCrossHub ? `(${XH_REVENUE} - src.material_cost) > ?` : 'profit > ?', `${t}sell_price > 0`];
   const whereParams = [regionId, minProfit];
 
   if (search) { where.push(`${t}product_name LIKE ?`); whereParams.push(`%${search}%`); }
@@ -66,18 +69,21 @@ function buildTopProfitableQuery(o) {
   }
 
   // Cross-hub: self-join. The sell-hub row supplies revenue and metadata, the source-hub row the
-  // material cost; profit is recalculated in SQL so filtering and sorting use the true figure.
+  // material cost (of ONE run); profit is recalculated in SQL so filtering and sorting use the true
+  // figure. A run makes product_quantity units (fuel blocks 40, reactions up to 10,000), so revenue is
+  // the unit price × that — the same rule the pre-compute uses for same-hub rows.
   return {
     sql: `SELECT ${COLUMNS.map((c) => 'sell.' + c + ' AS ' + c).join(', ')},
                  src.material_cost AS material_cost,
-                 (sell.sell_price - src.material_cost) AS profit,
+                 (${XH_REVENUE} - src.material_cost) AS profit,
                  CASE WHEN sell.sell_price > 0
-                      THEN (sell.sell_price - src.material_cost) / sell.sell_price * 100 ELSE 0 END AS profit_margin,
+                      THEN (${XH_REVENUE} - src.material_cost) / (${XH_REVENUE}) * 100 ELSE 0 END AS profit_margin,
                  CASE WHEN sell.build_time > 0
-                      THEN (sell.sell_price - src.material_cost) / (sell.build_time / 3600.0) ELSE 0 END AS isk_per_hour,
+                      THEN (${XH_REVENUE} - src.material_cost) / (sell.build_time / 3600.0) ELSE 0 END AS isk_per_hour,
                  COALESCE(sell.activity_id, 1) AS activity_id
           FROM precomputed_profits sell
           JOIN precomputed_profits src ON src.blueprint_id = sell.blueprint_id AND src.region_id = ?
+          LEFT JOIN blueprints xb ON xb.blueprint_id = sell.blueprint_id
           WHERE ${where.join(' AND ')}
           ORDER BY ${orderClause}
           LIMIT ?`,

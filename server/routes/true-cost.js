@@ -9,9 +9,9 @@ const HP = require('../lib/hub-price');
 const IM = require('../lib/industry-math'); // shared manufacturing mechanics (rigs, ME, EIV, job cost, time)
 const { dbAll, dbGet } = require('../lib/db');
 const { clientErrMsg } = require('../lib/http-errors');
-const { HUB_STANDINGS, HUB_STRUCTURE_FEES, VALID_REGIONS } = require('../lib/hubs');
+const { VALID_REGIONS } = require('../lib/hubs');
 const { fetchAdjustedPrices, fetchActivityCostIndices } = require('../lib/esi-industry-data');
-const { getCharacterSession, calcSalesFeeRates, INDUSTRY_IMPLANTS } = require('../lib/character-session');
+const { getCharacterSession, hubFeeRates, INDUSTRY_IMPLANTS } = require('../lib/character-session');
 const { HAUL_PROVIDERS, calcHaulLegs } = require('../lib/haul');
 const { DECRYPTORS, calcInventionCost } = require('../lib/invention');
 const market = require('../lib/market-cache');
@@ -233,7 +233,7 @@ router.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, asyn
     const {
       brokerFeeRate, transactionTaxRate,
       brokerRelations, accounting, factionStanding, corpStanding,
-    } = calcSalesFeeRates(skillMap, standings, HUB_STANDINGS[feeRegionId], HUB_STRUCTURE_FEES[feeRegionId] ?? null);
+    } = hubFeeRates(skillMap, standings, feeRegionId);
 
     const brokerFee      = sellPrice * brokerFeeRate;
     const transactionTax = sellPrice * transactionTaxRate;

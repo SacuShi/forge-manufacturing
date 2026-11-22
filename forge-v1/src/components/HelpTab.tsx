@@ -205,6 +205,17 @@ const HelpTab: FC = () => (
           lowest sell, and fees and freight assume you sell it at Jita.</li>
         <li style={S.li}>A <strong>J</strong> next to a "sellable per day" number means there's no trading data for that hub
           yet, so you're seeing Jita's volume.</li>
+        <li style={S.li}><strong>Daily volume</strong> is everything traded in the last 30 days divided by 30. Days with no trades
+          count as zero, so a market that only trades now and then isn't made to look busy. Volumes refresh once a day.</li>
+      </ul>
+      <p style={S.p}><strong>Fees at each hub</strong> follow CCP's rules, using your own skills and standings:</p>
+      <ul style={S.ul}>
+        <li style={S.li}><strong>NPC hubs</strong> — broker fee from Broker Relations and your standings with the station's faction
+          and corporation; sales tax from Accounting.</li>
+        <li style={S.li}><strong>C-J6MT Keepstar</strong> — broker fee is the owner's 1.5% plus CCP's 0.5% charge in every
+          player structure = <strong>2.0%</strong>. Standings don't change it.</li>
+        <li style={S.li}><strong>Amarr (Emperor Family Academy)</strong> — CCP's <em>Fractured Skies</em> offer halves sales tax
+          and broker fees there from 10 Nov 2026 to 10 May 2027. FORGE applies it on those dates and stops on its own afterwards.</li>
         <li style={S.li}>If a hub's prices are still loading you'll see "loading" — FORGE never shows another hub's prices
           under the wrong name.</li>
       </ul>
@@ -256,7 +267,10 @@ const HelpTab: FC = () => (
         breakdown after your skills, blueprint ME, broker fees, sales tax, and job costs.
       </p>
       <ul style={S.ul}>
-        <li style={S.li}><strong>Profit/run</strong> — gross revenue minus material cost. No fees applied. Good for quick ranking.</li>
+        <li style={S.li}><strong>Profit/run</strong> — gross revenue minus material cost. No fees applied. Good for quick ranking.
+          Revenue counts every unit one run makes (fuel blocks make 40, many reactions far more).</li>
+        <li style={S.li}>If a material has <strong>no price anywhere</strong> (nobody sells it, no trade history), the item shows no
+          profit at all — FORGE won't treat an unknown cost as free.</li>
         <li style={S.li}><strong>Margin %</strong> — profit as a percentage of sell price. Higher margin = more cushion if prices move against you.</li>
         <li style={S.li}><strong>ISK/hr</strong> — profit normalised by build time. A slow battleship may have a high profit/run
           but poor ISK/hr compared to a fast-building T2 module. <em>This is usually the best column to sort by.</em></li>
@@ -285,6 +299,10 @@ const HelpTab: FC = () => (
       <p style={S.p}>
         Shows every blueprint across all your logged-in characters with live profit calculations.
         Sort by ISK/hr, margin, total profit, ME level, or name.
+      </p>
+      <p style={S.p}>
+        The figures are the same quick estimate as Market Opportunities: <strong>before job costs and fees</strong>, using an
+        ME 0 material list. Click a blueprint for your full True Profit.
       </p>
       <p style={S.p}><strong>Blueprint icon types:</strong></p>
       <ul style={S.ul}>
@@ -385,6 +403,9 @@ const HelpTab: FC = () => (
       <ul style={S.ul}>
         <li style={S.li}><strong>From Assets</strong> — select items in My Assets and click <strong>Appraise →</strong>.
           Items land in the Appraise tab pre-loaded with correct type IDs, ready to value instantly.</li>
+        <li style={S.li}><strong>Blueprint copies</strong> (BPCs) are listed apart from originals and marked
+          <em> copy · contract only</em>: copies can't be sold on the market, so they have no market value. Originals (BPOs)
+          are valued at their market price like any other item.</li>
         <li style={S.li}><strong>Paste a list</strong> — copy items from anywhere in EVE (right-click a stack → Copy),
           paste into the text box, and click <strong>Appraise</strong>.
           FORGE accepts the standard EVE clipboard format: <em>Name[tab]Qty</em>, one item per line.</li>
@@ -562,7 +583,8 @@ const HelpTab: FC = () => (
         <li style={S.li}><strong>Capital / cycle</strong> — how much ISK you want to commit. Affects the
           "max buys" estimate per item.</li>
         <li style={S.li}><strong>My Orders</strong> sub-tab shows your live market orders with undercut alerts.
-          A red indicator means a competitor is already cheaper than you.</li>
+          A red indicator means a competitor is already cheaper than you — checked against the hub the order is
+          actually at. Orders outside the FORGE hubs get no undercut check.</li>
       </ul>
     </Section>
 
@@ -576,8 +598,12 @@ const HelpTab: FC = () => (
       <ul style={S.ul}>
         <li style={S.li}><strong>Buy from / Sell into</strong> — the two hubs you're comparing. Use the ⟺ button to swap.</li>
         <li style={S.li}><strong>Min margin</strong> — minimum spread percentage. Set higher to filter out marginal deals.</li>
-        <li style={S.li}>Click any row to see the full breakdown and enter your freighter's cargo capacity and jump range
-          to get a per-haul profit estimate.</li>
+        <li style={S.li}><strong>Buy side</strong> — only items you can actually buy right now (live sell orders) are listed. Profit
+          is after the sales tax for filling a buy order — your own Accounting rate when you're logged in (no broker fee:
+          you're selling into an existing order).</li>
+        <li style={S.li}>Click any row for the full breakdown. Set your hauling in <strong>⚙ Configure haulage</strong>: the
+          haul cost per unit is <em>one trip's cost shared by the units on that trip</em> — up to the courier's volume and
+          collateral limits and about one day's traded volume.</li>
       </ul>
       <div style={S.tip}>💡 Jita → Amarr is the classic route. Check Jita → Dodixie for Gallente ship and module items —
         local buyers often pay a premium.</div>
@@ -596,6 +622,8 @@ const HelpTab: FC = () => (
         <li style={S.li}>ISK/LP calculations use your <strong>Sell at</strong> hub price. Switch hubs to see how redemption
           value changes by market.</li>
         <li style={S.li}>Blueprint offers from LP stores are always BPCs — shown with the pale BPC icon.</li>
+        <li style={S.li}>If a <strong>required item</strong> has no sell order at the hub it shows <em>(no price)</em>, and that
+          offer's ISK/LP shows — because its real cost is unknown.</li>
       </ul>
       <div style={S.tip}>💡 Faction warfare LP stores (Caldari Navy, Federation Navy, etc.) typically offer the
         best ISK/LP for popular T2 BPCs and implants. Run the numbers before redeeming anything.</div>

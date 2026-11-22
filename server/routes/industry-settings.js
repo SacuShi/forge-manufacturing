@@ -9,9 +9,9 @@ const IM = require('../lib/industry-math'); // shared manufacturing mechanics (r
 const { dbAll, dbGet, dbRun } = require('../lib/db');
 const { clientErrMsg } = require('../lib/http-errors');
 const { getCached } = require('../lib/cache');
-const { HUB_STANDINGS, HUB_STRUCTURE_FEES, REGIONS, VALID_REGIONS } = require('../lib/hubs');
+const { REGIONS, VALID_REGIONS } = require('../lib/hubs');
 const { costIndexCache, fetchAdjustedPrices, fetchCostIndices } = require('../lib/esi-industry-data');
-const { getCharacterSession, calcSalesFeeRates } = require('../lib/character-session');
+const { getCharacterSession, hubFeeRates } = require('../lib/character-session');
 const { INT32_MAX_ID, learnStructureFit } = require('../lib/structures');
 
 /** @param {{ blueprintMaterialsCache: Map }} deps */
@@ -265,7 +265,7 @@ module.exports = function industrySettingsRoutes({ blueprintMaterialsCache }) {
 
       // ── Sales fee rates ────────────────────────────────────────────────────
       const { brokerFeeRate, transactionTaxRate } =
-        calcSalesFeeRates(skillMap, standings, HUB_STANDINGS[sellRegionId], HUB_STRUCTURE_FEES[sellRegionId] ?? null);
+        hubFeeRates(skillMap, standings, sellRegionId);
 
       res.json({
         broker_fee_rate:      brokerFeeRate,

@@ -12,6 +12,7 @@ const { dbAll, dbGet, dbRun } = require('./db');
 const { esiFetch, ESI_USER_AGENT } = require('./esi');
 const { HUB_CONFIG, HUB_IDS } = require('./hubs');
 const { getOrRefreshStructureToken } = require('./keepstar-token');
+const { summariseHistory } = require('./market-history');
 
 const TRADE_POLL_FALLBACK_MS = 300 * 1000;      // Fuzzwork / ESI cache cycle
 
@@ -547,16 +548,14 @@ async function runHubHistoryEnrichment(hubId) {
           if (isJita) {
             // Jita: store price + volume in existing item_history_prices table
             if (Array.isArray(history) && history.length > 0) {
-              const recent   = history.slice(-30);
-              const avgVol   = recent.reduce((s, d) => s + (d.volume  || 0), 0) / recent.length;
-              const avgPrice = recent.reduce((s, d) => s + (d.average || 0), 0) / recent.length;
+              const { avgDailyVolume: avgVol, avgPrice, tradingDays } = summariseHistory(history);
               await dbRun(
                 `INSERT INTO item_history_prices (type_id, avg_30d_price, avg_30d_volume, sample_days, updated_at)
                  VALUES (?, ?, ?, ?, datetime('now'))
                  ON CONFLICT(type_id) DO UPDATE SET
                    avg_30d_price = excluded.avg_30d_price, avg_30d_volume = excluded.avg_30d_volume,
                    sample_days = excluded.sample_days, updated_at = excluded.updated_at`,
-                [typeId, avgPrice, avgVol, recent.length]
+                [typeId, avgPrice, avgVol, tradingDays]
               );
               done++;
             } else {
@@ -569,9 +568,7 @@ async function runHubHistoryEnrichment(hubId) {
             }
           } else {
             // Non-Jita: store only volume in hub_history_prices (price not needed for scan)
-            const avgVol = (Array.isArray(history) && history.length > 0)
-              ? history.slice(-30).reduce((s, d) => s + (d.volume || 0), 0) / Math.min(history.length, 30)
-              : 0;
+            const avgVol = summariseHistory(history).avgDailyVolume;
             await dbRun(
               `INSERT INTO hub_history_prices (type_id, region_id, avg_30d_volume, updated_at)
                VALUES (?, ?, ?, datetime('now'))

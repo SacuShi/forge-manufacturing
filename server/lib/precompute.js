@@ -54,8 +54,10 @@ async function runPreCompute() {
 
     // Build a product_id → blueprint_id map for recursive cost checks
     const bpByProduct = {};
+    const qtyByBp = {};   // units one run of each blueprint makes (fuel blocks 40, reactions up to 10,000)
     for (const bp of allBlueprints) {
       bpByProduct[bp.product_id] = bp.blueprint_id;
+      qtyByBp[bp.blueprint_id] = bp.product_quantity || 1;
     }
 
     logger.info(`⟳ Processing ${allBlueprints.length} blueprints × ${VALID_REGIONS.length} regions...`);
@@ -96,12 +98,15 @@ async function runPreCompute() {
 
       for (const bp of allBlueprints) {
         const materials = materialsByBp[bp.blueprint_id] || [];
+        // null = at least one material has no price anywhere (no orders, no history) — the
+        // recipe's cost is UNKNOWN, so no profit is claimed for it (lists only show profit > x).
         let totalMatCost = 0;
 
         for (const mat of materials) {
-          totalMatCost += calculateMaterialCostSync(
-            mat.material_id, mat.quantity, prices, materialsByBp, bpByProduct
+          const c = calculateMaterialCostSync(
+            mat.material_id, mat.quantity, prices, materialsByBp, bpByProduct, qtyByBp
           );
+          totalMatCost = (totalMatCost === null || c === null) ? null : totalMatCost + c;
         }
 
         // Sell price fallback: live sell → 30d avg → 0
@@ -118,11 +123,12 @@ async function runPreCompute() {
         const buyPrice  = prices[bp.product_id]?.buy  || 0;
         const productQuantity = bp.product_quantity || 1;
         const batchRevenue = sellPrice * productQuantity;
-        const profit = batchRevenue - totalMatCost;
-        const profitMargin = batchRevenue > 0 ? (profit / batchRevenue) * 100 : 0;
+        const costKnown = totalMatCost !== null;
+        const profit = costKnown ? batchRevenue - totalMatCost : null;
+        const profitMargin = !costKnown ? null : batchRevenue > 0 ? (profit / batchRevenue) * 100 : 0;
 
         const buildTimeHours = (bp.build_time || 1) / 3600;
-        const iskPerHour = buildTimeHours > 0 ? profit / buildTimeHours : 0;
+        const iskPerHour = !costKnown ? null : buildTimeHours > 0 ? profit / buildTimeHours : 0;
 
         await dbRun(`
           INSERT INTO precomputed_profits
@@ -209,14 +215,13 @@ async function runPreCompute() {
           s.isk_per_hour                                                       AS local_isk_per_hour,
           j.material_cost                                                      AS jita_mat_cost,
           s.computed_at,
-          MAX(1, CAST(ROUND(
-            (s.profit + s.material_cost) / NULLIF(s.sell_price, 0)
-          ) AS INTEGER))                                                       AS product_qty
+          MAX(1, COALESCE(b.product_quantity, 1))                              AS product_qty
         FROM precomputed_profits s
         JOIN precomputed_profits j
           ON  j.blueprint_id = s.blueprint_id
           AND j.region_id    = 10000002
           AND j.run_id       = ?
+        LEFT JOIN blueprints b ON b.blueprint_id = s.blueprint_id
         WHERE s.run_id = ?
           AND COALESCE(s.price_source, '') != 'jita_fallback'
       )
@@ -326,29 +331,33 @@ function resolvePrice(prices, typeId) {
 // Using buy prices understates material costs for wide-spread items (e.g. capital
 // components), making the precomputed profit wildly optimistic.
 //
-// Price fallback chain: sell → buy → avg30d → 0 (via resolvePrice)
-function calculateMaterialCostSync(materialId, quantity, prices, materialsByBp, bpByProduct, depth = 0) {
+// Price fallback chain: sell → buy → avg30d (via resolvePrice). A material with none of those is
+// UNKNOWN (null), never free: a missing price must not make a recipe look cheap.
+function calculateMaterialCostSync(materialId, quantity, prices, materialsByBp, bpByProduct, qtyByBp = {}, depth = 0) {
+  const unit = resolvePrice(prices, materialId);
+  const buyCost = unit > 0 ? unit * quantity : null;
   // Prevent infinite recursion on circular blueprint references
-  if (depth > 10) return resolvePrice(prices, materialId) * quantity;
+  if (depth > 10) return buyCost;
 
   const subBpId = bpByProduct[materialId];
   if (subBpId) {
-    // This material can be manufactured. Compute raw-material cost for 1 sub-run,
-    // then compare against buying it outright — take whichever is cheaper.
+    // This material can be built. Raw-material cost of ONE run of its blueprint, divided by the units
+    // that run makes, gives the cost per unit; compare building `quantity` units with buying them.
     const subMats = materialsByBp[subBpId] || [];
-    let mfgCostPerRun = 0;
+    let mfgCostPerRun = subMats.length > 0 ? 0 : null;
     for (const sub of subMats) {
-      mfgCostPerRun += calculateMaterialCostSync(
-        sub.material_id, sub.quantity, prices, materialsByBp, bpByProduct, depth + 1
+      const c = calculateMaterialCostSync(
+        sub.material_id, sub.quantity, prices, materialsByBp, bpByProduct, qtyByBp, depth + 1
       );
+      mfgCostPerRun = (mfgCostPerRun === null || c === null) ? null : mfgCostPerRun + c;
     }
-    // Cost to buy `quantity` units from market vs cost to manufacture
-    const buyCost = resolvePrice(prices, materialId) * quantity;
-    const mfgCost = mfgCostPerRun * quantity;
+    const mfgCost = mfgCostPerRun === null ? null : mfgCostPerRun / (qtyByBp[subBpId] || 1) * quantity;
+    if (mfgCost === null) return buyCost;
+    if (buyCost === null) return mfgCost;
     return Math.min(mfgCost, buyCost);
   }
 
-  return resolvePrice(prices, materialId) * quantity;
+  return buyCost;
 }
 
-module.exports = { runPreCompute };
+module.exports = { runPreCompute, calculateMaterialCostSync };

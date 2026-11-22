@@ -1,5 +1,6 @@
 import AssetSafetyPanel from './AssetSafetyPanel';
 import { itemIconUrl } from '../utils/icons';
+import { assetRowKey } from '../utils/assetSafety';
 import { type EsiAsset } from '../types';
 import type { FC, Dispatch, SetStateAction } from 'react';
 
@@ -14,11 +15,11 @@ interface AssetsTabViewProps {
   expandedLocs: Set<number>;
   hideAssetSafety: boolean;
   lastExportIdx: number | null;
-  locationGroups: { locationId: number; items: { name: string; qty: number; typeId: number; locationId: number; }[]; }[];
+  locationGroups: { locationId: number; items: { name: string; qty: number; typeId: number; locationId: number; isCopy?: boolean; }[]; }[];
   locationLabelFor: (id: number) => string | undefined;
   onSelectItem: (typeId: number, name: string) => void;
   rawAssets: EsiAsset[];
-  safetyHoldings: { typeId: number; qty: number; }[];
+  safetyHoldings: { typeId: number; qty: number; isCopy?: boolean; }[];
   safetyUnvaluedTypes: number;
   safetyValuable: { typeId: number; qty: number; }[];
   safetyWrapCount: number;
@@ -194,8 +195,8 @@ const AssetsTabView: FC<AssetsTabViewProps> = ({ activeTab, assetExportSet, asse
                   </button>
 
                   {/* Item rows within this location */}
-                  {!isCollapsed && sortedItems.map(({ name, qty, typeId }, i) => {
-                    const itemKey     = `${typeId}:${locationId}`;
+                  {!isCollapsed && sortedItems.map(({ name, qty, typeId, isCopy }, i) => {
+                    const itemKey     = assetRowKey(typeId, locationId, isCopy);
                     const isSelected  = assetExportSet.has(itemKey);
                     return (
                       <button
@@ -257,7 +258,7 @@ const AssetsTabView: FC<AssetsTabViewProps> = ({ activeTab, assetExportSet, asse
                         {/* Fixed-size wrapper preserves layout even when the icon 404s */}
                         <div style={{ width: 28, height: 28, flexShrink: 0, borderRadius: 2, overflow: 'hidden', background: 'var(--color-bg-tertiary)' }}>
                           <img
-                            src={itemIconUrl(typeId, 32, bpoTypeIds.has(typeId) ? 'bp' : bpcTypeIds.has(typeId) ? 'bpc' : 'icon')}
+                            src={itemIconUrl(typeId, 32, isCopy ? 'bpc' : bpoTypeIds.has(typeId) ? 'bp' : bpcTypeIds.has(typeId) ? 'bpc' : 'icon')}
                             alt=""
                             loading="lazy"
                             crossOrigin="anonymous"

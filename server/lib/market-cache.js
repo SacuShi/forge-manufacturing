@@ -396,7 +396,7 @@ async function loadBlueprintMaterialsCache() {
 // updates jitaPricesCacheExpiry so callers can check whether a refresh is needed.
 //
 // Removing or renaming this shim would break every handler that reads
-// `jitaPricesCache` or `jitaPricesCacheExpiry` — including calculate-profitability,
+// `jitaPricesCache` or `jitaPricesCacheExpiry` — including
 // analyze-blueprints, item-details, queue-planner, PI market, and the AI tools.
 // Retire only once all those handlers are rewritten to call regionPriceCache directly.
 let jitaPricesCacheExpiry = 0; // TTL timestamp kept in sync by the shim's setter and runPreCompute

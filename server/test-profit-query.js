@@ -16,6 +16,8 @@ const all = (q, p = []) => new Promise((res, rej) => db.all(q, p, (e, r) => (e ?
     `INSERT INTO precomputed_profits VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [bp, region, bp * 10, name, mat, sell, 0, sell - mat, (sell - mat) / sell * 100, (sell - mat) / (3600 / 3600), 3600, 3, 'now',
       o.vol === undefined ? 100 : o.vol, 1, o.risk ?? null, o.act ?? 1, o.src ?? 'hub', 0, 'hub']);
+  await run('CREATE TABLE blueprints (blueprint_id INT, product_quantity INT)');
+  await run('INSERT INTO blueprints VALUES (1, 1), (2, 1), (3, 200), (4, 40)');
   const JITA = 10000002, AMARR = 10000043;
   await ins(1, JITA, 'Rifter', 100, 200); await ins(1, AMARR, 'Rifter', 150, 400, { src: 'jita_fallback' });
   await ins(2, JITA, 'Slasher', 100, 130, { risk: 'critical' }); await ins(2, AMARR, 'Slasher', 120, 300);
@@ -52,6 +54,13 @@ const all = (q, p = []) => new Promise((res, rej) => db.all(q, p, (e, r) => (e ?
   assert.strictEqual(rif.material_cost, 100); assert.strictEqual(rif.sell_price, 400); assert.strictEqual(rif.profit, 300);
   assert.strictEqual(rif.price_source, 'jita_fallback');
   assert.ok(!rows.some((r) => r.product_name === 'Tritanium Reaction'), 'no source-hub row -> not buildable cross-hub');
+  // cross hub, a blueprint making 40 units a run (fuel blocks): revenue = unit price × 40
+  await ins(4, JITA, 'Nitrogen Fuel Block', 10000, 300); await ins(4, AMARR, 'Nitrogen Fuel Block', 12000, 320);
+  q = buildTopProfitableQuery({ isCrossHub: true, regionId: AMARR, sourceRegionId: JITA, includeRisky: true, limit: 10, orderClause: orderFor('profit') });
+  const fb = (await all(q.sql, q.params)).find((r) => r.product_name === 'Nitrogen Fuel Block');
+  assert.ok(fb, 'a 40-unit run worth 12,800 against 10,000 of materials is profitable');
+  assert.strictEqual(fb.profit, 320 * 40 - 10000);
+  assert.ok(Math.abs(fb.profit_margin - (2800 / 12800 * 100)) < 1e-9);
   // every sort option resolves in the cross-hub join (ambiguous-column guard)
   for (const sort of ['profit', 'margin', 'isk_per_hour', 'cost', 'sell_price']) {
     q = buildTopProfitableQuery({ isCrossHub: true, regionId: AMARR, sourceRegionId: JITA, orderClause: orderFor(sort), limit: 5 });

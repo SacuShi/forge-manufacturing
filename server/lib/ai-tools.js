@@ -4,6 +4,8 @@
 const { buildTopProfitableQuery, orderFor } = require('./profit-query');
 const { buildPiSummary } = require('./pi-colony');
 const { getCached } = require('./cache');
+const { getCharacterSession, hubFeeRates, defaultHubTaxRate } = require('./character-session');
+const { queryInterHubArb } = require('./inter-hub');
 
 function createAiTools({ CORP_BP_USABLE_SQL, PORT, REGIONS, VALID_REGIONS, dbAll, dbGet, ensureCorpDataFresh, esiFetch, fetch, getItemPricesAllRegions, hubBooks, resolveViewerCorpAccess, security }) {
   // Tells the advisor how to read price_source on precomputed rows (a Jita price is not a hub price).
@@ -558,49 +560,14 @@ function createAiTools({ CORP_BP_USABLE_SQL, PORT, REGIONS, VALID_REGIONS, dbAll
             const iaSortBy  = toolUse.input.sort_by || 'est_daily_profit';
             const iaLimit   = Math.min(50, parseInt(toolUse.input.limit || 20, 10));
 
-            const allowedIaSorts = {
-              est_daily_profit: 'est_daily_profit DESC NULLS LAST',
-              net_profit:       'net_profit DESC',
-              net_margin_pct:   'net_margin_pct DESC',
-              isk_per_m3:       'isk_per_m3 DESC NULLS LAST',
-              avg_daily_volume: 'avg_daily_volume DESC NULLS LAST',
-            };
-            const iaOrder = allowedIaSorts[iaSortBy] || allowedIaSorts.est_daily_profit;
-            // 3.375% sales tax at Accounting V: 1 − 0.075×(1−0.11×5) = 0.96625.
-            // Was 0.964 (a hand-typed 3.6%) — didn't match calcSalesFeeRates, this
-            // app's own verified formula for the same tax. Fixed 17 Sept 2026.
-            const TAX = 0.96625;
-
-            const iaRows = await dbAll(`
-              SELECT
-                p1.product_id,
-                p1.product_name,
-                p1.sell_price                         AS buy_at,
-                p2.buy_price                          AS sell_into,
-                p2.buy_price * ${TAX} - p1.sell_price AS net_profit,
-                (p2.buy_price * ${TAX} - p1.sell_price) / p1.sell_price * 100 AS net_margin_pct,
-                COALESCE(i.packaged_volume, 0)         AS volume_m3,
-                CASE WHEN COALESCE(i.packaged_volume, 0) > 0
-                  THEN (p2.buy_price * ${TAX} - p1.sell_price) / i.packaged_volume
-                  ELSE NULL END                        AS isk_per_m3,
-                COALESCE(p1.avg_daily_volume, p2.avg_daily_volume) AS avg_daily_volume,
-                CASE WHEN COALESCE(p1.avg_daily_volume, p2.avg_daily_volume) IS NOT NULL
-                  THEN COALESCE(p1.avg_daily_volume, p2.avg_daily_volume)
-                       * (p2.buy_price * ${TAX} - p1.sell_price)
-                  ELSE NULL END                        AS est_daily_profit
-              FROM precomputed_profits p1
-              JOIN precomputed_profits p2
-                ON p1.product_id = p2.product_id
-               AND p1.region_id  = ?
-               AND p2.region_id  = ?
-              LEFT JOIN items i ON i.type_id = p1.product_id
-              WHERE p1.sell_price > 0
-                AND COALESCE(p1.price_source, '') != 'jita_fallback'
-                AND p2.buy_price  > 0
-                AND (p2.buy_price * ${TAX} - p1.sell_price) / p1.sell_price * 100 >= ?
-              ORDER BY ${iaOrder}
-              LIMIT ?
-            `, [iaBuyHub, iaSellHub, iaMinMargin, iaLimit]);
+            // Same query as the Inter-Hub tab (lib/inter-hub.js), at this pilot's own sales tax
+            const { skillMap: iaSkills, standings: iaStandings } = getCharacterSession(characterId);
+            const iaTax = Object.keys(iaSkills).length > 0
+              ? hubFeeRates(iaSkills, iaStandings, iaSellHub).transactionTaxRate
+              : defaultHubTaxRate(iaSellHub);
+            const iaRows = await queryInterHubArb({
+              buyHub: iaBuyHub, sellHub: iaSellHub, taxRate: iaTax, minMargin: iaMinMargin, sortBy: iaSortBy, limit: iaLimit,
+            }, dbAll);
 
             toolResult = {
               buy_hub:   REGIONS[iaBuyHub]?.hub  || `Region ${iaBuyHub}`,
@@ -608,7 +575,8 @@ function createAiTools({ CORP_BP_USABLE_SQL, PORT, REGIONS, VALID_REGIONS, dbAll
               min_margin: iaMinMargin,
               sort_by:   iaSortBy,
               count:     iaRows.length,
-              note:      'buy_at = lowest sell order at source. sell_into = highest buy order at destination. net_profit already deducts 3.6% sales tax. Hauling cost not included.',
+              sales_tax_pct: parseFloat((iaTax * 100).toFixed(3)),
+              note:      'buy_at = lowest live sell order at source. sell_into = highest buy order at destination. net_profit already deducts the sales tax this pilot pays (sales_tax_pct; filling a buy order has no broker fee). Hauling cost not included.',
               results:   iaRows.map(r => ({
                 name:            r.product_name,
                 buy_at:          Math.round(r.buy_at),

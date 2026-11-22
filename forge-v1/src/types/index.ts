@@ -238,6 +238,8 @@ export interface EsiAsset {
   location_flag: string;
   item_id: number;
   is_singleton: boolean;
+  /** ESI sets this on blueprint COPIES (BPCs) — they trade by contract only and have no market price */
+  is_blueprint_copy?: boolean;
 }
 
 /** ESI industry job from /characters/{id}/industry/jobs/ */
@@ -516,7 +518,7 @@ export interface InterHubArbRow {
   sell_into:         number;   // highest buy order at dest hub
   gross_spread:      number;   // sell_into - buy_at
   gross_margin_pct:  number;
-  net_profit:        number;   // after 3.6% sales tax
+  net_profit:        number;   // after sales tax (tax_rate)
   net_margin_pct:    number;
   volume_m3:         number;   // packaged volume per unit
   isk_per_m3:        number | null;
@@ -527,6 +529,8 @@ export interface InterHubArbRow {
   sell_vol_at_buy:    number | null;
   buy_orders_at_sell: number | null;
   buy_vol_at_sell:    number | null;
+  /** sales tax the list used: the pilot's own rate when logged in, else Accounting V at the sell hub */
+  tax_rate:           number;
 }
 
 /** Haul cost result from GET /api/inter-hub-haul */
@@ -535,7 +539,9 @@ export interface InterHubHaulResult {
   method:               string;
   method_label:         string;
   service_label:        string | null;
-  haul_cost:            number;   // total ISK per unit
+  haul_cost:            number;   // ISK per unit = one trip's cost ÷ units per trip
+  trip_cost?:           number;   // one trip's cost
+  units_per_trip?:      number;   // units sharing that trip (courier limits, one day's market volume)
   effective_isk_per_m3: number;
   contracts:            number;
   jumps:                number;
@@ -1176,6 +1182,8 @@ export interface LPOffer {
   jita_buy:       number;
   revenue:        number;
   req_cost:       number;
+  /** true when a required item has no sell order at the hub — its cost (and so ISK/LP) is unknown */
+  req_unpriced?:  boolean;
   net_isk:        number;
   isk_per_lp:     number;
   volume:         number | null;

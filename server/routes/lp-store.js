@@ -7,8 +7,8 @@ const security = require('../forge-security');
 const { dbAll } = require('../lib/db');
 const { esiFetch } = require('../lib/esi');
 const { clientErrMsg } = require('../lib/http-errors');
-const { HUB_STANDINGS, HUB_STRUCTURE_FEES, REGIONS, REGION_TO_HUB } = require('../lib/hubs');
-const { getCharacterSession, calcSalesFeeRates } = require('../lib/character-session');
+const { REGIONS, REGION_TO_HUB } = require('../lib/hubs');
+const { getCharacterSession, hubFeeRates } = require('../lib/character-session');
 const { hubBooks, ensureHubPollerRunning } = require('../lib/hub-pollers');
 
 const router = express.Router();
@@ -177,7 +177,7 @@ router.get('/api/lp-store', security.apiLimiter, async (req, res) => {
         const { characterId } = await security.extractCharacterFromToken(authHeader);
         const { skillMap, standings } = getCharacterSession(characterId);
         if (Object.keys(skillMap).length > 0) {
-          const rates = calcSalesFeeRates(skillMap, standings, HUB_STANDINGS[sellRegion], HUB_STRUCTURE_FEES[sellRegion] ?? null);
+          const rates = hubFeeRates(skillMap, standings, sellRegion);
           transactionTaxRate = rates.transactionTaxRate;
           sessionCached = true;
         }
@@ -190,9 +190,13 @@ router.get('/api/lp-store', security.apiLimiter, async (req, res) => {
       const outPrice = getPrice(offer.type_id);
       const revenue  = outPrice.buy * offer.quantity * (1 - transactionTaxRate);
 
+      // A required item nobody sells at this hub has an UNKNOWN cost (never 0): the offer is flagged
+      // req_unpriced and shows no ISK/LP, and sorts after the offers that can be costed.
       let reqCost = 0;
+      let reqUnpriced = false;
       const reqDetails = reqs.map(r => {
         const p    = getPrice(r.req_type_id);
+        if (!(p.sell > 0)) reqUnpriced = true;
         const cost = p.sell * r.quantity;
         reqCost += cost;
         return { type_id: r.req_type_id, name: r.req_name || `Item ${r.req_type_id}`,
@@ -217,6 +221,7 @@ router.get('/api/lp-store', security.apiLimiter, async (req, res) => {
         jita_buy:       outPrice.buy,
         revenue,
         req_cost:       reqCost,
+        req_unpriced:   reqUnpriced,
         net_isk:        netIsk,
         isk_per_lp:     iskPerLp,
         volume:         offer.volume || null,
@@ -224,7 +229,7 @@ router.get('/api/lp-store', security.apiLimiter, async (req, res) => {
       });
     }
 
-    results.sort((a, b) => b.isk_per_lp - a.isk_per_lp);
+    results.sort((a, b) => (a.req_unpriced - b.req_unpriced) || (b.isk_per_lp - a.isk_per_lp));
 
     res.json({ offers: results.slice(offset, offset + limit), total: results.length, prices_live: pricesLive, hub_name: hubName, transaction_tax_rate: transactionTaxRate, session_cached: sessionCached });
   } catch (err) {

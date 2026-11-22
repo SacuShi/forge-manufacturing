@@ -67,7 +67,6 @@
     "POST /api/appraise  [2 handlers]",
     "POST /api/blueprint-metadata  [2 handlers]",
     "POST /api/blueprint-profits  [2 handlers]",
-    "POST /api/calculate-profitability  [2 handlers]",
     "POST /api/corp/admin/whitelist  [2 handlers]",
     "POST /api/corp/refresh  [4 handlers]",
     "POST /api/corp/setup  [2 handlers]",
@@ -84,7 +83,6 @@
     "POST /api/notify/discord/disconnect  [3 handlers]",
     "POST /api/notify/discord/test  [3 handlers]",
     "POST /api/pi-planner/plan  [2 handlers]",
-    "POST /api/production-chain  [2 handlers]",
     "POST /api/push/subscribe  [3 handlers]",
     "POST /api/push/sync-jobs  [3 handlers]",
     "POST /api/push/unsubscribe  [3 handlers]",
@@ -129,11 +127,11 @@
     },
     {
       "use": "/ errorHandler",
-      "routesBefore": 101
+      "routesBefore": 99
     },
     {
       "use": "/ errorHandler",
-      "routesBefore": 101
+      "routesBefore": 99
     }
   ],
   "orderMatters": []
