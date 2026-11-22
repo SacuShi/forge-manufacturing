@@ -48,6 +48,15 @@ const NOT_BUILT_TEXT: Record<string, string> = {
   moon:    'Not manufacturable — refined from moon ore.',
   ice:     'Not manufacturable — refined from ice.',
   salvage: 'Not manufacturable — salvaged from wrecks.',
+  'mined-ore': 'Not manufacturable — ore, mined from asteroids or moons.',
+  'mined-ice': 'Not manufacturable — ice, mined from ice fields.',
+  gas:      'Not manufacturable — gas, harvested from gas clouds.',
+  datacore: 'Not manufacturable — datacores come from research agents, LP stores and exploration sites.',
+  pi0:      'Not manufacturable — Planetary Industry raw resource (P0), extracted on planets.',
+  pi1:      'Not manufacturable — Planetary Industry item (P1), made on planets from P0.',
+  pi2:      'Not manufacturable — Planetary Industry item (P2), made on planets from P1.',
+  pi3:      'Not manufacturable — Planetary Industry item (P3), made on planets from P2.',
+  pi4:      'Not manufacturable — Planetary Industry item (P4), made on Barren or Temperate planets from P3.',
 };
 
 /** Turns a failed request into the text the panel shows. */
@@ -56,7 +65,7 @@ function describeError(raw: string): { message: string; notManufacturable: boole
   const isHtml = raw.includes('<!DOCTYPE') || raw.includes('<html');
   // 404 "No blueprint found" → nobody builds it. The server adds where raw materials come from instead.
   const notManufacturable = raw.includes('404') && raw.includes('No blueprint found');
-  const source = /\(source: (\w+)\)/.exec(raw)?.[1];
+  const source = /\(source: ([\w-]+)\)/.exec(raw)?.[1];
   const message = isHtml
     ? 'Server gateway timeout — wait a moment and try again.'
     : notManufacturable

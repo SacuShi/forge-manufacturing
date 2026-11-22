@@ -269,9 +269,10 @@ const HelpTab: FC = () => (
       <ul style={S.ul}>
         <li style={S.li}><strong>Profit/run</strong> — gross revenue minus material cost. No fees applied. Good for quick ranking.
           Revenue counts every unit one run makes (fuel blocks make 40, many reactions far more).</li>
-        <li style={S.li}>Items nobody can build say where they come from instead: minerals are <em>refined from ore</em>, isotopes
-          and other ice products <em>refined from ice</em>, moon materials <em>refined from moon ore</em>, and salvage
-          <em> salvaged from wrecks</em>.</li>
+        <li style={S.li}>Items nobody can build say where they come from instead: Planetary Industry goods show their tier
+          (<em>P0–P4</em>), minerals are <em>refined from ore</em>, isotopes and other ice products <em>refined from ice</em>,
+          moon materials <em>refined from moon ore</em>, raw ore, ice and gas say where they are mined or harvested, and salvage
+          is <em>salvaged from wrecks</em>.</li>
         <li style={S.li}>If a material has <strong>no price anywhere</strong> (nobody sells it, no trade history), the item shows no
           profit at all — FORGE won't treat an unknown cost as free.</li>
         <li style={S.li}><strong>Margin %</strong> — profit as a percentage of sell price. Higher margin = more cushion if prices move against you.</li>

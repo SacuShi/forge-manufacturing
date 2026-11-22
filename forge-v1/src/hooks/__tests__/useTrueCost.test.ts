@@ -132,6 +132,13 @@ describe('useTrueCost', () => {
     apiPost.mockRejectedValueOnce(new Error('HTTP 404: No blueprint found for product 25595 (source: salvage)'));
     const e = render();
     await waitFor(() => expect(e.result.current.error).toBe('Not manufacturable — salvaged from wrecks.'));
+    // Construction Blocks (CCP group 1034, Refined Commodities - Tier 2)
+    apiPost.mockRejectedValueOnce(new Error('HTTP 404: No blueprint found for product 3828 (source: pi2)'));
+    const p = render();
+    await waitFor(() => expect(p.result.current.error).toBe('Not manufacturable — Planetary Industry item (P2), made on planets from P1.'));
+    apiPost.mockRejectedValueOnce(new Error('HTTP 404: No blueprint found for product 1230 (source: mined-ore)'));
+    const o = render();
+    await waitFor(() => expect(o.result.current.error).toMatch(/ore, mined from asteroids/));
   });
 
   it('clears everything when the selection is removed', async () => {

@@ -20,9 +20,7 @@ const {
   blueprintMaterialsCache,
 } = market;
 
-// Materials nobody manufactures, by CCP item group: 18 Mineral, 427 Moon Materials, 423 Ice Product,
-// 754 Salvaged Materials, 966 Ancient Salvage.
-const NON_BUILT_SOURCES = { 18: 'ore', 427: 'moon', 423: 'ice', 754: 'salvage', 966: 'salvage' };
+const { nonBuiltSource } = require('../lib/item-origin');
 
 const router = express.Router();
 
@@ -80,8 +78,8 @@ router.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, asyn
     );
     if (!blueprint) {
       // Say where a raw material comes from instead (CCP group ids, checked against ESI /universe/groups/)
-      const item = await dbGet('SELECT group_id FROM items WHERE type_id = ?', [product_id]);
-      const source = NON_BUILT_SOURCES[item?.group_id] || null;
+      const item = await dbGet('SELECT group_id, pi_tier, category_name FROM items WHERE type_id = ?', [product_id]);
+      const source = nonBuiltSource(item);
       return res.status(404).json({ error: `No blueprint found for product ${product_id}${source ? ` (source: ${source})` : ''}`, source });
     }
     // Reaction formulas (activity 9) run in refineries, not engineering complexes: the structure's
