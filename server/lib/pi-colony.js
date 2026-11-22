@@ -11,15 +11,39 @@ function pinSchematicId(pin) {
   return Number.isInteger(id) && id > 0 ? id : null;
 }
 
-// Gives every factory pin a `factory_details.schematic_id`, whichever field ESI used, so all code that reads
-// `factory_details` (server and PI tab) sees the factories. Returns new pin objects; the input is not changed.
+// An extractor's program times. ESI's spec puts expiry_time / install_time / last_cycle_start on the PIN, not in
+// extractor_details (which only has cycle_time, heads, head_radius, product_type_id, qty_per_cycle). The PI tab
+// read them from extractor_details, so every working extractor showed "Not running" (Nov 2026).
+// An extractor with no expiry_time has no program installed.
+const EXTRACTOR_TIME_FIELDS = ['expiry_time', 'install_time', 'last_cycle_start'];
+
+// Returns new pin objects (the input is not changed) so that everything reading the nested fields sees them:
+//  - every factory pin gets `factory_details.schematic_id`, whichever field ESI used;
+//  - every extractor pin gets its program times copied into `extractor_details` as well.
 function normalisePins(pins) {
   if (!Array.isArray(pins)) return [];
   return pins.map(pin => {
+    let out = pin;
     const sid = pinSchematicId(pin);
-    if (!sid || pin.factory_details?.schematic_id === sid) return pin;
-    return { ...pin, factory_details: { ...(pin.factory_details || {}), schematic_id: sid } };
+    if (sid && pin.factory_details?.schematic_id !== sid) {
+      out = { ...out, factory_details: { ...(pin.factory_details || {}), schematic_id: sid } };
+    }
+    if (pin.extractor_details) {
+      const times = {};
+      for (const f of EXTRACTOR_TIME_FIELDS) {
+        if (pin[f] && !pin.extractor_details[f]) times[f] = pin[f];
+      }
+      if (Object.keys(times).length) out = { ...out, extractor_details: { ...pin.extractor_details, ...times } };
+    }
+    return out;
   });
+}
+
+// When an extractor's program ends (ms), from the pin or (older shape) extractor_details. null = no program.
+function extractorExpiry(pin) {
+  const iso = pin?.expiry_time ?? pin?.extractor_details?.expiry_time;
+  const t = iso ? Date.parse(iso) : NaN;
+  return Number.isFinite(t) ? t : null;
 }
 
 const ROMAN = ['', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII', 'XIII', 'XIV',
@@ -33,6 +57,108 @@ function planetDisplayName(systemName, planetIndex) {
 
 function tierLabel(tier) {
   return Number.isInteger(tier) ? `P${tier}` : null;
+}
+
+// ── PI maths (kept identical to forge-v1/src/utils/piMath.ts; both are tested against the same numbers) ───────────
+
+// CCP's published extractor formula (developers.eveonline.com/docs/guides/pi/, "Extraction calculation").
+// Cycle i yields barWidth × decay × (1 + 0.8 × sinStuff), with barWidth = cycleTime / 900 s. ESI's qty_per_cycle is
+// the 15-minute base value, so a 30-minute cycle starts at about twice it.
+const PI_DECAY_FACTOR = 0.012; // dogma attribute 1683 default
+const PI_NOISE_FACTOR = 0.8;   // dogma attribute 1687 default
+
+function extractorCycleOutputs(qtyPerCycle, cycleTimeSec, installIso, expiryIso) {
+  if (!installIso || !expiryIso || !(qtyPerCycle > 0) || !(cycleTimeSec > 0)) return [];
+  const numCycles = Math.floor((Date.parse(expiryIso) - Date.parse(installIso)) / 1000 / cycleTimeSec);
+  if (!(numCycles > 0)) return [];
+  const barWidth = cycleTimeSec / 900;
+  const phaseShift = Math.pow(qtyPerCycle, 0.7);
+  const out = [];
+  for (let i = 0; i < numCycles; i++) {
+    const t = (i + 0.5) * barWidth;
+    const decayValue = qtyPerCycle / (1 + t * PI_DECAY_FACTOR);
+    const sinA = Math.cos(phaseShift + t * (1 / 12));
+    const sinB = Math.cos(phaseShift / 2 + t * 0.2);
+    const sinC = Math.cos(t * 0.5);
+    const sinStuff = Math.max((sinA + sinB + sinC) / 3, 0);
+    out.push(barWidth * decayValue * (1 + PI_NOISE_FACTOR * sinStuff));
+  }
+  return out;
+}
+
+// Average units/day over the whole program, or null when the program window is unknown.
+function extractorUnitsPerDay(qtyPerCycle, cycleTimeSec, installIso, expiryIso) {
+  const cycles = extractorCycleOutputs(qtyPerCycle, cycleTimeSec, installIso, expiryIso);
+  if (!cycles.length) return null;
+  return (cycles.reduce((s, v) => s + v, 0) / cycles.length) * (86400 / cycleTimeSec);
+}
+
+// What one colony makes and uses per day, by type: Map typeId → { made, used }.
+// Running extractors only; factories assumed to run full time (EVE doesn't report factory state).
+// schematicInfo: { [schematicId]: { outputTypeId, outputQty, cycleTime, inputs: [{ typeId, qty }] } } from CCP data.
+function colonyDailyFlows(colony, { schematicInfo = {}, now = Date.now() } = {}) {
+  const flows = new Map();
+  const add = (tid, key, n) => {
+    if (!tid || !(n > 0)) return;
+    const f = flows.get(tid) || { made: 0, used: 0 };
+    f[key] += n;
+    flows.set(tid, f);
+  };
+  for (const pin of (colony?.pins || [])) {
+    const ex = pin.extractor_details;
+    if (ex?.product_type_id) {
+      const expiry = extractorExpiry(pin);
+      if (expiry === null || expiry <= now) continue; // no program, or finished: extracting nothing
+      const install = pin.install_time ?? ex.install_time;
+      add(ex.product_type_id, 'made', extractorUnitsPerDay(ex.qty_per_cycle, ex.cycle_time, install, pin.expiry_time ?? ex.expiry_time) ?? 0);
+      continue;
+    }
+    const sid = pinSchematicId(pin);
+    const s = sid ? schematicInfo[sid] : null;
+    if (!s || !(s.cycleTime > 0)) continue;
+    const runsPerDay = 86400 / s.cycleTime;
+    add(s.outputTypeId, 'made', runsPerDay * s.outputQty);
+    for (const inp of (s.inputs || [])) add(inp.typeId, 'used', runsPerDay * inp.qty);
+  }
+  return flows;
+}
+
+// Ranks PI factory recipes by net ISK/day for ONE factory running full time.
+// recipes: [{ typeId, name, tier, outputQty, cycleTime, inputs: [{ typeId, qty, tier }] | null (unknown) }]
+// prices: { typeId: { sell, buy } }, baseValue: { tier: ISK } (POCO base), taxRate: 0..1.
+// net = output × sell − inputs × their sell − export tax (output) − import tax (inputs, half the export rate).
+function rankPiRecipes({ recipes, prices = {}, baseValue = {}, taxRate = 0.1 }) {
+  return recipes.map(r => {
+    const runsPerDay  = r.cycleTime > 0 ? 86400 / r.cycleTime : 0;
+    const unitsPerDay = runsPerDay * r.outputQty;
+    const sell        = prices[r.typeId]?.sell ?? 0;
+    const buy         = prices[r.typeId]?.buy  ?? 0;
+    const grossPerDay = unitsPerDay * sell;
+    const exportTax   = unitsPerDay * (baseValue[r.tier] ?? 0) * taxRate;
+    let inputCostPerDay = null;
+    let importTax       = 0;
+    let inputsPriced    = true;
+    if (Array.isArray(r.inputs)) {
+      inputCostPerDay = 0;
+      for (const inp of r.inputs) {
+        const perDay = runsPerDay * inp.qty;
+        const inSell = prices[inp.typeId]?.sell ?? 0;
+        if (!(inSell > 0)) inputsPriced = false;
+        inputCostPerDay += perDay * inSell;
+        importTax       += perDay * (baseValue[inp.tier] ?? 0) * taxRate * 0.5;
+      }
+    }
+    const taxPerDay = exportTax + importTax;
+    return {
+      typeId: r.typeId, name: r.name, tier: r.tier,
+      unitsPerDay: Math.round(unitsPerDay),
+      sell, buy, grossPerDay,
+      inputCostPerDay,                       // null = recipe inputs unknown
+      inputsPriced,                          // false = an input has no Jita price, so net is overstated
+      taxPerDay,
+      netPerDay: grossPerDay - (inputCostPerDay ?? 0) - taxPerDay,
+    };
+  }).sort((a, b) => b.netPerDay - a.netPerDay);
 }
 
 // One colony → { planet, type, ccu_level, extracting, producing, stored, ... }.
@@ -56,12 +182,19 @@ function summariseColony(colony, lookups = {}) {
     const tid = pin.extractor_details?.product_type_id;
     if (!tid) continue;
     const e = extracting.get(tid) || {
-      product: nameOf(tid), tier: tierOf(tid) || 'P0', extractors: 0, running: 0, qty_per_cycle: 0, ...priceOf(tid),
+      product: nameOf(tid), tier: tierOf(tid) || 'P0', extractors: 0, running: 0, expired: 0, no_program: 0,
+      program_ends_in_hours: null, qty_per_cycle: 0, ...priceOf(tid),
     };
     e.extractors += 1;
     e.qty_per_cycle += pin.extractor_details.qty_per_cycle || 0;
-    const expiry = pin.expiry_time ? Date.parse(pin.expiry_time) : NaN;
-    if (Number.isFinite(expiry) && expiry > now) e.running += 1;
+    const expiry = extractorExpiry(pin);
+    if (expiry === null) e.no_program += 1;
+    else if (expiry <= now) e.expired += 1;
+    else {
+      e.running += 1;
+      const hours = Math.round((expiry - now) / 360_000) / 10; // one decimal
+      if (e.program_ends_in_hours === null || hours < e.program_ends_in_hours) e.program_ends_in_hours = hours;
+    }
     extracting.set(tid, e);
   }
 
@@ -96,6 +229,19 @@ function summariseColony(colony, lookups = {}) {
 
   const byTierThenName = (a, b) => String(a.tier).localeCompare(String(b.tier)) || a.product.localeCompare(b.product);
 
+  // Daily balance: what the colony makes, what its own factories use, and what is left over (or short).
+  // value_per_day = net × Jita sell, before POCO tax (the player's tax rate isn't known here).
+  const flows = colonyDailyFlows(colony, { schematicInfo: lookups.schematicInfo || {}, now });
+  for (const [tid, e] of extracting) e.est_per_day = Math.round(flows.get(tid)?.made || 0);
+  const dailyFlow = [...flows.entries()].map(([tid, f]) => {
+    const net = f.made - f.used;
+    return {
+      product: nameOf(tid), tier: tierOf(tid),
+      made_per_day: Math.round(f.made), used_per_day: Math.round(f.used), net_per_day: Math.round(net),
+      value_per_day: Math.round(net * (prices[tid]?.sell || 0)),
+    };
+  }).sort(byTierThenName);
+
   return {
     planet:      planetNames[colony.planet_id] || colony.planet_name || `Planet ${colony.planet_id}`,
     planet_id:   colony.planet_id,
@@ -104,6 +250,8 @@ function summariseColony(colony, lookups = {}) {
     num_pins:    pins.length || colony.num_pins || 0,
     extracting:  [...extracting.values()].sort(byTierThenName),
     producing:   [...producing.values()].sort(byTierThenName),
+    daily_flow:  dailyFlow,
+    est_value_per_day: dailyFlow.reduce((s, l) => s + l.value_per_day, 0),
     stored:      [...stored.values()].sort((a, b) => b.amount - a.amount).slice(0, 12),
     last_update: colony.last_update ?? null,
     ...(colony.error ? { error: 'Layout could not be read from ESI for this planet' } : {}),
@@ -119,6 +267,7 @@ function buildPiSummary(piData, { maxColonies = null, now } = {}) {
     factoryOutputs: piData?.factoryOutputs || {},
     prices:         piData?.prices         || {},
     planetNames:    piData?.planetNames    || {},
+    schematicInfo:  piData?.schematicInfo  || {},
     now,
   };
   const summary = colonies.map(c => summariseColony(c, lookups));
@@ -134,13 +283,24 @@ function buildPiSummary(piData, { maxColonies = null, now } = {}) {
     ...(Number.isInteger(maxColonies) ? { max_colonies: maxColonies, free_colony_slots: Math.max(0, maxColonies - summary.length) } : {}),
     factory_count: factoryTotal,
     highest_tier_produced: highestTier,
+    est_value_per_day: summary.reduce((s, c) => s + c.est_value_per_day, 0),
     colonies: summary,
-    note: 'This is the colony layout exactly as EVE reports it. extracting = extractor heads pulling P0 (running = extractor programs not yet expired). ' +
-      'producing = what the factories on that planet make (P1/P2/P3/P4) with how many factories make it. stored = what is sitting in storage, ' +
+    note: 'This is the colony layout exactly as EVE reports it. extracting = extractor heads pulling P0: running = programs still going ' +
+      '(est_per_day uses CCP\'s extractor decay formula over the whole program). daily_flow = per product per day: made, used by that ' +
+      'planet\'s own factories, and net (negative = must be shipped in from another planet or bought). value_per_day = net × Jita sell, ' +
+      'before POCO tax; est_value_per_day adds these up, so P0 turned into P1 on the same planet is not counted twice. Factory figures ' +
+      'assume every factory runs full time with its inputs supplied. extracting status: running = programs still going ' +
+      '(program_ends_in_hours = the soonest one to finish), expired = program finished and needs restarting, no_program = no program set. ' +
+      'producing = what the factories on that planet make (P1/P2/P3/P4) with how many factories make it. EVE does NOT report whether a ' +
+      'factory is mid-cycle or waiting for input, so never say factories are idle, stopped or not running; a factory listed under producing ' +
+      'is installed and set to make that product. Only extractor programs have a running/expired status. stored = what is sitting in storage, ' +
       'launchpads and the command centre. sell/buy are current Jita prices per unit. EVE only refreshes this data when the player opens ' +
       'the colony in game (see last_update). Describe the player\'s setup from these fields; do not say a planet has no factories if producing lists any. ' +
       'If max_colonies is given, it already accounts for the Interplanetary Consolidation skill. Do not suggest more planets when free_colony_slots is 0.',
   };
 }
 
-module.exports = { pinSchematicId, normalisePins, planetDisplayName, summariseColony, buildPiSummary };
+module.exports = {
+  pinSchematicId, normalisePins, extractorExpiry, planetDisplayName, summariseColony, buildPiSummary,
+  extractorCycleOutputs, extractorUnitsPerDay, colonyDailyFlows, rankPiRecipes,
+};

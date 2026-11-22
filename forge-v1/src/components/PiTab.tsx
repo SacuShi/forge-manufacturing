@@ -8,6 +8,7 @@ import { formatISK } from '../utils/format';
 import { itemIconUrl } from '../utils/icons';
 import type { PiCharacter } from '../types';
 import { usePocoTaxRate } from '../hooks/usePocoTaxRate';
+import { colonyDailyFlows, valueDailyFlows, extractorUnitsPerDay, type SchematicRecipe, type ValueLine } from '../utils/piMath';
 import ForgeWait       from './ForgeWait';
 import TickerPinButton from './TickerPinButton';
 
@@ -17,8 +18,10 @@ interface ExtractorDetails {
   product_type_id?: number;
   qty_per_cycle?:   number;
   cycle_time?:      number;
+  // ESI puts these two on the PIN, not here; the FORGE server (lib/pi-colony.js normalisePins) copies them in so
+  // this tab can read them from extractor_details. Missing expiry_time = no extraction program installed.
   expiry_time?:     string;
-  install_time?:    string; // ESI returns this on extractor_details; needed for the decay curve below
+  install_time?:    string; // needed for the decay curve below
 }
 interface FactoryDetails { schematic_id: number; }
 interface EsiPin {
@@ -45,6 +48,8 @@ interface PiData {
   productNames:   Record<number, ProductInfo>;
   schematics:     Record<number, SchematicInfo>;
   systemNames:    Record<number, string>;
+  planetNames?:   Record<number, string>;           // planetId → in-game name, e.g. "TTP-2B VI"
+  schematicInfo?: Record<number, SchematicRecipe>;  // schematicId → CCP recipe (output, cycle, inputs)
   prices:         Record<number, { sell: number; buy: number }>;
   factoryOutputs: Record<number, number>;           // schematicId → output typeId
   bpCrossRef:     Record<number, BpRef[]>;          // piTypeId → owned BPs that use it
@@ -58,6 +63,8 @@ interface MarketRanking {
   unitsPerDay: number;
   sell:        number;
   grossPerDay: number;
+  inputCostPerDay?: number | null;  // null = recipe inputs unknown (older server / SDE not imported)
+  inputsPriced?:    boolean;        // false = an input has no Jita price
   taxPerDay:   number;
   netPerDay:   number;
 }
@@ -103,10 +110,6 @@ const PI_TIER_COLORS: Record<number, string> = {
   3: 'var(--color-pi-t3)',
   4: 'var(--color-pi-t4)',
 };
-// CCP-fixed base values (ISK/unit) used for POCO export tax calculation
-const PI_BASE_VALUE: Record<number, number> = { 0: 5, 1: 400, 2: 7200, 3: 60000, 4: 1200000 };
-// Fixed factory outputs per cycle (EVE game mechanic)
-const PI_FACTORY_OUTPUT_QTY: Record<number, number> = { 1: 20, 2: 5, 3: 3, 4: 1 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -133,116 +136,20 @@ function fmtQty(n: number): string {
   return Math.round(n).toLocaleString();
 }
 
-// Per-output daily value line (extractor or factory)
-interface YieldLine {
-  label:       string;
-  typeId:      number;
-  tier:        number;
-  unitsPerDay: number;
-  grossISK:    number;
-  taxISK:      number;
-  netISK:      number;
-  hasPrices:   boolean;
-}
+// One line of a colony's daily balance, ready to show.
+interface YieldLine extends ValueLine { label: string; }
 
 /**
- * Average extractor output per cycle over its full program (install → expiry),
- * per CCP's own published decay formula (developers.eveonline.com/docs/guides/pi/):
- *   decayValue(t) = qtyPerCycle / (1 + t × decayFactor)     [decayFactor = 0.012]
- * where t counts elapsed 15-minute (900s) units since the program started. CCP's
- * reference implementation also layers a bounded sinusoidal "noise" term on top
- * (for the in-game bar-graph's per-cycle jitter) — deliberately omitted here since
- * we want the program's AVERAGE rate for an "Est. daily value" stat, not a specific
- * cycle's instantaneous value, and the noise term's long-run contribution to that
- * average is not a simple constant (it depends on qtyPerCycle via a phase shift).
- * Falls back to the flat, undecayed qtyPerCycle if install_time/expiry_time aren't
- * available (matches the previous behaviour) rather than guessing a duration.
+ * A colony's daily balance, valued (see utils/piMath.ts). Extractors use CCP's formula over the program; factories
+ * use CCP's recipe (output, cycle time and inputs) and are assumed to run full time. Each product is valued once, on
+ * what is left over after this colony's own factories have used it: P0 made into P1 here is not counted twice. A
+ * shortfall (an input shipped in from another planet) counts against this colony, so the portfolio total nets out.
  */
-function extractorAvgPerCycle(
-  qtyPerCycle: number, cycleTimeSec: number,
-  installTime?: string, expiryTime?: string,
-): number {
-  if (!installTime || !expiryTime) return qtyPerCycle; // no program window known — can't decay-adjust
-  const durationSec = (new Date(expiryTime).getTime() - new Date(installTime).getTime()) / 1000;
-  const numCycles = Math.floor(durationSec / cycleTimeSec);
-  if (!(numCycles > 0)) return qtyPerCycle;
-
-  const DECAY_FACTOR = 0.012; // dogma attribute 1683 default, per CCP's dev docs
-  const barWidth = cycleTimeSec / 900;
-  let total = 0;
-  for (let i = 0; i < numCycles; i++) {
-    const t = (i + 0.5) * barWidth;
-    total += qtyPerCycle / (1 + t * DECAY_FACTOR);
-  }
-  return total / numCycles;
-}
-
-/**
- * Computes estimated daily ISK yield for one colony.
- *
- * Takes a pre-built `grouped` array (from groupFactories) so the caller can share
- * that result with the factory-display UI without rebuilding it a second time here.
- *
- * EVE PI note: extractor output is variable (depends on resource depletion); factory
- * output is fixed by CCP (PI_FACTORY_OUTPUT_QTY).  Both are converted to per-day
- * units then multiplied by Jita sell price.  POCO export tax is subtracted (10% of
- * CCP's base value per unit — different from the Jita market price).
- */
-function colonyYield(
-  colony:      Colony,
-  data:        PiData,
-  grouped:     Array<{ schematicId: number; count: number }>,
-  pocoTaxRate: number,
-): YieldLine[] {
-  const { productNames, schematics, prices, factoryOutputs } = data;
-  const lines: YieldLine[] = [];
-
-  // Extractors — each ECU (Extractor Control Unit) harvests one raw resource (P0).
-  for (const pin of colony.pins) {
-    const ex = pin.extractor_details;
-    if (!ex?.product_type_id || !ex.qty_per_cycle || !ex.cycle_time) continue;
-    // Skip extractors that have already stopped (expiry_time is in the past).
-    if (ex.expiry_time && new Date(ex.expiry_time).getTime() <= Date.now()) continue;
-
-    const typeId      = ex.product_type_id;
-    const tier        = productNames[typeId]?.piTier ?? 0;
-    const avgPerCycle = extractorAvgPerCycle(ex.qty_per_cycle, ex.cycle_time, ex.install_time, ex.expiry_time);
-    const unitsPerDay = avgPerCycle * (86400 / ex.cycle_time);
-    const sell        = prices[typeId]?.sell ?? 0;
-    const grossISK    = unitsPerDay * sell;
-    const taxISK      = unitsPerDay * (PI_BASE_VALUE[tier] ?? 5) * pocoTaxRate;
-    lines.push({
-      label: productNames[typeId]?.name ?? `Type ${typeId}`,
-      typeId, tier, unitsPerDay: Math.round(unitsPerDay),
-      grossISK, taxISK, netISK: grossISK - taxISK,
-      hasPrices: sell > 0,
-    });
-  }
-
-  // Factories — use the pre-built grouped array passed in by the caller.
-  // `grouped` is already produced by groupFactories() for the colony card display,
-  // so we reuse it here rather than iterating colony.pins a second time.
-  for (const { schematicId: sid, count } of grouped) {
-    const sch    = schematics[sid];
-    const typeId = factoryOutputs[sid];
-    if (!sch || !typeId) continue;
-    const tier       = productNames[typeId]?.piTier ?? null;
-    if (tier == null) continue;
-    // outputQty: units produced per cycle — fixed by CCP (see PI_FACTORY_OUTPUT_QTY constant)
-    const outputQty   = PI_FACTORY_OUTPUT_QTY[tier] ?? 0;
-    const unitsPerDay = count * outputQty * (86400 / sch.cycleTime);
-    const sell        = prices[typeId]?.sell ?? 0;
-    const grossISK    = unitsPerDay * sell;
-    const taxISK      = unitsPerDay * (PI_BASE_VALUE[tier] ?? 400) * pocoTaxRate;
-    lines.push({
-      label: productNames[typeId]?.name ?? sch.name,
-      typeId, tier, unitsPerDay: Math.round(unitsPerDay),
-      grossISK, taxISK, netISK: grossISK - taxISK,
-      hasPrices: sell > 0,
-    });
-  }
-
-  return lines;
+function colonyYield(colony: Colony, data: PiData, pocoTaxRate: number): YieldLine[] {
+  const { productNames, prices } = data;
+  const flows = colonyDailyFlows(colony.pins, data.schematicInfo ?? {});
+  return valueDailyFlows(flows, t => productNames[t]?.piTier ?? 0, t => prices[t]?.sell ?? 0, pocoTaxRate)
+    .map(l => ({ ...l, label: productNames[l.typeId]?.name ?? `Type ${l.typeId}` }));
 }
 
 function groupFactories(pins: EsiPin[]): Array<{ schematicId: number; count: number }> {
@@ -289,7 +196,7 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
       if (cancelled) return;   // a newer character set superseded this request
       const merged: PiData = {
         colonies: [], productNames: {}, schematics: {},
-        systemNames: {}, prices: {}, factoryOutputs: {}, bpCrossRef: {},
+        systemNames: {}, planetNames: {}, schematicInfo: {}, prices: {}, factoryOutputs: {}, bpCrossRef: {},
       };
       const failed: string[] = [];
 
@@ -301,6 +208,8 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
           Object.assign(merged.productNames,   d.productNames);
           Object.assign(merged.schematics,     d.schematics);
           Object.assign(merged.systemNames,    d.systemNames);
+          Object.assign(merged.planetNames!,   d.planetNames ?? {});
+          Object.assign(merged.schematicInfo!, d.schematicInfo ?? {});
           Object.assign(merged.prices,         d.prices);
           Object.assign(merged.factoryOutputs, d.factoryOutputs);
           // Deduplicate bpCrossRef entries across characters
@@ -352,7 +261,7 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
   // (hooks must be called the same number of times on every render).
   // When data is null (loading / error), this safely returns an empty array.
   const allYieldLines = useMemo(
-    () => !data ? [] : data.colonies.flatMap(c => colonyYield(c, data, groupFactories(c.pins), pocoTaxRate)),
+    () => !data ? [] : data.colonies.flatMap(c => colonyYield(c, data, pocoTaxRate)),
     [data, pocoTaxRate],
   );
 
@@ -361,7 +270,7 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
   if (error)                return <div className="pi-state-msg pi-error-msg">{error}</div>;
   if (!data)                return null;
 
-  const { colonies, productNames, schematics, systemNames, prices, factoryOutputs, bpCrossRef } = data;
+  const { colonies, productNames, schematics, systemNames, planetNames, prices, factoryOutputs, bpCrossRef } = data;
   const multiChar = piCharacters.length > 1;
 
   if (colonies.length === 0) {
@@ -376,7 +285,7 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
   const totalGross    = allYieldLines.reduce((s, l) => s + l.grossISK, 0);
   const totalTax      = allYieldLines.reduce((s, l) => s + l.taxISK,   0);
   const totalNet      = totalGross - totalTax;
-  const hasPrices     = allYieldLines.some(l => l.hasPrices);
+  const hasPrices     = allYieldLines.some(l => l.hasPrice);
 
   // Phase 3: set of typeIds the user is currently producing in factories (for ranking highlight)
   const runningTypeIds = new Set<number>(Object.values(factoryOutputs).filter(Boolean));
@@ -447,14 +356,16 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
       {/* ── Colony cards ── */}
       <div className="pi-colony-grid">
         {colonies.map(colony => {
-          const sysName   = systemNames[colony.solar_system_id] ?? `System ${colony.solar_system_id}`;
+          // The planet's in-game name ("TTP-2B VI"); just the system name if the server couldn't work it out.
+          const sysName   = planetNames?.[colony.planet_id]
+            ?? systemNames[colony.solar_system_id] ?? `System ${colony.solar_system_id}`;
           const color     = PLANET_COLORS[colony.planet_type]   ?? '#888';
           const typeLabel = PLANET_LABELS[colony.planet_type]   ?? colony.planet_type;
           const extractors = colony.pins.filter(p => p.extractor_details);
           const grouped    = groupFactories(colony.pins);
-          const yieldLines = colonyYield(colony, data, grouped, pocoTaxRate);
+          const yieldLines = colonyYield(colony, data, pocoTaxRate);
           const colonyNet  = yieldLines.reduce((s, l) => s + l.netISK, 0);
-          const colonyHasPrices = yieldLines.some(l => l.hasPrices);
+          const colonyHasPrices = yieldLines.some(l => l.hasPrice);
 
           const worstUrgency: Urgency = (() => {
             for (const p of extractors) {
@@ -492,12 +403,12 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
                     const qty      = p.extractor_details!.qty_per_cycle;
                     const ct       = p.extractor_details!.cycle_time;
                     const { label: countdown, urgency } = formatCountdown(p.extractor_details!.expiry_time);
-                    // Decay-adjusted average, matching colonyYield()'s figure — was a flat
-                    // qty×cycles/day estimate that ignored CCP's per-cycle output decay,
-                    // overstating this the longer the extraction program runs.
-                    const perDay   = qty && ct
-                      ? Math.round(extractorAvgPerCycle(qty, ct, p.extractor_details!.install_time, p.extractor_details!.expiry_time) * 86400 / ct)
+                    // Average over the whole program, by CCP's extractor formula (utils/piMath.ts) — the same
+                    // figure colonyYield() uses. Only shown while a program is running.
+                    const ud       = qty && ct && urgency !== 'expired' && urgency !== 'idle'
+                      ? extractorUnitsPerDay(qty, ct, p.extractor_details!.install_time, p.extractor_details!.expiry_time)
                       : null;
+                    const perDay   = ud != null ? Math.round(ud) : null;
 
                     return (
                       <div key={p.pin_id} className="pi-extractor-row">
@@ -551,16 +462,29 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
               {yieldLines.length > 0 && (
                 <div className="pi-section pi-valuation">
                   <div className="pi-section-label">Est. daily value</div>
-                  {yieldLines.map((line, i) => (
-                    <div key={i} className="pi-val-row">
-                      <span className="pi-val-label">{line.label}</span>
-                      <span className="pi-val-qty">{fmtQty(line.unitsPerDay)}/day</span>
-                      {line.hasPrices
-                        ? <span className="pi-val-isk">{formatISK(line.netISK)} ISK</span>
-                        : <span className="pi-val-nodata">no price</span>
-                      }
-                    </div>
-                  ))}
+                  {yieldLines.map(line => {
+                    // All of it used by this planet's own factories (within 1%): worth nothing on its own here.
+                    const allUsedHere = line.used > 0 && Math.abs(line.net) <= Math.max(1, line.made * 0.01);
+                    const shortfall   = !allUsedHere && line.net < 0;
+                    const title = `Made ${fmtQty(line.made)}/day · used by this planet's factories ${fmtQty(line.used)}/day`;
+                    return (
+                      <div key={line.typeId} className="pi-val-row" title={title}>
+                        <span className="pi-val-label">{line.label}</span>
+                        <span className="pi-val-qty">
+                          {allUsedHere
+                            ? `${fmtQty(line.made)}/day · all used here`
+                            : shortfall
+                              ? `needs ${fmtQty(-line.net)}/day shipped in`
+                              : `${fmtQty(line.net)}/day${line.used > 0 ? ' spare' : ''}`}
+                        </span>
+                        {allUsedHere
+                          ? <span className="pi-val-nodata">—</span>
+                          : line.hasPrice
+                            ? <span className={`pi-val-isk${line.netISK < 0 ? ' pi-val-neg' : ''}`}>{formatISK(line.netISK)} ISK</span>
+                            : <span className="pi-val-nodata">no price</span>}
+                      </div>
+                    );
+                  })}
                   <div className="pi-val-total">
                     <span>Colony net</span>
                     <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -638,7 +562,7 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
         <div className="pi-rankings">
           <div className="pi-rankings-header">
             <span className="pi-rankings-title">Schematic Market Rankings</span>
-            <span className="pi-rankings-sub">net ISK/day per single factory slot · Jita sell · {Math.round(pocoTaxRate * 100)}% POCO tax</span>
+            <span className="pi-rankings-sub">net ISK/day for one factory running full time · output minus inputs at Jita sell · {Math.round(pocoTaxRate * 100)}% POCO tax out, half on inputs in</span>
           </div>
           <div className="pi-rankings-table">
             <div className="pi-rankings-thead">
@@ -647,6 +571,7 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
               <span className="pi-ranktier-col">Tier</span>
               <span className="pi-rankqty-col">/day</span>
               <span className="pi-rankgross-col">Gross</span>
+              <span className="pi-rankinput-col">Inputs</span>
               <span className="pi-ranktax-col">Tax</span>
               <span className="pi-ranknet-col">Net ISK/day</span>
             </div>
@@ -662,8 +587,11 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
                 </span>
                 <span className="pi-rankqty-col">{fmtQty(r.unitsPerDay)}</span>
                 <span className="pi-rankgross-col">{r.sell > 0 ? formatISK(r.grossPerDay) : '—'}</span>
+                <span className="pi-rankinput-col" title={r.inputCostPerDay == null ? 'Recipe inputs unknown — not subtracted' : r.inputsPriced === false ? 'An input has no Jita price — net is overstated' : undefined}>
+                  {r.inputCostPerDay == null ? '?' : `−${formatISK(r.inputCostPerDay)}${r.inputsPriced === false ? '*' : ''}`}
+                </span>
                 <span className="pi-ranktax-col">{r.sell > 0 ? `−${formatISK(r.taxPerDay)}` : '—'}</span>
-                <span className="pi-ranknet-col">{r.sell > 0 ? formatISK(r.netPerDay) : <span className="pi-val-nodata">no price</span>}</span>
+                <span className={`pi-ranknet-col${r.netPerDay < 0 ? ' pi-ranknet-neg' : ''}`}>{r.sell > 0 ? formatISK(r.netPerDay) : <span className="pi-val-nodata">no price</span>}</span>
               </div>
             ))}
           </div>
@@ -719,7 +647,8 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
       )}
 
       <p className="pi-footnote">
-        Colony layouts cached ~10 min by ESI · Prices: Jita sell · POCO export tax {Math.round(pocoTaxRate * 100)}% (your rate, set above) · Self-contained planets (extractor + factory) show both P0 and processed values separately
+        Colony layouts cached ~10 min by ESI · Prices: Jita sell · POCO tax {Math.round(pocoTaxRate * 100)}% export, half that on imports (your rate, set above) ·
+        Extraction uses CCP's decay formula over each program · Factories assumed to run full time · Each product is valued once, on what's left after this planet's own factories use it; inputs shipped in from other planets count against the planet that uses them
       </p>
     </div>
   );

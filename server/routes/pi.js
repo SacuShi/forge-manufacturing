@@ -7,7 +7,7 @@ const security = require('../forge-security');
 const { dbAll, SQL_VARIABLE_LIMIT } = require('../lib/db');
 const { esiFetch } = require('../lib/esi');
 const { getCached } = require('../lib/cache');
-const { normalisePins, pinSchematicId, planetDisplayName } = require('../lib/pi-colony');
+const { normalisePins, pinSchematicId, planetDisplayName, rankPiRecipes } = require('../lib/pi-colony');
 
 const router = express.Router();
 
@@ -20,12 +20,14 @@ const piMarketCache  = new Map();
 // PI schematic lookup cache: schematicId -> resolved schematic object
 const schematicMemo  = new Map();
 
-// These are used in /api/pi/market to estimate how much a factory produces per day.
+// POCO tax base value per unit by tier (CCP's customs values); export tax = base × rate, import tax = half that.
 const PI_POCO_BASE_VALUE    = { 0: 5, 1: 400, 2: 7200, 3: 60000, 4: 1200000 }; // ISK/unit
 
+// Fallbacks ONLY for a schematic missing from the SDE tables (pi_schematics / pi_schematic_materials), which are
+// the source of truth. CCP's data (checked Nov 2026): P1 = 20 per 30 min; P2 = 5, P3 = 3, P4 = 1 per HOUR.
+// (P4 was wrongly 86400 s here, so P4 factories were ranked at 1/24th of their real output.)
 const PI_FACTORY_OUTPUT_QTY = { 1: 20, 2: 5, 3: 3, 4: 1 };                      // units/cycle
-
-const PI_FACTORY_CYCLE_TIME = { 1: 1800, 2: 3600, 3: 3600, 4: 86400 };           // seconds/cycle
+const PI_FACTORY_CYCLE_TIME = { 1: 1800, 2: 3600, 3: 3600, 4: 3600 };            // seconds/cycle
 
 /**
  * Fetches the name and cycle time for a PI schematic from ESI and caches the result.
@@ -168,16 +170,35 @@ async function resolvePiSchematicsAndOutputs({ schematicIds, extractorProdIds })
   // any schematic not found there falls back to a name match, since EVE names each PI schematic after
   // its output product (e.g. "Coolant" → Coolant item).
   const factoryOutputs = {}; // schematicId → output type_id
+  // schematicId → { outputTypeId, outputQty, cycleTime, inputs: [{ typeId, qty }] } — CCP's recipe, for the daily maths
+  const schematicInfo  = {};
+  const inputTypeIds   = new Set();
   const allPiTypeIds   = new Set(extractorProdIds);
   const sids = [...schematicIds].filter(Number.isInteger).slice(0, SQL_VARIABLE_LIMIT);
   if (sids.length) {
     try {
+      const ph = sids.map(() => '?').join(',');
       const sdeRows = await dbAll(
-        `SELECT schematic_id, product_type_id FROM pi_schematics WHERE schematic_id IN (${sids.map(() => '?').join(',')})`,
+        `SELECT schematic_id, product_type_id, product_quantity, cycle_time FROM pi_schematics WHERE schematic_id IN (${ph})`,
+        sids
+      );
+      const matRows = await dbAll(
+        `SELECT schematic_id, material_type_id, quantity FROM pi_schematic_materials WHERE schematic_id IN (${ph})`,
         sids
       );
       for (const r of sdeRows) {
-        if (r.product_type_id) { factoryOutputs[r.schematic_id] = r.product_type_id; allPiTypeIds.add(r.product_type_id); }
+        if (!r.product_type_id) continue;
+        factoryOutputs[r.schematic_id] = r.product_type_id;
+        allPiTypeIds.add(r.product_type_id);
+        if (r.product_quantity > 0 && r.cycle_time > 0) {
+          schematicInfo[r.schematic_id] = { outputTypeId: r.product_type_id, outputQty: r.product_quantity, cycleTime: r.cycle_time, inputs: [] };
+        }
+      }
+      for (const m of matRows) {
+        const s = schematicInfo[m.schematic_id];
+        if (!s || !m.material_type_id || !(m.quantity > 0)) continue;
+        s.inputs.push({ typeId: m.material_type_id, qty: m.quantity });
+        inputTypeIds.add(m.material_type_id);
       }
     } catch (e) {
       logger.warn('PI schematic SDE lookup failed, using name match:', e.message);
@@ -196,7 +217,7 @@ async function resolvePiSchematicsAndOutputs({ schematicIds, extractorProdIds })
     }
   }
 
-  return { schematics, factoryOutputs, allPiTypeIds };
+  return { schematics, factoryOutputs, schematicInfo, inputTypeIds, allPiTypeIds };
 }
 
 // Resolves product names for ALL PI type_ids (extractor + factory).
@@ -285,20 +306,30 @@ router.get('/api/pi/colonies', security.apiLimiter, security.verifyEveToken, asy
     const { planets, sessionBlueprints } = await fetchPiPlanetList({ characterId, eveToken });
 
     if (!planets?.length) {
-      return res.json({ colonies: [], productNames: {}, schematics: {}, systemNames: {}, planetNames: {}, prices: {}, factoryOutputs: {}, bpCrossRef: {} });
+      return res.json({ colonies: [], productNames: {}, schematics: {}, schematicInfo: {}, systemNames: {}, planetNames: {}, prices: {}, factoryOutputs: {}, bpCrossRef: {} });
     }
 
     const { colonies, schematicIds, extractorProdIds, contentTypeIds } = await fetchPiColonyLayouts({ characterId, eveToken, planets });
-    const { schematics, factoryOutputs, allPiTypeIds }  = await resolvePiSchematicsAndOutputs({ schematicIds, extractorProdIds });
-    // Stored items need names too, but are kept out of allPiTypeIds so the blueprint cross-reference is unchanged.
-    const productNames = await resolvePiProductNames({ allPiTypeIds: new Set([...allPiTypeIds, ...contentTypeIds]) });
-    const prices        = resolvePiPrices({ allPiTypeIds: new Set([...allPiTypeIds, ...contentTypeIds]) });
+    const { schematics, factoryOutputs, schematicInfo, inputTypeIds, allPiTypeIds } =
+      await resolvePiSchematicsAndOutputs({ schematicIds, extractorProdIds });
+    // Stored items and factory inputs need names and prices too, but are kept out of allPiTypeIds so the
+    // blueprint cross-reference is unchanged.
+    const namedTypeIds  = new Set([...allPiTypeIds, ...contentTypeIds, ...inputTypeIds]);
+    const productNames = await resolvePiProductNames({ allPiTypeIds: namedTypeIds });
+    const prices        = resolvePiPrices({ allPiTypeIds: namedTypeIds });
+    // A schematic missing from the SDE tables: output per cycle by tier (CCP's fixed amounts) and ESI's cycle time.
+    // Its inputs are unknown, so they can't be subtracted.
+    for (const [sid, outTid] of Object.entries(factoryOutputs)) {
+      const tier = productNames[outTid]?.piTier;
+      if (schematicInfo[sid] || !PI_FACTORY_OUTPUT_QTY[tier]) continue;
+      schematicInfo[sid] = { outputTypeId: outTid, outputQty: PI_FACTORY_OUTPUT_QTY[tier], cycleTime: schematics[sid]?.cycleTime || PI_FACTORY_CYCLE_TIME[tier], inputs: [], inputsUnknown: true };
+    }
     const bpCrossRef    = await resolvePiBlueprintCrossRef({ sessionBlueprints, allPiTypeIds });
     const systemNames   = await resolvePiSystemNames({ planets });
     const planetNames   = await resolvePiPlanetNames({ planets, systemNames });
 
     colonies.sort((a, b) => a.planet_id - b.planet_id);
-    const data = { colonies, productNames, schematics, systemNames, planetNames, prices, factoryOutputs, bpCrossRef };
+    const data = { colonies, productNames, schematics, schematicInfo, systemNames, planetNames, prices, factoryOutputs, bpCrossRef };
 
     // Cache result with simple eviction: drop oldest entry when map exceeds 200 characters.
     if (piDetailCache.size >= 200) {
@@ -341,41 +372,46 @@ router.get('/api/pi/market', security.apiLimiter, security.verifyEveToken, async
       return res.json(cached.data);
     }
 
-    // ── Step 1: Rank all PI factory outputs by net ISK/day per factory slot ────
-    // We pull every item that EVE classifies as a PI product (pi_tier 1–4) from our
-    // local database, then apply the fixed CCP game mechanics to estimate how much
-    // ISK a single factory running 24/7 would earn in a day.
-
-    const piProducts = await dbAll(
-      `SELECT type_id, name, pi_tier FROM items WHERE pi_tier IN (1, 2, 3, 4) ORDER BY pi_tier, name`
-    );
-
-    // jitaPricesCache is a module-level alias for the Jita region price map.
-    // It's a flat object: { [typeId]: { sell, buy } } — or empty if not loaded yet.
+    // ── Step 1: Rank every PI factory recipe by net ISK/day for ONE factory running full time ────
+    // Recipes come from CCP's schematic tables (output quantity, cycle time and inputs). Net = output value minus
+    // what the inputs are worth (Jita sell — the price to buy them, or what you give up by not selling your own),
+    // minus export tax on the output and import tax on the inputs.
+    // jitaPricesCache is a module-level alias for the Jita region price map: { [typeId]: { sell, buy } }.
     const jita = jitaPricesCache || {};
 
-    const rankings = piProducts.map(p => {
-      const tier = p.pi_tier;
-      // outputQty: units produced per factory cycle (set by CCP, see PI_FACTORY_OUTPUT_QTY)
-      const outputQty   = PI_FACTORY_OUTPUT_QTY[tier] ?? 0;
-      // cycleTime: seconds per cycle (set by CCP, see PI_FACTORY_CYCLE_TIME)
-      const cycleTime   = PI_FACTORY_CYCLE_TIME[tier] ?? 3600;
-      // Units the factory produces in a 24-hour day assuming perfect uptime
-      const unitsPerDay = outputQty * (86400 / cycleTime);
-      const sell        = jita[p.type_id]?.sell ?? 0;
-      const buy         = jita[p.type_id]?.buy  ?? 0;
-      const grossPerDay = unitsPerDay * sell;
-      // POCO export tax: CCP defines a base ISK value per unit; player POCO owners
-      // set their own % on top — pocoTaxRate is user-entered (see above), default 10%.
-      const taxPerDay   = unitsPerDay * (PI_POCO_BASE_VALUE[tier] ?? 400) * pocoTaxRate;
-      return {
-        typeId: p.type_id, name: p.name, tier,
-        unitsPerDay: Math.round(unitsPerDay),
-        sell, buy, grossPerDay,
-        taxPerDay,
-        netPerDay: grossPerDay - taxPerDay,
-      };
-    }).sort((a, b) => b.netPerDay - a.netPerDay); // highest earner first
+    const recipeRows = await dbAll(
+      `SELECT s.schematic_id, s.product_type_id, s.product_quantity, s.cycle_time, i.name, i.pi_tier
+         FROM pi_schematics s JOIN items i ON i.type_id = s.product_type_id
+        WHERE i.pi_tier IN (1, 2, 3, 4)`
+    );
+    let recipes;
+    if (recipeRows.length) {
+      const matRows = await dbAll(
+        `SELECT m.schematic_id, m.material_type_id, m.quantity, i.pi_tier
+           FROM pi_schematic_materials m LEFT JOIN items i ON i.type_id = m.material_type_id`
+      );
+      const inputsBySchematic = new Map();
+      for (const m of matRows) {
+        if (!inputsBySchematic.has(m.schematic_id)) inputsBySchematic.set(m.schematic_id, []);
+        inputsBySchematic.get(m.schematic_id).push({ typeId: m.material_type_id, qty: m.quantity, tier: m.pi_tier ?? 0 });
+      }
+      recipes = recipeRows.map(r => ({
+        typeId: r.product_type_id, name: r.name, tier: r.pi_tier,
+        outputQty: r.product_quantity, cycleTime: r.cycle_time,
+        inputs: inputsBySchematic.get(r.schematic_id) || [],
+      }));
+    } else {
+      // SDE tables not imported: CCP's fixed amounts per tier; inputs unknown, so no input cost can be taken off.
+      logger.warn('PI market: pi_schematics is empty — ranking without input costs (run the SDE import)');
+      const piProducts = await dbAll(`SELECT type_id, name, pi_tier FROM items WHERE pi_tier IN (1, 2, 3, 4)`);
+      recipes = piProducts.map(p => ({
+        typeId: p.type_id, name: p.name, tier: p.pi_tier,
+        outputQty: PI_FACTORY_OUTPUT_QTY[p.pi_tier] ?? 0, cycleTime: PI_FACTORY_CYCLE_TIME[p.pi_tier] ?? 3600,
+        inputs: null,
+      }));
+    }
+
+    const rankings = rankPiRecipes({ recipes, prices: jita, baseValue: PI_POCO_BASE_VALUE, taxRate: pocoTaxRate });
 
     // ── Step 2: PI material costs for the user's owned blueprints ─────────────
     // For each blueprint the user has that consumes PI items (e.g. most T2 and

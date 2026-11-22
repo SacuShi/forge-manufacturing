@@ -4060,6 +4060,7 @@ tr:hover .ticker-pin-btn,
 .pi-val-label   { color: var(--color-text-secondary); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pi-val-qty     { color: var(--color-text-tertiary); font-family: var(--font-mono); white-space: nowrap; flex-shrink: 0; }
 .pi-val-isk     { color: var(--color-success); font-family: var(--font-mono); font-weight: 600; white-space: nowrap; flex-shrink: 0; min-width: 70px; text-align: right; }
+.pi-val-isk.pi-val-neg { color: var(--color-warning); }
 .pi-val-nodata  { color: var(--color-text-tertiary); font-size: 10px; font-style: italic; flex-shrink: 0; }
 .pi-val-total {
   display: flex;
@@ -4164,9 +4165,10 @@ tr:hover .ticker-pin-btn,
   flex-direction: column;
   gap: 0;
 }
+/* Header and rows must use the same columns: # · product · tier · /day · gross · inputs · tax · net */
 .pi-rankings-thead {
   display: grid;
-  grid-template-columns: 28px 1fr 40px 56px 68px 60px 84px;
+  grid-template-columns: 28px 1fr 40px 56px 68px 68px 60px 84px;
   gap: 0 8px;
   padding: 4px 6px;
   font-size: 10px;
@@ -4179,7 +4181,7 @@ tr:hover .ticker-pin-btn,
 }
 .pi-rankings-row {
   display: grid;
-  grid-template-columns: 28px 1fr 40px 56px 68px 60px 84px;
+  grid-template-columns: 28px 1fr 40px 56px 68px 68px 60px 84px;
   gap: 0 8px;
   align-items: center;
   padding: 4px 6px;
@@ -4218,8 +4220,10 @@ tr:hover .ticker-pin-btn,
 .pi-ranktier-col { text-align: center; }
 .pi-rankqty-col  { color: var(--color-text-tertiary); font-family: var(--font-mono); font-size: 11px; text-align: right; }
 .pi-rankgross-col { color: var(--color-text-secondary); font-family: var(--font-mono); font-size: 11px; text-align: right; }
+.pi-rankinput-col { color: var(--color-text-tertiary); font-family: var(--font-mono); font-size: 11px; text-align: right; }
 .pi-ranktax-col  { color: var(--color-text-tertiary); font-family: var(--font-mono); font-size: 11px; text-align: right; }
 .pi-ranknet-col  { color: var(--color-success); font-family: var(--font-mono); font-size: 12px; font-weight: 600; text-align: right; }
+.pi-ranknet-col.pi-ranknet-neg { color: var(--color-warning); }
 .pi-rankings-toggle {
   margin-top: 10px;
   background: none;
