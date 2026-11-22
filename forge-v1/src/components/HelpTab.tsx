@@ -219,7 +219,7 @@ const HelpTab: FC = () => (
         <li style={S.li}>If a hub's prices are still loading you'll see "loading" — FORGE never shows another hub's prices
           under the wrong name.</li>
       </ul>
-      <div style={S.tip}>💡 Importing from Jita costs money. Set your haulage costs in <strong>⚙ Mfg Setup → Haulage</strong>
+      <div style={S.tip}>💡 Importing from Jita costs money. Set your haulage costs in <strong>⚙ Mfg Setup → Haulage</strong>{' '}
         (the amber notice has a shortcut link) and True Profit will include the freight for the Jita leg
         using your <strong>Materials in</strong> rates.</div>
     </Section>
@@ -269,6 +269,9 @@ const HelpTab: FC = () => (
       <ul style={S.ul}>
         <li style={S.li}><strong>Profit/run</strong> — gross revenue minus material cost. No fees applied. Good for quick ranking.
           Revenue counts every unit one run makes (fuel blocks make 40, many reactions far more).</li>
+        <li style={S.li}>Items nobody can build say where they come from instead: minerals are <em>refined from ore</em>, isotopes
+          and other ice products <em>refined from ice</em>, moon materials <em>refined from moon ore</em>, and salvage
+          <em> salvaged from wrecks</em>.</li>
         <li style={S.li}>If a material has <strong>no price anywhere</strong> (nobody sells it, no trade history), the item shows no
           profit at all — FORGE won't treat an unknown cost as free.</li>
         <li style={S.li}><strong>Margin %</strong> — profit as a percentage of sell price. Higher margin = more cushion if prices move against you.</li>
@@ -449,6 +452,14 @@ const HelpTab: FC = () => (
         Each card shows the product being built, the job type (Manufacturing / ME Research / TE Research / Invention),
         quantity, and time remaining.
       </p>
+      <ul style={S.ul}>
+        <li style={S.li}>Time remaining counts down live while the tab is open.</li>
+        <li style={S.li}><strong>Paused</strong> jobs (the structure went offline) and finished jobs waiting to be delivered
+          (<strong>Done</strong>) are listed too — in game they still take up a slot until you deliver them, so FORGE's free-slot
+          counts (Queue Planner, ticker) leave them out of the free slots as well.</li>
+        <li style={S.li}>The ticker's <strong>Free slots</strong> pin counts manufacturing slots only — a reaction slot can't run a
+          manufacturing job.</li>
+      </ul>
       <div style={S.tip}>💡 Click any job to open that product's market and profit data in the right panel.</div>
       <div style={S.tip}>💡 Don't want to keep checking back? Hit <strong>Set up alerts</strong> at the top of the list and
         FORGE will tell you when they finish — see <strong>Job Notifications</strong> below.</div>
@@ -536,6 +547,10 @@ const HelpTab: FC = () => (
           for launching PI goods off the planet. This affects profitability calculations.</li>
         <li style={S.li}>Click any planet to see the list of blueprints (PI schematics) installed and their
           input/output materials.</li>
+        <li style={S.li}><strong>Est. daily value</strong> — each product is valued once, at Jita's sell price, on what is left
+          after the planet's own factories use it. A <strong>negative line</strong> (<em>short …/day</em>) is an input the planet
+          needs but doesn't make: it counts against that planet, and the planet that makes it counts it as spare output at the
+          same price, so the two cancel out in the portfolio total. Hover a negative line to see which of your planets makes it.</li>
       </ul>
     </Section>
 
@@ -693,7 +708,7 @@ const HelpTab: FC = () => (
         the browser or clearing site data doesn't lose them. Only characters <em>you</em> personally log into
         via CCP's own SSO screen can ever be remembered; FORGE has no way to add a character without that
         character's own login.</div>
-      <div style={S.tip}>💡 A remembered character occasionally needs re-adding via <strong>+ Add Character</strong>
+      <div style={S.tip}>💡 A remembered character occasionally needs re-adding via <strong>+ Add Character</strong>{' '}
         instead of the one-click reload — shown as "Re-auth needed". This happens if EVE Online starts requiring
         a new permission FORGE didn't have when the character was first remembered, or if the character has been
         sold or transferred to a different account.</div>

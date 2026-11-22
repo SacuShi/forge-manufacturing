@@ -40,6 +40,7 @@
 
 import { useState, useMemo, useEffect, type FC } from 'react';
 import { findAssetSafetyItemIds, ASSET_SAFETY_LOCATION_ID, ASSET_SAFETY_WRAP_TYPE_ID, assetRowKey } from '../utils/assetSafety';
+import { activityLabel } from '../utils/jobs';
 import type {
   MarketItem,
   SortField,
@@ -285,18 +286,6 @@ const MainContent: FC<MainContentProps> = ({
     return nameToTypeId.get(productName) ?? null;
   };
 
-  const activityLabel = (id: number | undefined): string => {
-    switch (id) {
-      case 1:  return 'Mfg';
-      case 3:  return 'TE Research';
-      case 4:  return 'ME Research';
-      case 5:  return 'Copying';
-      case 8:  return 'Invention';
-      case 9:  return 'Reaction';
-      case 11: return 'Rev.Eng';
-      default: return '';
-    }
-  };
 
 
   // v1.15.0 — fetch per-blueprint profitability for the selected hub (same source

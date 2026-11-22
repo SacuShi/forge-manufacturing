@@ -61,7 +61,7 @@ function calcMfgSlotAllocation({ multiCharMode, characters, skillMap, activeJobs
     totalReactionSlots = 1 + massReactions  + advMassReactions;
     // Session jobs use the browser's ActiveJob shape (activityId); raw ESI jobs use activity_id.
     const activeMfgJobs      = activeJobs.filter(j => IM.jobActivityId(j) === 1);
-    const activeReactionJobs = activeJobs.filter(j => IM.jobActivityId(j) === 9);
+    const activeReactionJobs = activeJobs.filter(j => IM.isReactionActivity(IM.jobActivityId(j)));
     mfgFreeSlots      = Math.max(0, totalMfgSlots      - Math.min(activeMfgJobs.length,      totalMfgSlots));
     reactionFreeSlots = Math.max(0, totalReactionSlots - Math.min(activeReactionJobs.length, totalReactionSlots));
     charSlotPool   = null;

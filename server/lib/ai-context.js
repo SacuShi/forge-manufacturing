@@ -2,6 +2,7 @@
 // The per-player context handed to the AI advisor on every call: what the character owns, builds and can build.
 
 const { dbAll } = require('./db');
+const IM = require('./industry-math');
 const { INDUSTRY_IMPLANTS } = require('./character-session');
 const { KEY_SKILL_IDS, SKILL_GROUPS } = require('./ai-prompt');
 
@@ -29,12 +30,14 @@ async function buildPlayerContext({ blueprints, assets, wallet, jobs, skills, to
     .map(a => `${assetNameMap[a.type_id] || `#${a.type_id}`}: ${a.quantity.toLocaleString()}`)
     .join(', ');
 
-  // Resolve job product names
+  // Session jobs arrive in the browser's ActiveJob shape (activityId, name, quantity, status); raw ESI jobs use
+  // activity_id / product_name / runs. Read both (IM.jobActivityId), so the AI never sees "undefined ×undefined".
   const jobSummary = jobs.length === 0 ? 'None' : jobs.slice(0, 20).map(j => {
-    const activity = j.activity_id === 1 ? 'Mfg' : j.activity_id === 9 ? 'Reaction'
-      : j.activity_id === 8 ? 'Invention' : j.activity_id === 5 ? 'Copy'
-      : j.activity_id === 3 ? 'TE Research' : j.activity_id === 4 ? 'ME Research' : 'Job';
-    return `${j.product_name || j.blueprint_type_id} ×${j.runs} [${activity}]`;
+    const activity = IM.activityLabel(IM.jobActivityId(j)) || 'Job';
+    const name = j.name || j.product_name || `Blueprint #${j.blueprintTypeId ?? j.blueprint_type_id}`;
+    const runs = j.quantity ?? j.runs ?? 1;
+    const status = j.status && j.status !== 'active' ? ` (${j.status})` : '';
+    return `${name} ×${runs} [${activity}]${status}`;
   }).join('; ');
 
   const skillCount = (skills && skills.length) || 0;
@@ -81,8 +84,9 @@ async function buildPlayerContext({ blueprints, assets, wallet, jobs, skills, to
     .filter(Boolean);
 
   // Derived skill values — pre-calculated so the AI doesn't have to
-  const concurrentMfgJobs  = 1 + (skillLevelMap[3387]  || 0);
-  const concurrentRxnJobs  = 1 + (skillLevelMap[45748] || 0);
+  // CCP: 1 + Mass Production + Advanced Mass Production; 1 + Mass Reactions + Advanced Mass Reactions
+  const concurrentMfgJobs  = 1 + (skillLevelMap[3387]  || 0) + (skillLevelMap[24625] || 0);
+  const concurrentRxnJobs  = 1 + (skillLevelMap[45748] || 0) + (skillLevelMap[45749] || 0);
   const concurrentResSlots = 1 + (skillLevelMap[3406]  || 0) + (skillLevelMap[24624] || 0);
   const maxMarketOrders    = 5
     + (skillLevelMap[3443]  || 0) * 4
@@ -90,8 +94,10 @@ async function buildPlayerContext({ blueprints, assets, wallet, jobs, skills, to
     + (skillLevelMap[16596] || 0) * 16
     + (skillLevelMap[18580] || 0) * 32;
   const txTaxRate = (7.5 * (1 - 0.11 * (skillLevelMap[16622] || 0))).toFixed(2);
+  // Station base yield is 50% (EVE University "Reprocessing"); × Reprocessing 3%/lvl × Reprocessing Efficiency 2%/lvl.
+  // Ore-specific processing skills, implants and structure rigs add more and are not included here.
   const reprYield = (skillLevelMap[3385] || skillLevelMap[3389])
-    ? (30 * (1 + 0.03 * (skillLevelMap[3385] || 0)) * (1 + 0.02 * (skillLevelMap[3389] || 0))).toFixed(1)
+    ? (50 * (1 + 0.03 * (skillLevelMap[3385] || 0)) * (1 + 0.02 * (skillLevelMap[3389] || 0))).toFixed(1)
     : null;
   const piPlanets = 1 + (skillLevelMap[2495] || 0);
 
@@ -100,8 +106,8 @@ async function buildPlayerContext({ blueprints, assets, wallet, jobs, skills, to
     concurrentRxnJobs > 1 ? `concurrent reaction jobs: ${concurrentRxnJobs}` : null,
     `research slots: ${concurrentResSlots}`,
     maxMarketOrders !== 5 ? `max market orders: ${maxMarketOrders}` : null,
-    `transaction tax rate: ${txTaxRate}%`,
-    reprYield ? `reprocessing yield (skills only): ${reprYield}%` : null,
+    `sales tax rate: ${txTaxRate}% (half that at Amarr EFA until 10 May 2027)`,
+    reprYield ? `ore reprocessing yield at an NPC station (base 50% + Reprocessing skills, before ore-specific skills/implants): ${reprYield}%` : null,
     (skillLevelMap[2495] || 0) > 0 ? `PI planets: ${piPlanets}` : null,
   ].filter(Boolean).join(', ');
 

@@ -6,6 +6,7 @@ const { buildPiSummary } = require('./pi-colony');
 const { getCached } = require('./cache');
 const { getCharacterSession, hubFeeRates, defaultHubTaxRate } = require('./character-session');
 const { queryInterHubArb } = require('./inter-hub');
+const IM = require('./industry-math');
 
 function createAiTools({ CORP_BP_USABLE_SQL, PORT, REGIONS, VALID_REGIONS, dbAll, dbGet, ensureCorpDataFresh, esiFetch, fetch, getItemPricesAllRegions, hubBooks, resolveViewerCorpAccess, security }) {
   // Tells the advisor how to read price_source on precomputed rows (a Jita price is not a hub price).
@@ -19,22 +20,26 @@ function createAiTools({ CORP_BP_USABLE_SQL, PORT, REGIONS, VALID_REGIONS, dbAll
       switch (toolUse.name) {
         case "get_active_jobs": {
           const actFilter = toolUse.input.activityFilter || 'all';
-          const activityIds = { manufacturing: [1], reaction: [9], invention: [8], research: [3,4], copying: [5] };
+          // Session jobs use the browser's ActiveJob shape (activityId, name, quantity); raw ESI jobs activity_id/runs.
+          const activityIds = { manufacturing: [1], reaction: [9, 11], invention: [8], research: [3,4], copying: [5] };
           const allowedIds = activityIds[actFilter];
           const filteredJobs = allowedIds
-            ? jobs.filter(j => allowedIds.includes(j.activity_id))
+            ? jobs.filter(j => allowedIds.includes(IM.jobActivityId(j)))
             : jobs;
-          const actLabel = id => ({ 1:'Manufacturing',3:'TE Research',4:'ME Research',5:'Copying',8:'Invention',9:'Reaction',11:'Rev.Eng' }[id] || `Activity ${id}`);
           toolResult = {
             total: filteredJobs.length,
-            jobs: filteredJobs.map(j => ({
-              product: j.product_name || `Blueprint #${j.blueprint_type_id}`,
-              activity: actLabel(j.activity_id),
-              runs: j.runs,
-              status: j.status,
-              remaining: j.remaining,
-              done: j.done,
-            }))
+            jobs: filteredJobs.map(j => {
+              const act = IM.jobActivityId(j);
+              return {
+                product: j.name || j.product_name || `Blueprint #${j.blueprintTypeId ?? j.blueprint_type_id}`,
+                activity: IM.activityLabel(act) || `Activity ${act}`,
+                runs: j.quantity ?? j.runs,
+                status: j.status || 'active',
+                ends: j.endDate || j.end_date || null,
+                done: j.done,
+              };
+            }),
+            note: 'paused and ready (finished, not yet delivered) jobs still hold their slot until delivered.',
           };
           break;
         }
@@ -754,7 +759,19 @@ function createAiTools({ CORP_BP_USABLE_SQL, PORT, REGIONS, VALID_REGIONS, dbAll
             stResults.sort((a, b) => b.est_daily_isk - a.est_daily_isk);
             toolResult = {
               results: stResults.slice(0, stLimit), total_found: stResults.length,
-              note: 'buy_wall/sell_wall = best live Jita orders. spread_pct = (sell−buy)/buy. Gross only — deduct ~4% broker fee + 3.6% sales tax for true net. est_daily_isk assumes you capture 100% of volume (unrealistic; use as relative ranking).',
+              // This pilot's own Jita fees: station trading pays the broker fee on the buy order AND the sell
+              // order, plus sales tax on the sale.
+              ...(() => {
+                const { skillMap: stSkills, standings: stStand } = getCharacterSession(characterId);
+                const fr = hubFeeRates(stSkills, stStand, 10000002);
+                const known = Object.keys(stSkills).length > 0;
+                return {
+                  broker_fee_pct: parseFloat((fr.brokerFeeRate * 100).toFixed(2)),
+                  sales_tax_pct:  parseFloat((fr.transactionTaxRate * 100).toFixed(3)),
+                  fees_from: known ? 'this pilot’s skills and standings' : 'no skills loaded (worst case)',
+                };
+              })(),
+              note: 'buy_wall/sell_wall = best live Jita orders. spread_pct = (sell−buy)/buy. Gross only — net per unit = sell × (1 − broker_fee − sales_tax) − buy × (1 + broker_fee). est_daily_isk assumes you capture 100% of volume (unrealistic; use as relative ranking).',
             };
           } catch (e) { toolResult = { error: e.message }; }
           break;

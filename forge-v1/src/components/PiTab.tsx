@@ -260,10 +260,11 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
   // useMemo must be before any early returns to satisfy React's Rules of Hooks
   // (hooks must be called the same number of times on every render).
   // When data is null (loading / error), this safely returns an empty array.
-  const allYieldLines = useMemo(
-    () => !data ? [] : data.colonies.flatMap(c => colonyYield(c, data, pocoTaxRate)),
+  const yieldByColony = useMemo(
+    () => !data ? [] : data.colonies.map(c => colonyYield(c, data, pocoTaxRate)),
     [data, pocoTaxRate],
   );
+  const allYieldLines = useMemo(() => yieldByColony.flat(), [yieldByColony]);
 
   if (!piCharacters.length) return <div className="pi-state-msg">Log in to view PI colonies.</div>;
   if (loading)              return <ForgeWait message="Loading PI colonies…" detail="Fetching colony data and Jita market prices — please wait." quip="I am contacting your planets. The planets have been informed you are waiting. They did not respond. I am told this is normal." />;
@@ -282,6 +283,16 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
       </div>
     );
   }
+  // The planet's in-game name ("TTP-2B VI"); just the system name if the server couldn't work it out.
+  const colonyName = (c: Colony) => planetNames?.[c.planet_id] ?? systemNames[c.solar_system_id] ?? `System ${c.solar_system_id}`;
+  // Where each product is made with some to spare — named on the hover of a planet that is short of it.
+  const spareOn = new Map<number, string[]>();
+  colonies.forEach((c, i) => {
+    for (const l of yieldByColony[i] ?? []) {
+      if (l.net > 0) spareOn.set(l.typeId, [...(spareOn.get(l.typeId) ?? []), colonyName(c)]);
+    }
+  });
+  const anyShortfall = allYieldLines.some(l => l.net < 0 && !(l.used > 0 && Math.abs(l.net) <= Math.max(1, l.made * 0.01)));
   const totalGross    = allYieldLines.reduce((s, l) => s + l.grossISK, 0);
   const totalTax      = allYieldLines.reduce((s, l) => s + l.taxISK,   0);
   const totalNet      = totalGross - totalTax;
@@ -347,6 +358,15 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
         </div>
       )}
 
+      {hasPrices && anyShortfall && (
+        <div className="pi-alert-banner pi-alert-warn">
+          ⓘ&nbsp; Negative lines (<em>short …/day</em>) are inputs a planet's factories use but don't make there — shipped in
+          from another planet, or bought. They count against the planet that uses them, at the same Jita sell price as the
+          planet that makes them, so a planet-to-planet transfer cancels out and nothing is counted twice in the portfolio
+          total. Hover a negative line to see where else that product is made.
+        </div>
+      )}
+
       {urgentColonies.length > 0 && (
         <div className="pi-alert-banner">
           ⚠&nbsp; {urgentColonies.length === 1 ? '1 colony needs' : `${urgentColonies.length} colonies need`} attention — ECU expiring or expired
@@ -355,15 +375,13 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
 
       {/* ── Colony cards ── */}
       <div className="pi-colony-grid">
-        {colonies.map(colony => {
-          // The planet's in-game name ("TTP-2B VI"); just the system name if the server couldn't work it out.
-          const sysName   = planetNames?.[colony.planet_id]
-            ?? systemNames[colony.solar_system_id] ?? `System ${colony.solar_system_id}`;
+        {colonies.map((colony, colonyIdx) => {
+          const sysName   = colonyName(colony);
           const color     = PLANET_COLORS[colony.planet_type]   ?? '#888';
           const typeLabel = PLANET_LABELS[colony.planet_type]   ?? colony.planet_type;
           const extractors = colony.pins.filter(p => p.extractor_details);
           const grouped    = groupFactories(colony.pins);
-          const yieldLines = colonyYield(colony, data, pocoTaxRate);
+          const yieldLines = yieldByColony[colonyIdx] ?? [];
           const colonyNet  = yieldLines.reduce((s, l) => s + l.netISK, 0);
           const colonyHasPrices = yieldLines.some(l => l.hasPrice);
 
@@ -467,8 +485,14 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
                     const allUsedHere = line.used > 0 && Math.abs(line.net) <= Math.max(1, line.made * 0.01);
                     const shortfall   = !allUsedHere && line.net < 0;
                     // Short text keeps the product name readable; the full story is in the tooltip.
+                    const madeOn = (spareOn.get(line.typeId) ?? []).filter(n => n !== sysName);
                     const title = `${line.label}: made ${fmtQty(line.made)}/day, used by this planet's factories ${fmtQty(line.used)}/day`
-                      + (shortfall ? ` — ${fmtQty(-line.net)}/day has to be shipped in` : allUsedHere ? ' — all used here' : '');
+                      + (shortfall
+                        ? ` — ${fmtQty(-line.net)}/day has to be shipped in. `
+                          + (madeOn.length > 0
+                            ? `Also made on ${madeOn.join(', ')}, where it counts as spare output, so the two cancel out in your portfolio total.`
+                            : 'None of your colonies makes it, so it has to be bought.')
+                        : allUsedHere ? ' — all used here' : '');
                     return (
                       <div key={line.typeId} className="pi-val-row" title={title}>
                         <span className="pi-val-label">{line.label}</span>

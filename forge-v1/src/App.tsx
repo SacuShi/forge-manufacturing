@@ -381,7 +381,7 @@ const AppShell: FC = () => {
   useEffect(() => {
     if (!jobAlertsOn) return;
     const jobs = allActiveJobs
-      .filter(j => !j.done && j.endDate)
+      .filter(j => !j.done && j.endDate && (j.status ?? 'active') === 'active')   // a paused job has no real end time
       .map(j => ({ key: `${j.typeId}:${j.endDate}`, productName: j.name, endDate: j.endDate! }));
     if (jobs.length) void syncJobs(jobs);
   }, [allActiveJobs, jobAlertsOn, syncJobs]);
@@ -633,8 +633,9 @@ const AppShell: FC = () => {
   }, [auth.status, auth.character, auth.token, historyLoaded]);
 
   // ── Ticker ────────────────────────────────────────────────────────────────
+  // The ticker's "Free slots" pin is MANUFACTURING slots (a reaction slot can't run a manufacturing job)
   const totalFreeSlots = useMemo(() =>
-    queueCharacters.reduce((sum, c) => sum + c.freeSlots, 0),
+    queueCharacters.reduce((sum, c) => sum + c.mfgFreeSlots, 0),
   [queueCharacters]);
 
   const ticker = useTickerPins({

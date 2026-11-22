@@ -42,16 +42,25 @@ interface Settled {
 // Server kicks off a background price warm on the first cold request; 15s is enough time.
 const WARM_RETRY_MS = 15_000;
 
+export const NOT_MANUFACTURABLE_DEFAULT = 'Not manufacturable — this item comes from the LP store, drops, or contracts only.';
+const NOT_BUILT_TEXT: Record<string, string> = {
+  ore:     'Not manufacturable — refined from ore.',
+  moon:    'Not manufacturable — refined from moon ore.',
+  ice:     'Not manufacturable — refined from ice.',
+  salvage: 'Not manufacturable — salvaged from wrecks.',
+};
+
 /** Turns a failed request into the text the panel shows. */
 function describeError(raw: string): { message: string; notManufacturable: boolean } {
   // If the error body is HTML (Cloudflare 502 / gateway timeout), show a clean message.
   const isHtml = raw.includes('<!DOCTYPE') || raw.includes('<html');
-  // 404 "No blueprint found" → item is a drop / LP store reward, not manufacturable.
+  // 404 "No blueprint found" → nobody builds it. The server adds where raw materials come from instead.
   const notManufacturable = raw.includes('404') && raw.includes('No blueprint found');
+  const source = /\(source: (\w+)\)/.exec(raw)?.[1];
   const message = isHtml
     ? 'Server gateway timeout — wait a moment and try again.'
     : notManufacturable
-      ? 'Not manufacturable — this item comes from the LP store, drops, or contracts only.'
+      ? NOT_BUILT_TEXT[source ?? ''] ?? NOT_MANUFACTURABLE_DEFAULT
       : raw;
   return { message, notManufacturable };
 }

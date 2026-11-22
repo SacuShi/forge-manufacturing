@@ -310,7 +310,7 @@ const PiPlannerTab: FC = () => {
                   {cand.planets.filter(p => p.assignment.kind === 'colocate').length > 0 && (
                     <div className="pi-planner-planet-group">
                       <div className="pi-planner-group-label pi-planner-group-colocate">
-                        Co-located planets
+                        Co-located planets{' — '}
                         <span className="pi-planner-group-hint">
                           both P0 inputs available on one planet type · extracts P0s, makes P1s on-site, runs P2 AIF on-site · saves a dedicated factory planet · P2 output still needs to be launched to the P3 factory planet
                         </span>
@@ -351,7 +351,7 @@ const PiPlannerTab: FC = () => {
                   {cand.planets.filter(p => p.assignment.kind === 'extract').length > 0 && (
                     <div className="pi-planner-planet-group">
                       <div className="pi-planner-group-label pi-planner-group-extract">
-                        Extraction planets
+                        Extraction planets{' — '}
                         <span className="pi-planner-group-hint">
                           extractors harvest P0 · Basic Industrial Facility produces P1 on-site · no haulage for P1
                         </span>
@@ -384,7 +384,7 @@ const PiPlannerTab: FC = () => {
                   {cand.planets.filter(p => p.assignment.kind === 'factory').length > 0 && (
                     <div className="pi-planner-planet-group">
                       <div className="pi-planner-group-label pi-planner-group-factory">
-                        Factory planets
+                        Factory planets{' — '}
                         <span className="pi-planner-group-hint">
                           no extractors · receives materials via launchpad · runs multiple schematics simultaneously · Barren preferred (smallest); P4 requires Barren or Temperate
                         </span>

@@ -52,6 +52,7 @@ import type {
 } from '../types';
 import { esiFetchAll, esiGet, esiErrorStatus, apiGet, apiPost } from '../api/client';
 import { splitAssetSafety, isInAssetSafety } from '../utils/assetSafety';
+import { SLOT_HOLDING_STATUSES, jobTimeRemaining } from '../utils/jobs';
 
 // ── EVE OAuth constants (must match EVE Developer Portal registration) ────────
 
@@ -186,24 +187,14 @@ function generateState(): string {
   return Array.from(arr, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-/** Convert ESI end_date to a human-readable remaining time string */
-function formatTimeRemaining(endDate: string): { label: string; done: boolean } {
-  const diff = new Date(endDate).getTime() - Date.now();
-  if (diff <= 0) return { label: 'Done', done: true };
-  const totalMinutes = Math.floor(diff / 60_000);
-  const hours        = Math.floor(totalMinutes / 60);
-  const minutes      = totalMinutes % 60;
-  if (hours === 0) return { label: `${minutes}m`, done: false };
-  return { label: `${hours}h ${String(minutes).padStart(2, '0')}m`, done: false };
-}
-
-/** ESI industry jobs → the active ones, with product names resolved (shared by the primary and alt loaders). */
+/** ESI industry jobs → the ones holding a slot (active, paused, ready), with product names resolved (shared by the
+ *  primary and alt loaders). Paused and finished-but-not-delivered jobs still occupy their slot in game. */
 async function toActiveJobs(esiJobs: EsiJob[]): Promise<ActiveJob[]> {
   // Skip jobs missing product_type_id (edge case for some activity types); names resolve in one deduplicated batch.
-  const active  = esiJobs.filter((j) => j.status === 'active' && j.product_type_id != null);
+  const active  = esiJobs.filter((j) => SLOT_HOLDING_STATUSES.has(j.status) && j.product_type_id != null);
   const nameMap = await resolveTypeNames(active.map((j) => j.product_type_id));
   return active.map((job) => {
-    const { label, done } = formatTimeRemaining(job.end_date);
+    const { label, done } = jobTimeRemaining(job.end_date, job.status);
     return {
       name:            nameMap.get(job.product_type_id) ?? `Item #${job.product_type_id}`,
       typeId:          job.product_type_id,
@@ -215,6 +206,7 @@ async function toActiveJobs(esiJobs: EsiJob[]): Promise<ActiveJob[]> {
       facilityId:      job.facility_id,
       blueprintTypeId: job.blueprint_type_id,
       cost:            job.cost,
+      status:          job.status,
     };
   });
 }

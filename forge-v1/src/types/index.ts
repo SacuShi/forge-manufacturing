@@ -98,8 +98,10 @@ export interface ActiveJob {
   quantity: number;
   remaining: string;
   done: boolean;
-  /** ESI activity_id: 1=Mfg, 3=TE Research, 4=ME Research, 5=Copy, 8=Invention, 9=Reactions, 11=Rev.Eng */
+  /** ESI activity_id: 1=Mfg, 3=TE Research, 4=ME Research, 5=Copy, 7=Rev.Eng, 8=Invention, 9 (or 11)=Reactions */
   activityId?: number;
+  /** ESI status: 'active', 'paused' (structure offline) or 'ready' (finished, not delivered) — all hold a slot */
+  status?: string;
   /** Raw ISO end_date from ESI — used by TickerBar for live countdown */
   endDate?: string;
   /** ESI facility_id: the station/structure the job runs in (> 2^31 for player structures) */
@@ -249,7 +251,7 @@ export interface EsiJob {
   blueprint_type_id: number;
   activity_id: number;
   runs: number;
-  status: 'active' | 'delivered' | 'cancelled' | 'paused';
+  status: 'active' | 'paused' | 'ready' | 'delivered' | 'cancelled' | 'reverted';
   end_date: string; // ISO 8601
   facility_id: number;
   /** Job install cost (system fee + facility tax) charged by CCP, ISK */

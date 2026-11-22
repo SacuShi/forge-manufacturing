@@ -124,6 +124,14 @@ describe('useTrueCost', () => {
     const c = render();
     await waitFor(() => expect(c.result.current.error).toMatch(/Not manufacturable/));
     expect(c.result.current.data).toBeNull();
+
+    // Raw materials say where they come from (server adds the CCP group's source)
+    apiPost.mockRejectedValueOnce(new Error('HTTP 404: No blueprint found for product 16274 (source: ice)'));
+    const d = render();
+    await waitFor(() => expect(d.result.current.error).toBe('Not manufacturable — refined from ice.'));
+    apiPost.mockRejectedValueOnce(new Error('HTTP 404: No blueprint found for product 25595 (source: salvage)'));
+    const e = render();
+    await waitFor(() => expect(e.result.current.error).toBe('Not manufacturable — salvaged from wrecks.'));
   });
 
   it('clears everything when the selection is removed', async () => {

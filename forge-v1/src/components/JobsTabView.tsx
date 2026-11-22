@@ -1,6 +1,7 @@
 import { itemIconUrl } from '../utils/icons';
 import { type ActiveJob } from '../types';
-import type { FC } from 'react';
+import { useEffect, useState, type FC } from 'react';
+import { jobTimeRemaining } from '../utils/jobs';
 
 interface JobsTabViewProps {
   activeJobs: ActiveJob[];
@@ -15,6 +16,14 @@ interface JobsTabViewProps {
 const JobsTabView: FC<JobsTabViewProps> = ({
   activeJobs, activeTab, activityLabel, onSelectItem, selectedTypeId, jobAlertsOn = true, onSetUpJobAlerts,
 }) => {
+  // Time left is recomputed every 30 s from each job's end date (it used to be fixed at login)
+  const [now, setNow] = useState(() => Date.now());
+  const ticking = activeTab === 'jobs';
+  useEffect(() => {
+    if (!ticking) return;
+    const id = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, [ticking]);
   return (
     <>
 {activeTab === 'jobs' && (
@@ -37,9 +46,10 @@ const JobsTabView: FC<JobsTabViewProps> = ({
               {activeJobs.map((job) => {
                 const label = activityLabel(job.activityId);
                 const isJobSelected = job.typeId === selectedTypeId;
+                const left = job.endDate || job.status ? jobTimeRemaining(job.endDate, job.status, now) : { label: job.remaining, done: job.done };
                 return (
                 <button type="button" className="btn-reset"
-                  key={`${job.name}-${job.remaining}-${job.activityId ?? 0}`}
+                  key={`${job.name}-${job.endDate ?? job.remaining}-${job.activityId ?? 0}`}
                   aria-label={`View details for ${job.name}`}
                   onClick={() => onSelectItem(job.typeId, job.name)}
                   style={{
@@ -85,12 +95,12 @@ const JobsTabView: FC<JobsTabViewProps> = ({
                   </div>
                   <span style={{
                     fontSize: 12,
-                    color: job.done ? 'var(--color-success)' : 'var(--color-warning)',
+                    color: left.done ? 'var(--color-success)' : 'var(--color-warning)',
                     fontWeight: 500,
                     flexShrink: 0,
                     marginLeft: 12,
                   }}>
-                    {job.remaining}
+                    {left.label}
                   </span>
                 </button>
                 );

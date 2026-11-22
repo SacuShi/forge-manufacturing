@@ -54,6 +54,15 @@ function jobActivityId(job) {
   return job?.activity_id ?? job?.activityId ?? null;
 }
 
+// ESI reports reaction jobs as activity 9; the SDE's reaction activity is 11 — both are reactions.
+const isReactionActivity = (id) => id === 9 || id === 11;
+
+/** Short label for an ESI industry activity id (7 = reverse engineering). */
+function activityLabel(id) {
+  return ({ 1: 'Manufacturing', 3: 'TE Research', 4: 'ME Research', 5: 'Copying', 7: 'Reverse Engineering',
+    8: 'Invention', 9: 'Reaction', 11: 'Reaction' })[id] || '';
+}
+
 /** Cost index for one activity in one system, from fetchActivityCostIndices(). 0 when unknown. */
 function costIndexFor(byActivity, activity, systemId) {
   return byActivity?.[activity]?.[systemId] || 0;
@@ -235,5 +244,5 @@ module.exports = {
   RIGS, STRUCTURES, SCIENCE,
   securityClass, productFamily, describeSetup, modifiersForProduct, STRUCTURE_RIG_SIZE, MAX_RIGS,
   blueprintMeMult, jobQuantity, jobMaterials, estimatedItemValue, jobCost, scienceJobBase, timeMultiplier,
-  reactionTimeMultiplier, costIndexFor, clampFacilityTax, effectiveFacilityTax, jobActivityId,
+  reactionTimeMultiplier, costIndexFor, clampFacilityTax, effectiveFacilityTax, jobActivityId, isReactionActivity, activityLabel,
 };

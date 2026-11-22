@@ -6,6 +6,7 @@ import TrueProfitBox from './TrueProfitBox';
 import MaterialCostTooltip from './MaterialCostTooltip';
 import SourcingNotices from './SourcingNotices';
 import ImplantSelector from './ImplantSelector';
+import { NOT_MANUFACTURABLE_DEFAULT } from '../hooks/useTrueCost';
 
 interface TrueProfitPanelProps {
   activeImplants: number[];
@@ -124,9 +125,11 @@ const TrueProfitPanel: FC<TrueProfitPanelProps> = ({ activeImplants, altCharacte
                   : 'var(--color-danger)',
                 fontSize: 11, padding: '8px 0', textAlign: 'center'
               }}>
-                {trueCostError.startsWith('Not manufacturable')
+                {trueCostError === NOT_MANUFACTURABLE_DEFAULT
                   ? <>ℹ Not manufacturable — this item comes from the LP store,<br/>drops, or contracts only.</>
-                  : <>⚠ {trueCostError}</>}
+                  : trueCostError.startsWith('Not manufacturable')
+                    ? <>ℹ {trueCostError}</>
+                    : <>⚠ {trueCostError}</>}
               </div>
             )}
 

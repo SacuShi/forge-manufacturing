@@ -1,6 +1,7 @@
 import type { AuthState } from './useAuth';
 import { useMemo } from 'react';
 import { type PiCharacter, type QueueCharacter, type ActiveJob } from '../types';
+import { isManufacturingActivity, isReactionActivity } from '../utils/jobs';
 
 interface UseCharacterTabDataParams {
   auth: AuthState & { login: () => void; logout: () => void; addCharacter: () => void; removeCharacter: (characterId: number) => void; setRemember: (enabled: boolean) => Promise<void>; restoreRememberedCharacters: (characterIds: number[]) => Promise<{ characterId: number; name: string; error?: string | undefined; }[]>; forgetRememberedCharacter: (characterId: number) => Promise<void>; forgetAllRemembered: () => Promise<void>; };
@@ -52,8 +53,9 @@ export function useCharacterTabData({ auth, viewCharacterId }: UseCharacterTabDa
     ): QueueCharacter => {
       const mfgTotalSlots      = getSlots(skills, 3387, 24625);   // 1 + Mass Prod + Adv Mass Prod
       const reactionTotalSlots = getSlots(skills, 45748, 45749);  // 1 + Mass Reactions + Adv Mass Reactions
-      const mfgBusy      = activeJobs.filter(j => j.activityId === 1).length;
-      const reactionBusy = activeJobs.filter(j => j.activityId === 9).length;
+      // Paused and finished-but-undelivered jobs hold their slot too (toActiveJobs keeps them)
+      const mfgBusy      = activeJobs.filter(j => isManufacturingActivity(j.activityId)).length;
+      const reactionBusy = activeJobs.filter(j => isReactionActivity(j.activityId)).length;
       const mfgFreeSlots      = Math.max(0, mfgTotalSlots - mfgBusy);
       const reactionFreeSlots = Math.max(0, reactionTotalSlots - reactionBusy);
       return {
