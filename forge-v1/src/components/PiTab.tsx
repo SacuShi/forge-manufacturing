@@ -466,15 +466,17 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
                     // All of it used by this planet's own factories (within 1%): worth nothing on its own here.
                     const allUsedHere = line.used > 0 && Math.abs(line.net) <= Math.max(1, line.made * 0.01);
                     const shortfall   = !allUsedHere && line.net < 0;
-                    const title = `Made ${fmtQty(line.made)}/day · used by this planet's factories ${fmtQty(line.used)}/day`;
+                    // Short text keeps the product name readable; the full story is in the tooltip.
+                    const title = `${line.label}: made ${fmtQty(line.made)}/day, used by this planet's factories ${fmtQty(line.used)}/day`
+                      + (shortfall ? ` — ${fmtQty(-line.net)}/day has to be shipped in` : allUsedHere ? ' — all used here' : '');
                     return (
                       <div key={line.typeId} className="pi-val-row" title={title}>
                         <span className="pi-val-label">{line.label}</span>
                         <span className="pi-val-qty">
                           {allUsedHere
-                            ? `${fmtQty(line.made)}/day · all used here`
+                            ? 'all used here'
                             : shortfall
-                              ? `needs ${fmtQty(-line.net)}/day shipped in`
+                              ? `short ${fmtQty(-line.net)}/day`
                               : `${fmtQty(line.net)}/day${line.used > 0 ? ' spare' : ''}`}
                         </span>
                         {allUsedHere

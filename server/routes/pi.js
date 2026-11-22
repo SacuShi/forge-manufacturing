@@ -7,6 +7,7 @@ const security = require('../forge-security');
 const { dbAll, SQL_VARIABLE_LIMIT } = require('../lib/db');
 const { esiFetch } = require('../lib/esi');
 const { getCached } = require('../lib/cache');
+const { ensureJitaPrices } = require('../lib/market-cache');
 const { normalisePins, pinSchematicId, planetDisplayName, rankPiRecipes } = require('../lib/pi-colony');
 
 const router = express.Router();
@@ -233,9 +234,9 @@ async function resolvePiProductNames({ allPiTypeIds }) {
 }
 
 // PI commodities are primarily traded in Jita — use The Forge (10000002) as baseline.
-// jitaPricesCache is a module-level alias for regionPriceCache.get(10000002)?.prices
-function resolvePiPrices({ allPiTypeIds }) {
-  const jita   = jitaPricesCache || {};
+// `jita` is the Jita price map from ensureJitaPrices() (null when unavailable).
+function resolvePiPrices({ allPiTypeIds, jita }) {
+  jita = jita || {};
   const prices = {};
   for (const typeId of allPiTypeIds) {
     const p = jita[typeId];
@@ -309,6 +310,12 @@ router.get('/api/pi/colonies', security.apiLimiter, security.verifyEveToken, asy
       return res.json({ colonies: [], productNames: {}, schematics: {}, schematicInfo: {}, systemNames: {}, planetNames: {}, prices: {}, factoryOutputs: {}, bpCrossRef: {} });
     }
 
+    // Jita prices load alongside the colony layouts. Just after a restart the price cache can still be empty; this
+    // fetches it rather than returning every product as "no price". null = prices really unavailable right now.
+    const jitaPromise = ensureJitaPrices().catch(err => {
+      logger.warn('PI colonies: Jita prices unavailable —', err.message);
+      return null;
+    });
     const { colonies, schematicIds, extractorProdIds, contentTypeIds } = await fetchPiColonyLayouts({ characterId, eveToken, planets });
     const { schematics, factoryOutputs, schematicInfo, inputTypeIds, allPiTypeIds } =
       await resolvePiSchematicsAndOutputs({ schematicIds, extractorProdIds });
@@ -316,7 +323,8 @@ router.get('/api/pi/colonies', security.apiLimiter, security.verifyEveToken, asy
     // blueprint cross-reference is unchanged.
     const namedTypeIds  = new Set([...allPiTypeIds, ...contentTypeIds, ...inputTypeIds]);
     const productNames = await resolvePiProductNames({ allPiTypeIds: namedTypeIds });
-    const prices        = resolvePiPrices({ allPiTypeIds: namedTypeIds });
+    const jita          = await jitaPromise;
+    const prices        = resolvePiPrices({ allPiTypeIds: namedTypeIds, jita });
     // A schematic missing from the SDE tables: output per cycle by tier (CCP's fixed amounts) and ESI's cycle time.
     // Its inputs are unknown, so they can't be subtracted.
     for (const [sid, outTid] of Object.entries(factoryOutputs)) {
@@ -332,10 +340,13 @@ router.get('/api/pi/colonies', security.apiLimiter, security.verifyEveToken, asy
     const data = { colonies, productNames, schematics, schematicInfo, systemNames, planetNames, prices, factoryOutputs, bpCrossRef };
 
     // Cache result with simple eviction: drop oldest entry when map exceeds 200 characters.
-    if (piDetailCache.size >= 200) {
-      piDetailCache.delete(piDetailCache.keys().next().value);
+    // A result without prices is not cached, so the next visit tries again instead of showing "no price" for 10 min.
+    if (jita) {
+      if (piDetailCache.size >= 200) {
+        piDetailCache.delete(piDetailCache.keys().next().value);
+      }
+      piDetailCache.set(characterId, { data, fetchedAt: Date.now() });
     }
-    piDetailCache.set(characterId, { data, fetchedAt: Date.now() });
     logger.info(`🌍 PI loaded for ${characterId}: ${colonies.length} planets, ${Object.keys(bpCrossRef).length} PI materials in owned BPs`);
     res.json(data);
   } catch (err) {
@@ -376,8 +387,12 @@ router.get('/api/pi/market', security.apiLimiter, security.verifyEveToken, async
     // Recipes come from CCP's schematic tables (output quantity, cycle time and inputs). Net = output value minus
     // what the inputs are worth (Jita sell — the price to buy them, or what you give up by not selling your own),
     // minus export tax on the output and import tax on the inputs.
-    // jitaPricesCache is a module-level alias for the Jita region price map: { [typeId]: { sell, buy } }.
-    const jita = jitaPricesCache || {};
+    // Jita price map { [typeId]: { sell, buy } }, loaded if the cache is still empty (e.g. just after a restart).
+    const jitaMap = await ensureJitaPrices().catch(err => {
+      logger.warn('PI market: Jita prices unavailable —', err.message);
+      return null;
+    });
+    const jita = jitaMap || {};
 
     const recipeRows = await dbAll(
       `SELECT s.schematic_id, s.product_type_id, s.product_quantity, s.cycle_time, i.name, i.pi_tier
@@ -472,10 +487,13 @@ router.get('/api/pi/market', security.apiLimiter, security.verifyEveToken, async
     const result = { rankings, bpPiReqs };
 
     // Store in per-character+tax-rate cache (evict oldest entry if cache grows beyond 200 entries).
-    if (piMarketCache.size >= 200) {
-      piMarketCache.delete(piMarketCache.keys().next().value);
+    // Not when prices were unavailable, so the next visit tries again.
+    if (jitaMap) {
+      if (piMarketCache.size >= 200) {
+        piMarketCache.delete(piMarketCache.keys().next().value);
+      }
+      piMarketCache.set(cacheKey, { data: result, fetchedAt: Date.now() });
     }
-    piMarketCache.set(cacheKey, { data: result, fetchedAt: Date.now() });
 
     res.json(result);
   } catch (err) {

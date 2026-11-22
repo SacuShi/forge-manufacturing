@@ -8,7 +8,6 @@ const security = require('../forge-security');
 const HP = require('../lib/hub-price');
 const { dbAll, dbGet } = require('../lib/db');
 const { clientErrMsg } = require('../lib/http-errors');
-const { CACHE_TTL_MS } = require('../lib/cache');
 const { HUB_CONFIG, REGION_TO_HUB, VALID_REGIONS } = require('../lib/hubs');
 const { hubBooks } = require('../lib/hub-pollers');
 const market = require('../lib/market-cache'); // live values (historyPriceMap, ...) are read as market.<name>
@@ -683,15 +682,10 @@ router.post('/api/analyze-blueprints', security.apiLimiter, async (req, res) => 
 
     // WAIT FOR PRICE CACHE TO LOAD (if not already loaded)
     // This ensures we always return real prices, never 0 ISK
-    if (!jitaPricesCache || Date.now() >= market.jitaPricesCacheExpiry) {
-      logger.info('⟳ Loading Jita prices for analysis...');
-      try {
-        const prices = await fetchRegionPrices(10000002); // The Forge (Jita)
-        jitaPricesCache = prices;
-        market.jitaPricesCacheExpiry = Date.now() + CACHE_TTL_MS;
-      } catch (err) {
-        logger.error('⚠ Failed to load prices, proceeding with cached/zero prices:', err.message);
-      }
+    try {
+      await market.ensureJitaPrices({ refreshIfStale: true });
+    } catch (err) {
+      logger.error('⚠ Failed to load prices, proceeding with cached/zero prices:', err.message);
     }
 
     logger.info(`⟳ Analyzing ${ownedBlueprints.length} blueprints...`);

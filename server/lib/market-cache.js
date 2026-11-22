@@ -15,7 +15,18 @@ const { getOrRefreshStructureToken } = require('./keepstar-token');
 // PAGINATED REGION PRICE FETCHER
 // Fetches complete order book from ESI for any region (handles pagination).
 // Synthetic regionId 10099000 (Keepstar) is dispatched to fetchStructureMarketPrices().
-async function fetchRegionPrices(regionId) {
+// Callers asking for the same region at the same time share ONE download (a whole order book is hundreds of ESI
+// pages; e.g. the start-up price run and a player opening the PI tab must not both fetch Jita).
+const regionFetchesInFlight = new Map(); // regionId -> Promise<prices>
+function fetchRegionPrices(regionId) {
+  const running = regionFetchesInFlight.get(regionId);
+  if (running) return running;
+  const p = fetchRegionPricesFromEsi(regionId).finally(() => regionFetchesInFlight.delete(regionId));
+  regionFetchesInFlight.set(regionId, p);
+  return p;
+}
+
+async function fetchRegionPricesFromEsi(regionId) {
   if (regionId === KEEPSTAR_REGION_ID) return fetchStructureMarketPrices();
 
   logger.info(`⟳ Fetching prices for region ${regionId}...`);
@@ -445,8 +456,28 @@ async function getItemPricesAllRegions(typeId) {
   return results;
 }
 
+/**
+ * Jita's price map, loading it from ESI when the cache is empty (e.g. just after a restart, before the start-up
+ * price run has reached Jita). With refreshIfStale, an expired map is refreshed too. If a fetch fails, the old map
+ * is returned when there is one; with no map at all the error is thrown so the caller can say prices are missing.
+ */
+async function ensureJitaPrices({ refreshIfStale = false } = {}) {
+  const have  = getRawJitaPrices();
+  const fresh = !!have && Date.now() < jitaPricesCacheExpiry;
+  if (have && (fresh || !refreshIfStale)) return have;
+  try {
+    const prices = await fetchRegionPrices(10000002); // The Forge (Jita); shares any download already running
+    setRegionPriceCache(10000002, prices);
+    jitaPricesCacheExpiry = Date.now() + CACHE_TTL_MS;
+    return prices;
+  } catch (err) {
+    if (have) return have;
+    throw err;
+  }
+}
+
 module.exports = {
-  regionPriceCache, setRegionPriceCache, getHubPrices, getRawHubPrices, getRawJitaPrices,
+  regionPriceCache, setRegionPriceCache, getHubPrices, getRawHubPrices, getRawJitaPrices, ensureJitaPrices,
   fetchRegionPrices, fetchStructureMarketPrices, getItemPricesAllRegions,
   warmAllRegions, kickRegionWarm, regionWarmingSet,
   loadHistoryPriceMap, loadGlobalItemNameMap, loadBlueprintMaterialsCache,

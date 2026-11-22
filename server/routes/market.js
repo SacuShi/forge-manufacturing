@@ -5,7 +5,6 @@ const express = require('express');
 const logger = require('../lib/logger');
 const security = require('../forge-security');
 const { clientErrMsg } = require('../lib/http-errors');
-const { CACHE_TTL_MS } = require('../lib/cache');
 const { VALID_REGIONS } = require('../lib/hubs');
 const market = require('../lib/market-cache');
 const { regionPriceCache, setRegionPriceCache, fetchRegionPrices } = market;
@@ -14,14 +13,8 @@ const router = express.Router();
 
 router.get('/api/jita-prices', security.apiLimiter, async (req, res) => {
   try {
-    if (jitaPricesCache && Date.now() < market.jitaPricesCacheExpiry) {
-      logger.info(`✓ Jita prices (cached) — ${Object.keys(jitaPricesCache).length} items`);
-      return res.json({ prices: jitaPricesCache });
-    }
-
-    const prices = await fetchRegionPrices(10000002); // The Forge (Jita)
-    jitaPricesCache = prices;
-    market.jitaPricesCacheExpiry = Date.now() + CACHE_TTL_MS;
+    // Cached map when fresh; otherwise refreshed (a failed refresh returns the old map; no map at all → catch below).
+    const prices = await market.ensureJitaPrices({ refreshIfStale: true });
     res.json({ prices });
 
   } catch (err) {
