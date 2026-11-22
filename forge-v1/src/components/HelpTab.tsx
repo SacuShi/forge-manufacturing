@@ -548,9 +548,11 @@ const HelpTab: FC = () => (
         <li style={S.li}>Click any planet to see the list of blueprints (PI schematics) installed and their
           input/output materials.</li>
         <li style={S.li}><strong>Est. daily value</strong> — each product is valued once, at Jita's sell price, on what is left
-          after the planet's own factories use it. A <strong>negative line</strong> (<em>short …/day</em>) is an input the planet
-          needs but doesn't make: it counts against that planet, and the planet that makes it counts it as spare output at the
-          same price, so the two cancel out in the portfolio total. Hover a negative line to see which of your planets makes it.</li>
+          after the planet's own factories use it. As in game, factories fed by their own planet run only as fast as that planet supplies
+          them (for example 2 Water factories can keep 3 Coolant factories busy two-thirds of the time). A <strong>negative
+          line</strong> (<em>short …/day</em>) is an input the planet makes none of: it has to come from another planet or be
+          bought, so it counts against that planet; if another of your planets has it spare, that planet counts it as spare
+          output at the same price and the two cancel out in the portfolio total. Hover a line for the detail.</li>
       </ul>
     </Section>
 

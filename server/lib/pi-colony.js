@@ -98,6 +98,7 @@ function extractorUnitsPerDay(qtyPerCycle, cycleTimeSec, installIso, expiryIso) 
 // schematicInfo: { [schematicId]: { outputTypeId, outputQty, cycleTime, inputs: [{ typeId, qty }] } } from CCP data.
 function colonyDailyFlows(colony, { schematicInfo = {}, now = Date.now() } = {}) {
   const flows = new Map();
+  const groups = new Map();   // one entry per schematic: its factories' combined runs/day
   const add = (tid, key, n) => {
     if (!tid || !(n > 0)) return;
     const f = flows.get(tid) || { made: 0, used: 0 };
@@ -116,11 +117,41 @@ function colonyDailyFlows(colony, { schematicInfo = {}, now = Date.now() } = {})
     const sid = pinSchematicId(pin);
     const s = sid ? schematicInfo[sid] : null;
     if (!s || !(s.cycleTime > 0)) continue;
-    const runsPerDay = 86400 / s.cycleTime;
-    add(s.outputTypeId, 'made', runsPerDay * s.outputQty);
-    for (const inp of (s.inputs || [])) add(inp.typeId, 'used', runsPerDay * inp.qty);
+    const g = groups.get(sid) || { outputTypeId: s.outputTypeId, outputQty: s.outputQty, inputs: s.inputs || [], runsPerDay: 0 };
+    g.runsPerDay += 86400 / s.cycleTime;
+    groups.set(sid, g);
   }
+  runFactoriesOnSupply(flows, [...groups.values()], add);
   return flows;
+}
+
+// EVE only cycles a factory when its inputs are there. An input this planet makes (extracted, or made by its own
+// factories) is shared between the factories that use it, and they run only as often as that supply allows — no
+// shortage is invented. An input this planet makes NONE of must come from another planet, so those factories are
+// assumed to be fed and run full time (that input shows as a shortfall). Lower tiers run first.
+// Same rule as forge-v1/src/utils/piMath.ts.
+function runFactoriesOnSupply(flows, groups, add) {
+  const producedHere = new Set(groups.map(g => g.outputTypeId));
+  let pending = groups;
+  for (let pass = 0; pending.length > 0 && pass < 8; pass++) {
+    const waiting = new Set(pending.map(g => g.outputTypeId));
+    let ready = pending.filter(g => g.inputs.every(i => !waiting.has(i.typeId) || i.typeId === g.outputTypeId));
+    if (ready.length === 0) ready = pending;
+    const demand = new Map();
+    for (const g of ready) for (const i of g.inputs) demand.set(i.typeId, (demand.get(i.typeId) || 0) + g.runsPerDay * i.qty);
+    const share = new Map();
+    for (const [tid, need] of demand) {
+      const f = flows.get(tid);
+      const made = f?.made || 0;
+      share.set(tid, made <= 0 && !producedHere.has(tid) ? 1 : Math.min(1, Math.max(0, made - (f?.used || 0)) / need));
+    }
+    for (const g of ready) {
+      const u = g.inputs.reduce((m, i) => Math.min(m, share.has(i.typeId) ? share.get(i.typeId) : 1), 1);
+      add(g.outputTypeId, 'made', g.runsPerDay * u * g.outputQty);
+      for (const i of g.inputs) add(i.typeId, 'used', g.runsPerDay * u * i.qty);
+    }
+    pending = pending.filter(g => !ready.includes(g));
+  }
 }
 
 // Ranks PI factory recipes by net ISK/day for ONE factory running full time.
@@ -287,9 +318,11 @@ function buildPiSummary(piData, { maxColonies = null, now } = {}) {
     colonies: summary,
     note: 'This is the colony layout exactly as EVE reports it. extracting = extractor heads pulling P0: running = programs still going ' +
       '(est_per_day uses CCP\'s extractor decay formula over the whole program). daily_flow = per product per day: made, used by that ' +
-      'planet\'s own factories, and net (negative = must be shipped in from another planet or bought). value_per_day = net × Jita sell, ' +
+      'planet\'s own factories, and net. Factories fed by the planet\'s own extractors/factories run only as often as that supply ' +
+      'allows (as in game), so a planet is never short of something it makes; a negative net is an input the planet makes NONE of, ' +
+      'which must come from another planet or be bought. value_per_day = net × Jita sell, ' +
       'before POCO tax; est_value_per_day adds these up, so P0 turned into P1 on the same planet is not counted twice. Factory figures ' +
-      'assume every factory runs full time with its inputs supplied. extracting status: running = programs still going ' +
+      'assume a factory fed from another planet runs full time. extracting status: running = programs still going ' +
       '(program_ends_in_hours = the soonest one to finish), expired = program finished and needs restarting, no_program = no program set. ' +
       'producing = what the factories on that planet make (P1/P2/P3/P4) with how many factories make it. EVE does NOT report whether a ' +
       'factory is mid-cycle or waiting for input, so never say factories are idle, stopped or not running; a factory listed under producing ' +
@@ -302,5 +335,5 @@ function buildPiSummary(piData, { maxColonies = null, now } = {}) {
 
 module.exports = {
   pinSchematicId, normalisePins, extractorExpiry, planetDisplayName, summariseColony, buildPiSummary,
-  extractorCycleOutputs, extractorUnitsPerDay, colonyDailyFlows, rankPiRecipes,
+  extractorCycleOutputs, extractorUnitsPerDay, colonyDailyFlows, runFactoriesOnSupply, rankPiRecipes,
 };

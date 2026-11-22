@@ -244,3 +244,17 @@ describe('PI maths: market rankings', () => {
     expect(u.inputsPriced).toBe(false);
   });
 });
+
+// Same rule as forge-v1/src/utils/piMath.ts: factories fed by their own planet run on that supply (no invented shortfall).
+describe('factories run on the supply their own planet makes (server copy)', () => {
+  const { runFactoriesOnSupply } = require('../../lib/pi-colony');
+  it('Gas planet: 2 Water + 2 Electrolytes feed 3 Coolant → 240 Coolant/day, nothing short', () => {
+    const flows = new Map([[2268, { made: 362500, used: 0 }], [2309, { made: 359600, used: 0 }]]);
+    const add = (tid, key, n) => { if (!tid || !(n > 0)) return; const f = flows.get(tid) || { made: 0, used: 0 }; f[key] += n; flows.set(tid, f); };
+    const p0p1 = (i, o, n) => ({ outputTypeId: o, outputQty: 20, inputs: [{ typeId: i, qty: 3000 }], runsPerDay: 48 * n });
+    runFactoriesOnSupply(flows, [p0p1(2268, 3645, 2), p0p1(2309, 2390, 2),
+      { outputTypeId: 9832, outputQty: 5, inputs: [{ typeId: 2390, qty: 40 }, { typeId: 3645, qty: 40 }], runsPerDay: 72 }], add);
+    expect(flows.get(3645)).toEqual({ made: 1920, used: 1920 });
+    expect(flows.get(9832).made).toBeCloseTo(240, 9);
+  });
+});

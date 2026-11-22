@@ -11,6 +11,7 @@ import { usePocoTaxRate } from '../hooks/usePocoTaxRate';
 import { colonyDailyFlows, valueDailyFlows, extractorUnitsPerDay, type SchematicRecipe, type ValueLine } from '../utils/piMath';
 import ForgeWait       from './ForgeWait';
 import TickerPinButton from './TickerPinButton';
+import { fmtQty, piLineTooltip } from '../utils/piText';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -130,20 +131,14 @@ function formatCountdown(iso: string | undefined): { label: string; urgency: Urg
 }
 
 
-function fmtQty(n: number): string {
-  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
-  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
-  return Math.round(n).toLocaleString();
-}
-
 // One line of a colony's daily balance, ready to show.
 interface YieldLine extends ValueLine { label: string; }
 
 /**
  * A colony's daily balance, valued (see utils/piMath.ts). Extractors use CCP's formula over the program; factories
- * use CCP's recipe (output, cycle time and inputs) and are assumed to run full time. Each product is valued once, on
+ * use CCP's recipe (output, cycle time and inputs) and run as often as this planet supplies them (full time when fed from elsewhere). Each product is valued once, on
  * what is left over after this colony's own factories have used it: P0 made into P1 here is not counted twice. A
- * shortfall (an input shipped in from another planet) counts against this colony, so the portfolio total nets out.
+ * shortfall (factories needing more of an input than this planet makes) counts against this colony, so the portfolio total nets out.
  */
 function colonyYield(colony: Colony, data: PiData, pocoTaxRate: number): YieldLine[] {
   const { productNames, prices } = data;
@@ -360,10 +355,11 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
 
       {hasPrices && anyShortfall && (
         <div className="pi-alert-banner pi-alert-warn">
-          ⓘ&nbsp; Negative lines (<em>short …/day</em>) are inputs a planet's factories use but don't make there — shipped in
-          from another planet, or bought. They count against the planet that uses them, at the same Jita sell price as the
-          planet that makes them, so a planet-to-planet transfer cancels out and nothing is counted twice in the portfolio
-          total. Hover a negative line to see where else that product is made.
+          ⓘ&nbsp; Negative lines (<em>short …/day</em>) are inputs a planet's factories use but the planet makes none of — they
+          have to come from another planet or be bought, so they count against that planet at Jita sell price. If another of
+          your planets has that product spare, it is counted there as spare output and the two cancel out in the portfolio
+          total. Factories fed by their own planet run only as fast as that planet supplies them, as in game. Hover a line for
+          the detail.
         </div>
       )}
 
@@ -484,15 +480,8 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
                     // All of it used by this planet's own factories (within 1%): worth nothing on its own here.
                     const allUsedHere = line.used > 0 && Math.abs(line.net) <= Math.max(1, line.made * 0.01);
                     const shortfall   = !allUsedHere && line.net < 0;
-                    // Short text keeps the product name readable; the full story is in the tooltip.
-                    const madeOn = (spareOn.get(line.typeId) ?? []).filter(n => n !== sysName);
-                    const title = `${line.label}: made ${fmtQty(line.made)}/day, used by this planet's factories ${fmtQty(line.used)}/day`
-                      + (shortfall
-                        ? ` — ${fmtQty(-line.net)}/day has to be shipped in. `
-                          + (madeOn.length > 0
-                            ? `Also made on ${madeOn.join(', ')}, where it counts as spare output, so the two cancel out in your portfolio total.`
-                            : 'None of your colonies makes it, so it has to be bought.')
-                        : allUsedHere ? ' — all used here' : '');
+                    // Short text keeps the product name readable; the full story is in the tooltip (utils/piText.ts).
+                    const title = piLineTooltip(line, (spareOn.get(line.typeId) ?? []).filter(n => n !== sysName));
                     return (
                       <div key={line.typeId} className="pi-val-row" title={title}>
                         <span className="pi-val-label">{line.label}</span>
@@ -674,7 +663,7 @@ const PiTab: FC<PiTabProps> = ({ piCharacters }) => {
 
       <p className="pi-footnote">
         Colony layouts cached ~10 min by ESI · Prices: Jita sell · POCO tax {Math.round(pocoTaxRate * 100)}% export, half that on imports (your rate, set above) ·
-        Extraction uses CCP's decay formula over each program · Factories assumed to run full time · Each product is valued once, on what's left after this planet's own factories use it; inputs shipped in from other planets count against the planet that uses them
+        Extraction uses CCP's decay formula over each program · Factories fed from another planet assumed to run full time · Each product is valued once, on what's left after this planet's own factories use it; factories fed by their own planet run as fast as that supply allows; inputs a planet makes none of count against it
       </p>
     </div>
   );
