@@ -9,7 +9,7 @@ const IM = require('../lib/industry-math'); // shared manufacturing mechanics (r
 const { dbAll, dbGet, SQL_VARIABLE_LIMIT } = require('../lib/db');
 const { getCached } = require('../lib/cache');
 const { HUB_STANDINGS, HUB_STRUCTURE_FEES, VALID_REGIONS } = require('../lib/hubs');
-const { fetchAdjustedPrices, fetchCostIndices } = require('../lib/esi-industry-data');
+const { fetchAdjustedPrices, fetchActivityCostIndices } = require('../lib/esi-industry-data');
 const { getCharacterSession, calcSalesFeeRates, INDUSTRY_IMPLANTS } = require('../lib/character-session');
 const { CORP_BP_USABLE_SQL, ensureCorpDataFresh, resolveViewerCorpAccess } = require('../lib/corp');
 const market = require('../lib/market-cache');
@@ -59,8 +59,9 @@ function calcMfgSlotAllocation({ multiCharMode, characters, skillMap, activeJobs
     const advMassReactions     = skillMap[45749] || 0;
     totalMfgSlots      = 1 + massProduction + advMassProduction;
     totalReactionSlots = 1 + massReactions  + advMassReactions;
-    const activeMfgJobs      = activeJobs.filter(j => j.activity_id === 1);
-    const activeReactionJobs = activeJobs.filter(j => j.activity_id === 9);
+    // Session jobs use the browser's ActiveJob shape (activityId); raw ESI jobs use activity_id.
+    const activeMfgJobs      = activeJobs.filter(j => IM.jobActivityId(j) === 1);
+    const activeReactionJobs = activeJobs.filter(j => IM.jobActivityId(j) === 9);
     mfgFreeSlots      = Math.max(0, totalMfgSlots      - Math.min(activeMfgJobs.length,      totalMfgSlots));
     reactionFreeSlots = Math.max(0, totalReactionSlots - Math.min(activeReactionJobs.length, totalReactionSlots));
     charSlotPool   = null;
@@ -161,7 +162,7 @@ function runQueuePlannerAllocation({
   candidates, reqsByBp, skillMap, bpByType, setup, implantPct,
   safeHorizon, horizonDays, totalSalesFeeRate,
   effectiveBudget, mfgFreeSlots, reactionFreeSlots, multiCharMode, characters,
-  adjustedPrices, sci, facilityTaxDecimal, hubPrices, jitaPrices, hubIsJita, coldMatCost = null,
+  adjustedPrices, sci, reactionSci = 0, facilityTaxDecimal, hubPrices, jitaPrices, hubIsJita, coldMatCost = null,
 }) {
   const meetsSkills = bpId => {
     const reqs = reqsByBp.get(bpId) || [];
@@ -268,8 +269,10 @@ function runQueuePlannerAllocation({
         mat = ((coldMatCost && coldMatCost.get(c.blueprint_id)) ?? 0) * meFactor * n;
       }
       const eiv = IM.estimatedItemValue(candidateMats, n, adjustedPrices);
+      // Reactions are charged on the system's reaction cost index (CCP has one index per activity).
       const job = IM.jobCost({
-        eiv, sci: sci || 0, costMult: isReaction ? 1 : mods.costMult, facilityTaxDecimal: facilityTaxDecimal || 0,
+        eiv, sci: (isReaction ? reactionSci : sci) || 0, costMult: isReaction ? 1 : mods.costMult,
+        facilityTaxDecimal: facilityTaxDecimal || 0, activity: isReaction ? 'reaction' : 'manufacturing',
       }).total;
       return { mat, job };
     };
@@ -474,7 +477,7 @@ router.post('/api/queue-planner', security.apiLimiter, security.verifyEveToken, 
       rigIds,
       systemSecurity:  planSysRow ? planSysRow.security_status : null,
     });
-    const facilityTaxDecimal = (settings?.facility_tax || 0) / 100;
+    const facilityTaxDecimal = IM.effectiveFacilityTax(settings); // 0.25% at NPC stations, owner's rate (≤10%) in structures
     const targetSystemId     = settings?.system_id || 30000142; // default: Jita IV
 
     // ── Manufacturing slot count ──────────────────────────────────────────────
@@ -517,10 +520,11 @@ router.post('/api/queue-planner', security.apiLimiter, security.verifyEveToken, 
     // ── Job cost inputs (EIV × SCI + SCC + facility tax) ──────────────────────
     // Both calls are cheap, pre-warmed in-memory reads (same functions
     // /api/true-cost uses) — no per-candidate ESI/DB cost from adding this.
-    const [adjustedPrices, costIndices] = await Promise.all([
-      fetchAdjustedPrices(), fetchCostIndices(),
+    const [adjustedPrices, activityIndices] = await Promise.all([
+      fetchAdjustedPrices(), fetchActivityCostIndices(),
     ]);
-    const sci = costIndices[targetSystemId] || 0;
+    const sci         = IM.costIndexFor(activityIndices, 'manufacturing', targetSystemId);
+    const reactionSci = IM.costIndexFor(activityIndices, 'reaction', targetSystemId);
 
     // ── Activity filter ───────────────────────────────────────────────────────
     const allowedActivities = activityFilter === 'manufacturing' ? [1]
@@ -557,7 +561,7 @@ router.post('/api/queue-planner', security.apiLimiter, security.verifyEveToken, 
       candidates, reqsByBp, skillMap, bpByType, setup, implantPct,
       safeHorizon, horizonDays, totalSalesFeeRate,
       effectiveBudget, mfgFreeSlots, reactionFreeSlots, multiCharMode, characters,
-      adjustedPrices, sci, facilityTaxDecimal,
+      adjustedPrices, sci, reactionSci, facilityTaxDecimal,
       hubPrices: matHubPrices, jitaPrices: matJitaPrices, hubIsJita: safeMaterialRegionId === 10000002, coldMatCost,
     });
 

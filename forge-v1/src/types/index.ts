@@ -376,9 +376,11 @@ export interface InventionInfo {
   t1BlueprintId:   number;
   t1BlueprintName: string | null;
   baseProbability: number;
+  /** Chance with your own science/encryption skills, before any decryptor (= base when no skills sent) */
+  skilledProbability?: number;
   expectedAttempts: number;
   outputRuns:      number;
-  /** Expected ISK cost per T2 BPC produced (datacores only, no auth skills applied) */
+  /** Expected ISK cost per T2 BPC produced (datacores only, at your skilled chance) */
   perBpcCost:      number;
   datacores:       InventionDatacore[];
 }
@@ -390,9 +392,11 @@ export interface InventionOption {
   t2Name:           string;
   t2SellPrice:      number;
   baseProbability:  number;
+  /** Chance with your own science/encryption skills, before any decryptor */
+  skilledProbability?: number;
   expectedAttempts: number;
   outputRuns:       number;
-  /** Expected datacores-only cost per T2 BPC at base probability */
+  /** Expected datacores-only cost per T2 BPC at your skilled chance */
   perBpcCost:       number;
 }
 

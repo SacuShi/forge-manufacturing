@@ -73,8 +73,9 @@ describe('true profit for the test product (no structure, no rigs)', () => {
   it('bases the job fee on base quantities times adjusted prices', () => {
     const eiv = U.expectedEiv(RUNS);
     expect(near(body.mfg_fees.estimated_item_value, eiv)).toBe(true);
-    // job cost = EIV x (system cost index + facility tax 0 + 4% SCC)
-    expect(near(body.mfg_fees.total, eiv * (U.COST_INDEX_MANUFACTURING + 0.04), 1e-6)).toBe(true);
+    // job cost = EIV x (system cost index + NPC-station facility tax 0.25% + 4% SCC) — no Mfg Setup = NPC station
+    expect(near(body.mfg_fees.total, eiv * (U.COST_INDEX_MANUFACTURING + 0.0025 + 0.04), 1e-6)).toBe(true);
+    expect(near(body.mfg_fees.facility_tax, eiv * 0.0025, 1e-6)).toBe(true);
   });
 
   it('values the sale at the hub sell price and nets every cost off', () => {

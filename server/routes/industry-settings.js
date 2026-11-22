@@ -186,7 +186,7 @@ module.exports = function industrySettingsRoutes({ blueprintMaterialsCache }) {
       const [adjustedPrices, costIndices] = await Promise.all([fetchAdjustedPrices(), fetchCostIndices()]);
       const sci      = costIndices[settings.system_id] || 0;
       const costMult = IM.STRUCTURES[settings.structure_type_id]?.costMult ?? 1;
-      const taxDec   = (settings.facility_tax || 0) / 100;
+      const taxDec   = IM.effectiveFacilityTax(settings);
 
       const skipped = { other_facility: 0, not_manufacturing: 0, no_cost: 0, no_recipe: 0 };
       const jobs = [];
@@ -256,7 +256,7 @@ module.exports = function industrySettingsRoutes({ blueprintMaterialsCache }) {
         'SELECT * FROM character_industry_settings WHERE character_id = ?',
         [characterId]
       );
-      const facilityTaxDecimal = (settings?.facility_tax || 0) / 100;
+      const facilityTaxDecimal = IM.effectiveFacilityTax(settings); // 0.25% at NPC stations, owner's rate (≤10%) in structures
       const targetSystemId     = settings?.system_id || 30000142; // default: Jita IV
 
       // ── System Cost Index ──────────────────────────────────────────────────
@@ -271,7 +271,7 @@ module.exports = function industrySettingsRoutes({ blueprintMaterialsCache }) {
         broker_fee_rate:      brokerFeeRate,
         transaction_tax_rate: transactionTaxRate,
         sci,
-        scc_rate:             0.04,
+        scc_rate:             IM.SCC_RATES.manufacturing,
         facility_tax:         facilityTaxDecimal,
         setup_configured:     !!(settings?.system_id),
       });
@@ -447,8 +447,8 @@ module.exports = function industrySettingsRoutes({ blueprintMaterialsCache }) {
         interhub_self_ship     = null,
       } = req.body;
 
-      // Validate: facility_tax must be 0–100
-      const tax = Math.min(100, Math.max(0, parseFloat(facility_tax) || 0));
+      // Validate: facility_tax is a percentage, 0 to CCP's 10% cap
+      const tax = Math.min(IM.MAX_FACILITY_TAX * 100, Math.max(0, parseFloat(facility_tax) || 0));
 
       // Validate material_region_id against the known hub whitelist
       const validMatRegion = VALID_REGIONS.includes(parseInt(material_region_id))

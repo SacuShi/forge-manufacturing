@@ -674,7 +674,7 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
           {/* ── Rigs ─────────────────────────────────────────────────────── */}
           <div className={`settings-section${isNpc ? ' settings-disabled' : ''}`}>
             <div className="settings-label">
-              Rigs Installed
+              Rigs Installed{' '}
               <span className="settings-label-sub">
                 {isNpc ? '— N/A for NPC station' : `(${selectedRigs.length}/${MAX_RIGS} selected)`}
               </span>
@@ -790,21 +790,21 @@ const IndustrySettingsModal: FC<IndustrySettingsProps> = ({
           {/* ── Facility Tax ─────────────────────────────────────────────── */}
           <div className={`settings-section${isNpc ? ' settings-disabled' : ''}`}>
             <div className="settings-label">
-              Facility Tax
+              Facility Tax{' '}
               <span className="settings-label-sub">
-                {isNpc ? '— N/A for NPC station' : '(set by structure owner; typically 0–5%)'}
+                {isNpc ? '— fixed at 0.25% in NPC stations' : '(set by the structure owner; CCP caps it at 10%)'}
               </span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <input
                 type="number"
                 className="settings-input settings-input-short"
-                value={facilityTax}
+                value={isNpc ? 0.25 : facilityTax}
                 min={0}
-                max={100}
+                max={10}
                 step={0.1}
                 disabled={isNpc}
-                onChange={(e) => setFacilityTax(Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)))}
+                onChange={(e) => setFacilityTax(Math.min(10, Math.max(0, parseFloat(e.target.value) || 0)))}
                 aria-label="Facility tax percentage"
               />
               <span style={{ color: 'var(--color-text-secondary)', fontSize: 13 }}>%</span>

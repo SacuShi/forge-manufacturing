@@ -69,10 +69,15 @@ async function fetchCostIndices() {
     clearTimeout(t);
   }
 
-  // Build SCI map
+  // Build SCI maps. sciMap = manufacturing (what most callers want); byActivity holds every activity's own index —
+  // CCP charges reactions, invention, copying and ME/TE research on their OWN index, not the manufacturing one.
   const sciMap = {};
+  const byActivity = {};
   const systemIds = [];
   for (const sys of systems) {
+    for (const c of (sys.cost_indices || [])) {
+      (byActivity[c.activity] ||= {})[sys.solar_system_id] = c.cost_index;
+    }
     const mfg = sys.cost_indices.find(c => c.activity === 'manufacturing');
     if (mfg) {
       sciMap[sys.solar_system_id] = mfg.cost_index;
@@ -108,11 +113,22 @@ async function fetchCostIndices() {
     }
   }
 
-  costIndexCache.sciMap  = sciMap;
-  costIndexCache.nameMap = nameMap;
-  costIndexCache.expiry  = Date.now() + CACHE_TTL_MS;
+  costIndexCache.sciMap     = sciMap;
+  costIndexCache.byActivity = byActivity;
+  costIndexCache.nameMap    = nameMap;
+  costIndexCache.expiry     = Date.now() + CACHE_TTL_MS;
   logger.info(`✓ ESI cost indices + names cached — ${systemIds.length} systems`);
   return sciMap;
 }
 
-module.exports = { costIndexCache, fetchAdjustedPrices, fetchCostIndices };
+/**
+ * Every activity's cost index map: { manufacturing, reaction, invention, copying,
+ * researching_material_efficiency, researching_time_efficiency } → { [systemId]: index }.
+ * Read a value with industry-math costIndexFor().
+ */
+async function fetchActivityCostIndices() {
+  await fetchCostIndices();
+  return costIndexCache.byActivity || {};
+}
+
+module.exports = { costIndexCache, fetchAdjustedPrices, fetchCostIndices, fetchActivityCostIndices };

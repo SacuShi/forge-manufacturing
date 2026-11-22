@@ -44,6 +44,8 @@ const SortHeader: FC<SortHeaderProps> = ({ k, label, title, sortKey, onSort }) =
 );
 
 interface ResearchTabProps {
+  /** Your own skills: Metallurgy (3409, −5% ME research time/lvl) and Advanced Industry (3388, −3%/lvl). */
+  skills?:         Array<{ skill_id: number; active_skill_level: number }>;
   blueprints:      EsiBlueprint[];
   /** Selected market hub region id — drives material prices. */
   regionId:        number;
@@ -63,7 +65,10 @@ function formatDuration(seconds: number | null): string {
   return `${m}m`;
 }
 
-const ResearchTab: FC<ResearchTabProps> = ({ blueprints, regionId, onSelectItem, selectedTypeId }) => {
+const ResearchTab: FC<ResearchTabProps> = ({ skills = [], blueprints, regionId, onSelectItem, selectedTypeId }) => {
+  const levelOf = (id: number) => skills.find(s => s.skill_id === id)?.active_skill_level ?? 0;
+  const metallurgy       = levelOf(3409);
+  const advancedIndustry = levelOf(3388);
   const [fetchedData, setData] = useState<ResearchRoiResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState<string | null>(null);
@@ -90,7 +95,7 @@ const ResearchTab: FC<ResearchTabProps> = ({ blueprints, regionId, onSelectItem,
     setLoading(true);
     setError(null);
     apiPost<ResearchRoiResponse>('/api/me-research-roi', {
-      blueprints: ownedBpos, regionId, targetME: 10,
+      blueprints: ownedBpos, regionId, targetME: 10, metallurgy, advancedIndustry,
     })
       .then(res => { if (!cancelled) setData(res); })
       .catch(() => {
@@ -100,7 +105,7 @@ const ResearchTab: FC<ResearchTabProps> = ({ blueprints, regionId, onSelectItem,
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
-  }, [ownedBpos, regionId, retry]);
+  }, [ownedBpos, regionId, retry, metallurgy, advancedIndustry]);
 
   const builds = Math.max(0, parseInt(buildsPerMonth, 10) || 0);
 

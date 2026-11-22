@@ -22,6 +22,49 @@ const SCIENCE    = require('./industry-data/science-time-skills.json');
 
 const SCC_RATE = 0.04; // manufacturing/invention surcharge (4%; the 2% rate is research-only)
 
+// CCP's SCC surcharge per activity (EVE University "Manufacturing"; CCP Jul 2025 "Exploration and Industry Balance
+// Rework": ME/TE research cut from 4% to 2%). Keys match ESI /industry/systems activity names.
+const SCC_RATES = {
+  manufacturing: 0.04, reaction: 0.04, invention: 0.04, copying: 0.04,
+  researching_material_efficiency: 0.02, researching_time_efficiency: 0.02,
+};
+// Fixed facility tax at NPC stations; structure owners set their own, capped at 10% (EVE University "Manufacturing").
+const NPC_FACILITY_TAX = 0.0025;
+const MAX_FACILITY_TAX = 0.10;
+// A successfully invented T2 blueprint copy starts at ME 2 / TE 4; decryptor modifiers add to these.
+const T2_BPC_BASE_ME = 2;
+const T2_BPC_BASE_TE = 4;
+// Alpha clones pay an extra 0.25% of EIV on every job.
+const ALPHA_CLONE_TAX = 0.0025;
+// Invention and copying are charged on a fraction of the product's EIV, not on their own inputs (CCP Crius
+// "2% of the average value of the inputs for the thing(s) built by the blueprint(s)"; EVE Ref job_cost_base).
+const SCIENCE_JOB_VALUE_FRACTION = 0.02;
+
+/**
+ * Facility tax (decimal) for a saved Mfg Setup row: CCP's fixed 0.25% at an NPC station (no structure saved,
+ * including no setup at all), otherwise the owner's rate (stored as a percentage) capped at 10%.
+ */
+function effectiveFacilityTax(settings) {
+  if (!settings?.structure_type_id) return NPC_FACILITY_TAX;
+  return clampFacilityTax((Number(settings.facility_tax) || 0) / 100);
+}
+
+/** A job's activity id from either shape: raw ESI (activity_id) or the browser's ActiveJob (activityId). */
+function jobActivityId(job) {
+  return job?.activity_id ?? job?.activityId ?? null;
+}
+
+/** Cost index for one activity in one system, from fetchActivityCostIndices(). 0 when unknown. */
+function costIndexFor(byActivity, activity, systemId) {
+  return byActivity?.[activity]?.[systemId] || 0;
+}
+
+/** A facility tax as a decimal, clamped to CCP's range (0 to 10%). */
+function clampFacilityTax(decimal) {
+  const d = Number(decimal);
+  return Number.isFinite(d) ? Math.min(Math.max(d, 0), MAX_FACILITY_TAX) : 0;
+}
+
 /** hi ≥ 0.45 (displays as 0.5+), low 0 < sec < 0.45, null ≤ 0 (incl. wormholes). Unknown → null. */
 function securityClass(sec) {
   if (typeof sec !== 'number' || !isFinite(sec)) return null;
@@ -140,12 +183,22 @@ function estimatedItemValue(materials, runs, adjustedPrices) {
   return eiv;
 }
 
-/** Install cost of one manufacturing job. */
-function jobCost({ eiv, sci = 0, costMult = 1, facilityTaxDecimal = 0 }) {
+/**
+ * Install cost of one industry job (CCP): base × (SCI × structure cost bonus + facility tax + SCC + alpha tax).
+ * `eiv` is the job's base value: the EIV for manufacturing/reactions, 2% of the product EIV for invention/copying
+ * (see scienceJobBase). `activity` picks the SCC rate (default manufacturing).
+ */
+function jobCost({ eiv, sci = 0, costMult = 1, facilityTaxDecimal = 0, activity = 'manufacturing', alpha = false }) {
   const system   = eiv * sci * costMult;
-  const scc      = eiv * SCC_RATE;
-  const facility = eiv * facilityTaxDecimal;
-  return { system, scc, facility, total: system + scc + facility };
+  const scc      = eiv * (SCC_RATES[activity] ?? SCC_RATE);
+  const facility = eiv * clampFacilityTax(facilityTaxDecimal);
+  const alphaTax = alpha ? eiv * ALPHA_CLONE_TAX : 0;
+  return { system, scc, facility, alpha: alphaTax, total: system + scc + facility + alphaTax };
+}
+
+/** Job base for invention/copying: 2% of the EIV of what the blueprint builds. */
+function scienceJobBase(productEiv) {
+  return (Number(productEiv) || 0) * SCIENCE_JOB_VALUE_FRACTION;
 }
 
 /**
@@ -168,17 +221,19 @@ function timeMultiplier({ skillMap = {}, requiredSkills = [], blueprintTe = 0, m
 }
 
 /**
- * Reaction jobs: governed by the Reactions skill (reactionTimeBonus −4%/lvl, skill 45746)
- * and Advanced Industry (−3%/lvl). Engineering-complex structure/rig/implant bonuses and the
- * Industry skill do not apply to reactions.
+ * Reaction jobs: only the Reactions skill (45746, reactionTimeBonus −4%/lvl) and the refinery's own time bonus
+ * apply. Advanced Industry does NOT (CCP dogma: skill 3388 modifies manufacturing, copying, invention and ME/TE
+ * research times — not reactionTimeMultiplier 2662). Engineering-complex bonuses, Industry and implants don't apply.
+ * `refineryTimeMult` = structure (Tatara 0.75, Athanor 1) × reactor time rigs, from refinery setups when known.
  */
-function reactionTimeMultiplier({ skillMap = {} }) {
-  return (1 - 0.04 * (skillMap[45746] || 0)) * (1 - 0.03 * (skillMap[3388] || 0));
+function reactionTimeMultiplier({ skillMap = {}, refineryTimeMult = 1 }) {
+  return (1 - 0.04 * (skillMap[45746] || 0)) * refineryTimeMult;
 }
 
 module.exports = {
-  SCC_RATE, RIGS, STRUCTURES, SCIENCE,
+  SCC_RATE, SCC_RATES, NPC_FACILITY_TAX, T2_BPC_BASE_ME, T2_BPC_BASE_TE, MAX_FACILITY_TAX, ALPHA_CLONE_TAX, SCIENCE_JOB_VALUE_FRACTION,
+  RIGS, STRUCTURES, SCIENCE,
   securityClass, productFamily, describeSetup, modifiersForProduct, STRUCTURE_RIG_SIZE, MAX_RIGS,
-  blueprintMeMult, jobQuantity, jobMaterials, estimatedItemValue, jobCost, timeMultiplier,
-  reactionTimeMultiplier,
+  blueprintMeMult, jobQuantity, jobMaterials, estimatedItemValue, jobCost, scienceJobBase, timeMultiplier,
+  reactionTimeMultiplier, costIndexFor, clampFacilityTax, effectiveFacilityTax, jobActivityId,
 };

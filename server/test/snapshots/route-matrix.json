@@ -2959,11 +2959,11 @@
      "alpha_clone_tax": 0,
      "effective_me_pct": 9.999999999999998,
      "estimated_item_value": 17710,
-     "facility_tax": 0,
+     "facility_tax": 44.275,
      "scc_surcharge": 708.4,
      "system_cost_bonuses": 0,
      "system_cost_index": 885.5,
-     "total": 1593.9
+     "total": 1638.1750000000002
     },
     "prices_warm": true,
     "product_id": 900001,
@@ -2996,7 +2996,7 @@
      "base_build_seconds": 600,
      "effective_build_seconds": 384,
      "industry_level": 5,
-     "isk_per_hour": 41790947.812499985,
+     "isk_per_hour": 41790532.73437499,
      "mfg_implant": null,
      "reproc_implant": null,
      "structure_te_bonus_pct": 0,
@@ -3004,8 +3004,8 @@
      "time_multiplier": 0.6400000000000001
     },
     "total_material_cost": 15705,
-    "true_margin": 89.15402199999998,
-    "true_profit": 4457701.1
+    "true_margin": 89.1531365,
+    "true_profit": 4457656.825
    }
   },
   "signedOut": {

@@ -4,6 +4,7 @@
 const HP = require('./hub-price');
 const { dbAll } = require('./db');
 const { getRawJitaPrices } = require('./market-cache');
+const IM = require('./industry-math');
 
 // POST /api/true-cost — calculate full True Profit for an item with all fees
 // Body: { product_id, me, te, runs, regionId, materialRegionId }
@@ -69,20 +70,36 @@ const DECRYPTORS = {
 // type_id for each decryptor — populated at startup from the items table
 const decryptorTypeIds = {};
 
+/**
+ * Invention success chance (EVE University "Invention"):
+ *   base × (1 + Σ science levels / 30 + encryption level / 40) × (1 + decryptor %)
+ * Shared by True Profit and the item page so both show the same chance.
+ */
+function inventionChance({ baseProbability, scienceLevels = [], encryptionLevel = 0, decryptorProbMult = 0 }) {
+  const skillFactor = 1 + scienceLevels.reduce((s, l) => s + (l || 0) / 30, 0) + (encryptionLevel || 0) / 40;
+  return Math.min(1, (Number(baseProbability) || 0) * skillFactor * (1 + (decryptorProbMult || 0) / 100));
+}
+
+/** Split an invention blueprint's required skills into encryption vs science, with the character's levels. */
+function inventionSkillLevels(invSkills, skillMap) {
+  const encSkill = invSkills.find(s => ENCRYPTION_SKILL_IDS.has(s.skill_id));
+  return {
+    encryptionLevel: encSkill ? (skillMap[encSkill.skill_id] || 0) : 0,
+    scienceLevels:   invSkills.filter(s => !ENCRYPTION_SKILL_IDS.has(s.skill_id)).map(s => skillMap[s.skill_id] || 0),
+  };
+}
+
 async function calcInventionCost({
   invParent, decr, decryptor_type, skillMap, settings, targetSystemId,
-  adjustedPrices, costIndices, matWarm, matEntry, runs, invention_prob_bonus,
+  adjustedPrices, activityIndices, productEivPerRun, matWarm, matEntry, runs, invention_prob_bonus,
 }) {
   if (!invParent) return null;
 
   const invRigIds   = JSON.parse(settings?.invention_rig_ids || '[]');
   const invSystemId = settings?.invention_system_id || targetSystemId;
-  // No dedicated invention-facility-tax setting exists (invention_system_id
-  // is the only invention-specific location field), so reuse the same
-  // facility_tax the user set for manufacturing — same fallback pattern as
-  // invSystemId above. Previously this was omitted entirely (0%), understating
-  // invention job cost for anyone building at a taxed player structure.
-  const invFacilityTaxDecimal = (settings?.facility_tax || 0) / 100;
+  // No dedicated invention-facility-tax setting exists, so the manufacturing setup's tax is reused
+  // (0.25% at an NPC station, the owner's rate in a structure).
+  const invFacilityTaxDecimal = IM.effectiveFacilityTax(settings);
 
   // P = base × (1 + enc/40 + sci1/30 + sci2/30) × decryptorMult + rigBonus + probBonus
   // Source: https://wiki.eveuniversity.org/Invention
@@ -90,19 +107,17 @@ async function calcInventionCost({
     'SELECT skill_id FROM blueprint_skills WHERE blueprint_id = ? AND activity_id = 8',
     [invParent.t1_blueprint_id]
   );
-  const encSkill    = invSkills.find(s => ENCRYPTION_SKILL_IDS.has(s.skill_id));
-  const sciSkills   = invSkills.filter(s => !ENCRYPTION_SKILL_IDS.has(s.skill_id));
-  const encLevel    = encSkill ? (skillMap[encSkill.skill_id] || 0) : 0;
-  const sciBonus    = sciSkills.reduce((sum, s) => sum + (skillMap[s.skill_id] || 0) / 30, 0);
-  const encBonus    = encLevel / 40;
+  const { encryptionLevel, scienceLevels } = inventionSkillLevels(invSkills, skillMap);
+  const sciBonus    = scienceLevels.reduce((s, l) => s + l / 30, 0);
+  const encBonus    = encryptionLevel / 40;
   const skillFactor = 1 + sciBonus + encBonus;
 
   const rigBonus      = invRigIds.reduce((sum, id) => sum + (RIG_INVENTION_PROBABILITY[id] || 0), 0);
-  const decryptorMult = 1 + decr.probMult / 100;
   const probBonus     = (invention_prob_bonus || 0) / 100;
 
   const effectiveProb = Math.min(1.0,
-    invParent.probability * skillFactor * decryptorMult + rigBonus + probBonus
+    inventionChance({ baseProbability: invParent.probability, scienceLevels, encryptionLevel, decryptorProbMult: decr.probMult })
+      + rigBonus + probBonus
   );
   const expectedAttempts        = 1 / effectiveProb;
   const skillLevels             = invSkills.map(s => ({ skillId: s.skill_id, level: skillMap[s.skill_id] || 0 }));
@@ -135,10 +150,12 @@ async function calcInventionCost({
     decryptorCostPerAttempt = dp?.sell || dp?.buy || 0;
   }
 
-  let invEiv = 0;
-  for (const m of invMats) invEiv += (adjustedPrices[m.material_id] || 0) * m.quantity;
-  const invSci           = costIndices[invSystemId] || 0;
-  const invJobPerAttempt = invEiv * invSci + invEiv * 0.04 + invEiv * invFacilityTaxDecimal; // system cost + SCC surcharge (4% — invention isn't ME/TE research, so the Jul 2025 research-only cut to 2% doesn't apply; see the "Job cost formula" comment above calcHaulLegs) + facility tax
+  // Job fee per attempt (CCP; matches EVE Ref's calculator): base = 2% of the T2 product's manufacturing EIV for ONE
+  // run (not the datacores' value, and not × runs per copy), on the system's INVENTION cost index, plus SCC (4%) and
+  // facility tax. The invention facility's structure cost bonus isn't known (no separate invention structure setting).
+  const invBase          = IM.scienceJobBase(productEivPerRun);
+  const invSci           = IM.costIndexFor(activityIndices, 'invention', invSystemId);
+  const invJobPerAttempt = IM.jobCost({ eiv: invBase, sci: invSci, facilityTaxDecimal: invFacilityTaxDecimal, activity: 'invention' }).total;
 
   const perBpcCost = (dcCostPerAttempt + decryptorCostPerAttempt + invJobPerAttempt) * expectedAttempts;
   const amortize   = (cost) => (cost * expectedAttempts / outputRunsWithDecryptor) * runs;
@@ -171,4 +188,4 @@ async function calcInventionCost({
   };
 }
 
-module.exports = { DECRYPTORS, decryptorTypeIds, calcInventionCost };
+module.exports = { DECRYPTORS, decryptorTypeIds, ENCRYPTION_SKILL_IDS, calcInventionCost, inventionChance, inventionSkillLevels };

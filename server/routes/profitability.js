@@ -11,6 +11,7 @@ const { clientErrMsg } = require('../lib/http-errors');
 const { HUB_CONFIG, REGION_TO_HUB, VALID_REGIONS } = require('../lib/hubs');
 const { hubBooks } = require('../lib/hub-pollers');
 const market = require('../lib/market-cache'); // live values (historyPriceMap, ...) are read as market.<name>
+const IM = require('../lib/industry-math');   // shared manufacturing mechanics (job rounding, ME)
 const {
   regionPriceCache, setRegionPriceCache, getHubPrices, getRawHubPrices, getRawJitaPrices, fetchRegionPrices, kickRegionWarm, regionWarmingSet,
   blueprintMaterialsCache, productToBlueprintCache,
@@ -393,8 +394,8 @@ router.post('/api/material-breakdown', security.apiLimiter, async (req, res) => 
 // an ESTIMATE: needs blueprints.research_time (SDE) — NULL until SDE import runs,
 // in which case time fields are null and ranking falls back to ISK saving only.
 
-// Per-ME-level base research seconds for a unit-rank blueprint (published CCP table).
-// Time to research level n (from n-1 to n). Total ME0→ME10 ≈ 439k s (~5.1 days) at rank 1.
+// Per-ME-level base research seconds for a unit-rank blueprint (CCP's table, EVE University "Research").
+// Time to research level n (from n-1 to n). Total ME0→ME10 ≈ 441k s (~5.1 days) at rank 1.
 const ME_LEVEL_SECONDS = [
   0,        // index 0 (no level 0 research)
   105,      // ME1
@@ -402,18 +403,20 @@ const ME_LEVEL_SECONDS = [
   595,      // ME3
   1414,     // ME4
   3360,     // ME5
-  7980,     // ME6
-  18960,    // ME7
-  45050,    // ME8
-  107000,   // ME9
+  8000,     // ME6
+  19000,    // ME7
+  45255,    // ME8
+  107700,   // ME9
   256000,   // ME10
 ];
 
 const ME_LEVEL_SECONDS_L1 = ME_LEVEL_SECONDS[1]; // 105 — normaliser for the SDE base time
 
-// Material quantity for ONE run at a given ME (matches /api/true-cost rounding).
-function qtyAtME(baseQty, me) {
-  return Math.max(1, Math.ceil(baseQty * Math.max(0, 1 - me / 100)));
+// Materials are rounded once per JOB (CCP), so a per-run saving is averaged over a typical job of this many runs
+// using the shared rounding rule; a single-run figure would hide savings on small quantities (5 → ceil(4.5) = 5).
+const ROI_JOB_RUNS = 10;
+function qtyPerRunAtME(baseQty, me) {
+  return IM.jobQuantity(baseQty, ROI_JOB_RUNS, IM.blueprintMeMult(me)) / ROI_JOB_RUNS;
 }
 
 router.post('/api/me-research-roi', security.apiLimiter, async (req, res) => {
@@ -438,8 +441,9 @@ router.post('/api/me-research-roi', security.apiLimiter, async (req, res) => {
     }
     if (!getRawJitaPrices()) kickRegionWarm(10000002);
 
-    // Skill/structure time reduction (multiplicative, EVE-accurate stacking).
-    const timeMult = Math.max(0, 1 - 0.05 * metallurgy) * Math.max(0, 1 - 0.03 * advancedIndustry);
+    // Skill time reduction (multiplicative, CCP dogma: Metallurgy −5%/lvl ME research, Advanced Industry −3%/lvl).
+    const lvl = v => Math.min(5, Math.max(0, parseInt(v, 10) || 0)); // client-sent: clamp to a real skill level
+    const timeMult = (1 - 0.05 * lvl(metallurgy)) * (1 - 0.03 * lvl(advancedIndustry));
 
     // Dedupe to owned BPOs (runs === -1), one entry per blueprint type, keep highest ME.
     const bpoByType = new Map();
@@ -479,8 +483,8 @@ router.post('/api/me-research-roi', security.apiLimiter, async (req, res) => {
       let costNow = 0, costTarget = 0;
       for (const m of mats) {
         const unit = unitMarketCost(m.material_id, prices);
-        costNow    += unit * qtyAtME(m.quantity, me);
-        costTarget += unit * qtyAtME(m.quantity, target);
+        costNow    += unit * qtyPerRunAtME(m.quantity, me);
+        costTarget += unit * qtyPerRunAtME(m.quantity, target);
       }
       const savingPerRun = costNow - costTarget;
       if (savingPerRun <= 0 && costNow === 0) continue; // no price data — skip noise

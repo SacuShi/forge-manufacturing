@@ -434,6 +434,7 @@ const AppShell: FC = () => {
     selectedTypeId, combinedAssets, allBlueprints, auth.token,
     selectedMarket.id,        // sell hub — drives "Current Market" price box
     selectedSourceMarket.id,  // source hub — drives material unit costs in build analysis
+    auth.skills,              // your own skills — the item page's invention chance
   );
 
   // v1.2.0 — Resolve the character's best blueprint ME/TE for the selected product.
@@ -1097,6 +1098,7 @@ const AppShell: FC = () => {
           onHaulConfigClose={() => setInterHubHaulConfigOpen(false)}
           interHubToken={auth.token ?? undefined}
           interHubCharacters={haulCharacters}
+          researchSkills={auth.skills}
           onInterHubHaulSaved={() => setInterHubHaulRefreshKey(k => k + 1)}
           canDockKeestar={auth.canDockKeestar}
           bpMetadataProp={bpMetadataApp}

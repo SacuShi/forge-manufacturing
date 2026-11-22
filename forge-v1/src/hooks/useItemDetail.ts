@@ -50,6 +50,7 @@ export function useItemDetail(
   token:            string | null,
   regionId         = 10000002,   // sell hub — drives "Current Market" price display
   materialRegionId = regionId,   // source hub — drives material unit costs in build analysis
+  skills: Array<{ skill_id: number; active_skill_level: number }> = [], // your own skills — invention chance
 ): UseItemDetailReturn {
   const [settled, setSettled] = useState<Settled | null>(null);
 
@@ -73,6 +74,7 @@ export function useItemDetail(
           ownedBlueprints: blueprints,
           regionId,
           materialRegionId,
+          skills,
         }),
       })
         .then(async (res) => {
@@ -100,7 +102,7 @@ export function useItemDetail(
   // assets and blueprints are included so the panel refreshes if the user's
   // holdings change while the same item is selected (e.g. after an alt loads).
   // They are stable memoised references in App.tsx and only change when data changes.
-  // `token` is deliberately not a dependency: switching character must not refetch the same item.
+  // `token` and `skills` are deliberately not dependencies: switching character must not refetch the same item.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [typeId, regionId, materialRegionId, assets, blueprints]);
 

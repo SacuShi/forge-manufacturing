@@ -12,6 +12,8 @@ const { cache } = require('../lib/cache');
 const { REGIONS, KEEPSTAR_STRUCTURE_ID, KEEPSTAR_REGION_ID } = require('../lib/hubs');
 const { CONTRACT_INGEST_REGION, contractRationale } = require('../lib/contracts');
 const market = require('../lib/market-cache'); // live values (historyPriceMap, ...) are read as market.<name>
+const { inventionChance, inventionSkillLevels } = require('../lib/invention');
+const { sanitizeSkills } = require('../lib/character-session');
 const {
   regionPriceCache, getHubPrices, getRawHubPrices, getRawJitaPrices, kickRegionWarm,
   blueprintMaterialsCache,
@@ -446,7 +448,36 @@ async function buildMaterialAnalysis({ typeId, assets, ownedBlueprints, matRegio
   };
 }
 
-async function fetchInventionData(typeId, matPrices, sellPrices) {
+// Datacores for one T1 blueprint's invention, priced at the material hub (sell first, a bid only as a last resort).
+async function inventionDatacores(t1BlueprintId, matPrices) {
+  const dcMats = await dbAll(`
+    SELECT im.material_id, im.quantity, i.name
+      FROM invention_materials im
+      LEFT JOIN items i ON i.type_id = im.material_id
+     WHERE im.t1_blueprint_id = ?
+  `, [t1BlueprintId]);
+  return dcMats.map(m => {
+    const p = matPrices[m.material_id];
+    const unitPrice = p?.sell || p?.buy || 0;
+    return {
+      materialId:      m.material_id,
+      name:            m.name || `Material ${m.material_id}`,
+      quantity:        m.quantity,
+      unitPrice,
+      totalPerAttempt: unitPrice * m.quantity,
+      priceScope:      p?.sellScope === 'jita' ? 'jita' : 'hub',
+    };
+  });
+}
+
+// Chance with YOUR skills (shared formula in lib/invention.js), before any decryptor. skillMap {} = no skills sent.
+async function skilledInventionChance(t1BlueprintId, baseProbability, skillMap) {
+  const invSkills = await dbAll('SELECT skill_id FROM blueprint_skills WHERE blueprint_id = ? AND activity_id = 8', [t1BlueprintId]);
+  const { scienceLevels, encryptionLevel } = inventionSkillLevels(invSkills, skillMap);
+  return inventionChance({ baseProbability, scienceLevels, encryptionLevel });
+}
+
+async function fetchInventionData(typeId, matPrices, sellPrices, skillMap = {}) {
   const blueprintForInv = await dbGet(
     'SELECT blueprint_id FROM blueprints WHERE product_id = ?', [typeId]
   );
@@ -464,34 +495,17 @@ async function fetchInventionData(typeId, matPrices, sellPrices) {
   `, [blueprintForInv.blueprint_id]);
 
   if (invParent) {
-    const dcMats = await dbAll(`
-      SELECT im.material_id, im.quantity, i.name
-        FROM invention_materials im
-        LEFT JOIN items i ON i.type_id = im.material_id
-       WHERE im.t1_blueprint_id = ?
-    `, [invParent.t1_blueprint_id]);
-
-    const datacores = dcMats.map(m => {
-      const p = matPrices[m.material_id];
-      const unitPrice = p?.sell || p?.buy || 0;
-      return {
-        materialId:      m.material_id,
-        name:            m.name || `Material ${m.material_id}`,
-        quantity:        m.quantity,
-        unitPrice,
-        totalPerAttempt: unitPrice * m.quantity,
-        priceScope:      p?.sellScope === 'jita' ? 'jita' : 'hub',
-      };
-    });
-
-    const baseProbability  = invParent.probability;
-    const expectedAttempts = 1 / baseProbability;
-    const costPerAttempt   = datacores.reduce((s, d) => s + d.totalPerAttempt, 0);
+    const datacores = await inventionDatacores(invParent.t1_blueprint_id, matPrices);
+    const baseProbability    = invParent.probability;
+    const skilledProbability = await skilledInventionChance(invParent.t1_blueprint_id, baseProbability, skillMap);
+    const expectedAttempts   = 1 / skilledProbability;
+    const costPerAttempt     = datacores.reduce((s, d) => s + d.totalPerAttempt, 0);
 
     result.inventionInfo = {
       t1BlueprintId:   invParent.t1_blueprint_id,
       t1BlueprintName: invParent.t1_name,
       baseProbability,
+      skilledProbability,
       expectedAttempts,
       outputRuns:      invParent.output_runs,
       perBpcCost:      costPerAttempt * expectedAttempts,
@@ -510,43 +524,25 @@ async function fetchInventionData(typeId, matPrices, sellPrices) {
   `, [blueprintForInv.blueprint_id]);
 
   if (t2Links.length > 0) {
-    const dcMats = await dbAll(`
-      SELECT im.material_id, im.quantity, i.name
-        FROM invention_materials im
-        LEFT JOIN items i ON i.type_id = im.material_id
-       WHERE im.t1_blueprint_id = ?
-    `, [blueprintForInv.blueprint_id]);
-
-    const datacores = dcMats.map(m => {
-      const p = matPrices[m.material_id];
-      const unitPrice = p?.sell || p?.buy || 0;
-      return {
-        materialId:      m.material_id,
-        name:            m.name || `Material ${m.material_id}`,
-        quantity:        m.quantity,
-        unitPrice,
-        totalPerAttempt: unitPrice * m.quantity,
-        priceScope:      p?.sellScope === 'jita' ? 'jita' : 'hub',
-      };
-    });
-
+    const datacores = await inventionDatacores(blueprintForInv.blueprint_id, matPrices);
     const dcCostPerAttempt = datacores.reduce((s, d) => s + d.totalPerAttempt, 0);
 
     result.inventionDatacores = datacores;
-    result.inventionOptions   = t2Links.map(link => {
-      const t2Sell     = sellPrices[link.product_id]?.sell || 0;
-      const perBpcCost = dcCostPerAttempt / link.probability;
+    result.inventionOptions   = await Promise.all(t2Links.map(async link => {
+      const t2Sell             = sellPrices[link.product_id]?.sell || 0;
+      const skilledProbability = await skilledInventionChance(blueprintForInv.blueprint_id, link.probability, skillMap);
       return {
         t2BlueprintId:    link.t2_blueprint_id,
         t2ProductId:      link.product_id,
         t2Name:           link.name || `T2 Item ${link.product_id}`,
         t2SellPrice:      t2Sell,
         baseProbability:  link.probability,
-        expectedAttempts: 1 / link.probability,
+        skilledProbability,
+        expectedAttempts: 1 / skilledProbability,
         outputRuns:       link.output_runs,
-        perBpcCost,
+        perBpcCost:       dcCostPerAttempt / skilledProbability,
       };
-    });
+    }));
   }
 
   return result;
@@ -561,6 +557,7 @@ router.post('/api/item-details', security.apiLimiter, async (req, res) => {
       ownedBlueprints,
       regionId         = 10000002,  // sell hub — drives displayed current price
       materialRegionId = regionId,  // source hub — drives material unit costs in build analysis
+      skills,                       // your own skills (optional) — invention chance
     } = req.body;
 
     if (!typeId) {
@@ -640,8 +637,9 @@ router.post('/api/item-details', security.apiLimiter, async (req, res) => {
       if (buildInfo) itemDetails.buildInfo = buildInfo;
     }
 
-    // ── Invention data (always, no auth required, uses base probability) ────
-    Object.assign(itemDetails, await fetchInventionData(typeId, matPrices, sellPrices));
+    // ── Invention data (always, no auth required; chance uses the skills the browser sent, else base) ────
+    const skillMap = Object.fromEntries(sanitizeSkills(skills).map(s => [s.skill_id, s.active_skill_level]));
+    Object.assign(itemDetails, await fetchInventionData(typeId, matPrices, sellPrices, skillMap));
 
     // v1.12.0 — contract pricing for contract-only / thin-market items.
     // Prefer the requested region; fall back to The Forge (the only ingested

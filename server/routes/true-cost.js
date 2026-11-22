@@ -10,7 +10,7 @@ const IM = require('../lib/industry-math'); // shared manufacturing mechanics (r
 const { dbAll, dbGet } = require('../lib/db');
 const { clientErrMsg } = require('../lib/http-errors');
 const { HUB_STANDINGS, HUB_STRUCTURE_FEES, VALID_REGIONS } = require('../lib/hubs');
-const { fetchAdjustedPrices, fetchCostIndices } = require('../lib/esi-industry-data');
+const { fetchAdjustedPrices, fetchActivityCostIndices } = require('../lib/esi-industry-data');
 const { getCharacterSession, calcSalesFeeRates, INDUSTRY_IMPLANTS } = require('../lib/character-session');
 const { HAUL_PROVIDERS, calcHaulLegs } = require('../lib/haul');
 const { DECRYPTORS, calcInventionCost } = require('../lib/invention');
@@ -66,7 +66,7 @@ router.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, asyn
       [characterId]
     );
     const rigIds            = JSON.parse(settings?.rig_ids || '[]');
-    const facilityTaxDecimal = (settings?.facility_tax || 0) / 100;
+    const facilityTaxDecimal = IM.effectiveFacilityTax(settings); // 0.25% at NPC stations, owner's rate (≤10%) in structures
     const targetSystemId     = settings?.system_id || 30000142; // default: Jita IV
 
     // ── Blueprint materials from DB ────────────────────────────────────────
@@ -83,17 +83,15 @@ router.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, asyn
     const materials = blueprintMaterialsCache.get(blueprint.blueprint_id) || [];
 
     // ── T2 check (early — needed to select correct ME/TE base before EIV calc) ──
-    // Invented T2 BPCs always start at ME -4, TE -4 in EVE regardless of T1 BPO research.
-    // The decryptor modifies these values; the client-sent me/te from BPO research is irrelevant.
+    // Invented T2 BPCs always start at ME 2, TE 4 in EVE regardless of T1 BPO research (EVE University "Invention":
+    // "the result will have exactly ME 2% and TE 4%"). The decryptor adds to these; the client-sent me/te is irrelevant.
     const invParent = await dbGet(
       'SELECT t1_blueprint_id, probability, output_runs FROM blueprint_invention WHERE t2_blueprint_id = ?',
       [blueprint.blueprint_id]
     );
     const decr = DECRYPTORS[decryptor_type] || DECRYPTORS.none;
-    const T2_BPC_BASE_ME = -4;
-    const T2_BPC_BASE_TE = -4;
-    const baseME = invParent ? T2_BPC_BASE_ME + decr.me : me;
-    const baseTE = invParent ? T2_BPC_BASE_TE + decr.te : te;
+    const baseME = invParent ? IM.T2_BPC_BASE_ME + decr.me : me;
+    const baseTE = invParent ? IM.T2_BPC_BASE_TE + decr.te : te;
 
     // ── Build modifiers: blueprint ME × structure × the rigs that cover THIS product ──
     // Shared mechanics in lib/industry-math.js (values from CCP's dogma data). Each rig's bonus is
@@ -119,8 +117,8 @@ router.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, asyn
 
     // ── Adjusted prices + cost indices (ESI, cached) ──────────────────────
     // These calls return instantly when cache is warm; first call ~2–5 s each.
-    const [adjustedPrices, costIndices] = await Promise.race([
-      Promise.all([fetchAdjustedPrices(), fetchCostIndices()]),
+    const [adjustedPrices, activityIndices] = await Promise.race([
+      Promise.all([fetchAdjustedPrices(), fetchActivityCostIndices()]),
       new Promise((_, reject) => setTimeout(() => reject(new Error('ESI price fetch timeout')), 60000)),
     ]);
 
@@ -129,8 +127,9 @@ router.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, asyn
     const eiv = IM.estimatedItemValue(materials, runs, adjustedPrices);
 
     // ── Manufacturing job cost = EIV × (SCI × structure cost bonus + facility tax + SCC) ──
-    const sci            = costIndices[targetSystemId] || 0;
-    const jc             = IM.jobCost({ eiv, sci, costMult: mods.costMult, facilityTaxDecimal });
+    // Reactions are charged on the system's REACTION index, not the manufacturing one.
+    const sci            = IM.costIndexFor(activityIndices, isReaction ? 'reaction' : 'manufacturing', targetSystemId);
+    const jc             = IM.jobCost({ eiv, sci, costMult: mods.costMult, facilityTaxDecimal, activity: isReaction ? 'reaction' : 'manufacturing' });
     const systemJobCost  = jc.system;
     const sccSurcharge   = jc.scc;
     const facilityTaxCost = jc.facility;
@@ -258,7 +257,8 @@ router.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, asyn
     // ── Invention overhead (T2 items only) ────────────────────────────────
     const inventionCostData = await calcInventionCost({
       invParent, decr, decryptor_type, skillMap, settings, targetSystemId,
-      adjustedPrices, costIndices, matWarm, matEntry, runs, invention_prob_bonus,
+      adjustedPrices, activityIndices, productEivPerRun: IM.estimatedItemValue(materials, 1, adjustedPrices),
+      matWarm, matEntry, runs, invention_prob_bonus,
     });
     const inventionTotal = inventionCostData?.total || 0;
 
@@ -281,7 +281,7 @@ router.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, asyn
       .sort((a, b) => b.pct - a.pct)[0] || null);
     // Skills + blueprint TE + structure and the rigs covering this product (their TE bonus
     // was previously ignored) + implant, via the shared module. Science skills the blueprint
-    // requires each cut manufacturing time 1%/level. Reactions: Reactions skill + Advanced Industry only.
+    // requires each cut manufacturing time 1%/level. Reactions: Reactions skill only (Advanced Industry doesn't apply).
     const requiredSkills = isReaction ? [] : await dbAll(
       'SELECT skill_id FROM blueprint_skills WHERE blueprint_id = ? AND activity_id = 1',
       [blueprint.blueprint_id]
@@ -323,7 +323,7 @@ router.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, asyn
         system_cost_bonuses:  0,   // placeholder — structure/rig cost bonuses not yet modelled
         facility_tax:         facilityTaxCost,
         scc_surcharge:        sccSurcharge,
-        alpha_clone_tax:      0,   // Alpha clones pay extra 2% but FORGE only targets Omega
+        alpha_clone_tax:      0,   // Alpha clones pay an extra 0.25% (IM.ALPHA_CLONE_TAX); FORGE targets Omega pilots
         estimated_item_value: eiv,
         effective_me_pct:     effectiveME,  // for tooltip display
       },
@@ -419,10 +419,10 @@ router.post('/api/true-cost', security.apiLimiter, security.verifyEveToken, asyn
         facility_tax_pct:   settings?.facility_tax      || 0,
         sci_raw:            sci,
         // Effective ME breakdown (v1.9.3)
-        // For T2 items blueprint_me = T2 BPC base ME (-4) + decryptor.me; for T1 = researched BPO ME.
+        // For T2 items blueprint_me = T2 BPC base ME (2) + decryptor.me; for T1 = researched BPO ME.
         is_t2:              !!invParent,
         blueprint_me:       baseME,         // combined T2 BPC ME (base + decryptor); T1 = researched BPO ME
-        t2_base_me:         invParent ? T2_BPC_BASE_ME : null,
+        t2_base_me:         invParent ? IM.T2_BPC_BASE_ME : null,
         decryptor_me_bonus: invParent ? decr.me : null,
         structure_me_bonus: structureMeBonus,
         rig_me_bonus:       rigMeBonus,

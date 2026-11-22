@@ -468,7 +468,7 @@ const ItemMaterialsSection: FC<ItemMaterialsSectionProps> = ({ apiDetail, bluepr
               // with science/encryption skills or invention rigs, which is nearly
               // every real T2 inventor.
               const skillProb  = trueCostData?.invention_cost?.effective_probability;
-              const naiveProb  = Math.min(1, apiDetail.inventionInfo.baseProbability * (1 + decr.probMult / 100) + (inventionProbBonus / 100));
+              const naiveProb  = Math.min(1, (apiDetail.inventionInfo.skilledProbability ?? apiDetail.inventionInfo.baseProbability) * (1 + decr.probMult / 100) + (inventionProbBonus / 100));
               const adjProb     = skillProb ?? naiveProb;
               const adjAttempts = 1 / adjProb;
               const hasSkillProb = skillProb != null;
@@ -609,7 +609,7 @@ const ItemMaterialsSection: FC<ItemMaterialsSectionProps> = ({ apiDetail, bluepr
                   {/* T2 outcome list */}
                   <div style={{ fontSize: 10, color: '#ff9800', opacity: 0.7, marginBottom: 4 }}>T2 outcomes — click to view item:</div>
                   {apiDetail.inventionOptions.map(opt => {
-                    const adjProb = Math.min(1, opt.baseProbability * (1 + decr.probMult / 100) + (inventionProbBonus / 100));
+                    const adjProb = Math.min(1, (opt.skilledProbability ?? opt.baseProbability) * (1 + decr.probMult / 100) + (inventionProbBonus / 100));
                     const adjRuns = opt.outputRuns + decr.runs;
                     return (
                       <button type="button"

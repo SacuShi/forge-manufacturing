@@ -126,6 +126,8 @@ interface MainContentProps {
   onHaulConfigClose?:     () => void;
   interHubToken?:         string;
   interHubCharacters?:    Array<{ characterId: number; name: string; skills: Array<{ skill_id: number; active_skill_level: number }> }>;
+  /** The logged-in character's own skills — Research ROI times use Metallurgy and Advanced Industry. */
+  researchSkills?:        Array<{ skill_id: number; active_skill_level: number }>;
   onInterHubHaulSaved?:   () => void;
 
   /** v1.11 — selected market hub region id (drives Research ROI material prices) */
@@ -218,6 +220,7 @@ const MainContent: FC<MainContentProps> = ({
   onHaulConfigClose    = () => {},
   interHubToken        = '',
   interHubCharacters   = [],
+  researchSkills       = [],
   onInterHubHaulSaved,
   marketSearchQuery,
   marketSearching,
@@ -617,6 +620,7 @@ const MainContent: FC<MainContentProps> = ({
       {/* v1.11.0 — ME Research ROI tab */}
       {activeTab === 'research' && (
         <ResearchTab
+          skills={researchSkills}
           blueprints={blueprints}
           regionId={regionId}
           onSelectItem={onSelectItem}

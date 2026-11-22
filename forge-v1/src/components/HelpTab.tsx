@@ -220,10 +220,13 @@ const HelpTab: FC = () => (
         This is critical — the True Profit calculation changes significantly depending on where you build.
       </p>
       <ul style={S.ul}>
-        <li style={S.li}><strong>Solar system</strong> — affects the system cost index (SCI), a CONCORD tax on every
-          manufacturing job. Low-activity systems have lower SCI; busy systems like Jita 4-4 have very high SCI.</li>
-        <li style={S.li}><strong>Structure type</strong> — Raitaru, Azbel, Sotiyo (engineering complexes) each give
-          different material and time efficiency bonuses. NPC stations give no bonus at all.</li>
+        <li style={S.li}><strong>Solar system</strong> — sets the system cost index (SCI), which scales every job's install
+          fee. Each activity has its own index: manufacturing, reactions, invention and research are priced separately, and
+          FORGE uses the right one for each. Busy systems like Jita have a high manufacturing index; reaction and invention
+          indices there can be far lower. On top of the SCI, CONCORD always takes its SCC surcharge (4%; 2% for ME/TE research).</li>
+        <li style={S.li}><strong>Structure type</strong> — Raitaru, Azbel and Sotiyo (engineering complexes) all save 1% of
+          materials; they differ in build time (15% / 20% / 30% faster) and job fee (3% / 4% / 5% off the SCI part).
+          NPC stations give no bonus.</li>
         <li style={S.li}><strong>Rigs</strong> — T1 and T2 ME/TE rigs on your structure further reduce material waste
           or build time, but <em>only for the item types each rig is built for</em> (a ship rig doesn't help modules).
           FORGE follows the game's rules: at most 3 rigs, the rig size must match your structure (Raitaru M, Azbel L,
@@ -231,7 +234,7 @@ const HelpTab: FC = () => (
           (×1.9 in lowsec, ×2.1 in nullsec and wormholes), and the panel shows each rig's real value and whether it applies
           to the item you're looking at. A rig that can't apply is flagged instead of being counted.</li>
         <li style={S.li}><strong>Facility tax</strong> — the structure owner's tax on top of the SCI. Often 0–3% in
-          alliance structures; up to 10% or more in public citadels.</li>
+          alliance structures; CCP caps it at 10%. NPC stations charge a fixed 0.25%, which FORGE adds for you.</li>
         <li style={S.li}><strong>Haulage</strong> — tick <em>Haulage Costs</em> and set your rates so freight is part of True Profit.
           <em> Materials in</em> covers the run from your Buy in hub to your build system, and also any materials you have to
           import from Jita when your Buy in hub doesn't stock them. <em>Goods out</em> covers the run to your Sell at hub.</li>
@@ -302,6 +305,9 @@ const HelpTab: FC = () => (
           This means your wallet covers the shortfall; use the <strong>📋 Multibuy</strong> button to copy the shopping list for EVE's Multibuy window.</li>
         <li style={S.li}><strong>ME level</strong> — material efficiency research level. ME 10 is the maximum for T1 items.
           Even ME 5 meaningfully reduces material cost on expensive T2 products.</li>
+        <li style={S.li}><strong>Invented T2 copies</strong> always come out at ME 2 / TE 4, plus whatever your decryptor adds,
+          and True Profit uses exactly that. The invention fee is worked out the way CCP does it: 2% of the T2 item's value,
+          on the system's invention cost index. The chance shown on an item page includes your science and encryption skills.</li>
       </ul>
       <p style={S.p}><strong>Blueprints in Asset Safety:</strong></p>
       <ul style={S.ul}>
@@ -318,12 +324,13 @@ const HelpTab: FC = () => (
     {/* ── Research ROI ── */}
     <Section title="Research ROI">
       <p style={S.p}>
-        Calculates whether researching each of your BPOs further is worth the time and ISK.
-        For each blueprint it shows: ISK saved per run at the next ME level, the cost and time of the research job,
-        and how many runs it takes to break even.
+        Shows which of your BPOs are worth researching to ME 10. For each blueprint: ISK saved per run once it reaches
+        ME 10, and how long the research takes. The saving follows the game's rounding (materials are rounded once per
+        job, so it's averaged over a 10-run job; small quantities often only save on bigger jobs). The time uses CCP's
+        research table and your own Metallurgy and Advanced Industry skills.
       </p>
-      <div style={S.tip}>💡 Research ROI uses your <strong>Sell at</strong> hub for sell-price and your Manufacturing Setup
-        for job cost. Set those correctly before reading recommendations.</div>
+      <div style={S.tip}>💡 Material prices come from your <strong>Sell at</strong> hub. Research job fees aren't included —
+        they're small next to the saving on most blueprints.</div>
     </Section>
 
     {/* ── My Assets ── */}
@@ -485,7 +492,8 @@ const HelpTab: FC = () => (
         <li style={S.li}>It prices materials with the same rules as True Profit: your <strong>Buy in</strong> hub first, anything it
           can't supply from Jita. Those materials are marked <strong>J</strong> in the shopping list and an amber note says how many
           you'd have to import. The plan figures don't include freight; open an item's True Profit for the figure with freight.</li>
-        <li style={S.li}>Reaction jobs are timed with your Reactions skill, and blueprints locked in Asset Safety are never offered.</li>
+        <li style={S.li}>Reaction jobs are timed with your Reactions skill (Advanced Industry doesn't speed up reactions in game)
+          and priced on the system's reaction cost index. Blueprints locked in Asset Safety are never offered.</li>
       </ul>
       <div style={S.tip}>💡 Queue Planner only recommends blueprints you own. Add more characters and their
         blueprints appear automatically in the pool.</div>
