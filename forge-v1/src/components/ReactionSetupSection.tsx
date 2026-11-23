@@ -86,8 +86,12 @@ const ReactionSetupSection: FC<Props> = ({ token, value, onChange, rigStats }) =
   return (
     <div className="settings-section" id="settings-reactions">
       <div className="settings-label">
-        <button type="button" className="rig-category-btn" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
-          <span className="rig-category-arrow">{open ? '▼' : '▶'}</span>
+        <button
+          type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open}
+          style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', background: 'none', border: 'none',
+                   padding: 0, font: 'inherit', color: 'inherit', textTransform: 'inherit', letterSpacing: 'inherit' }}
+        >
+          <span style={{ fontSize: '0.8em' }}>{open ? '▼' : '▶'}</span>
           Reactions{' '}
           <span className="settings-label-sub">
             {value.structureId === null ? '(optional — set up your Athanor or Tatara)' : `— ${chosen?.name ?? 'refinery'}`}
